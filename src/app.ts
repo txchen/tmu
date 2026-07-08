@@ -2,16 +2,17 @@ import { AppCoordinator } from "./coordinator";
 import {
   checkDependencyHealth,
   checkHelperDependencyHealth,
+  createDefaultDependencyHealth,
   type DependencyCommandRunner,
   type DependencyHealthState,
 } from "./dependencies";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BunMpvProcessAdapter, MpvPlayer, NoopPlayer } from "./player";
-import { createSkeletonProviders } from "./providers";
+import { createDefaultProviders } from "./providers";
 import { MemoryQueue } from "./queue";
 import { createInitialAppState, createInitialUiState } from "./state";
-import { loadTmuConfig, type TmuConfig, type TmuConfigInput } from "./config";
+import { createDefaultTmuConfig, loadTmuConfig, type TmuConfig, type TmuConfigInput } from "./config";
 import type { DependencyHealthRefresh } from "./coordinator";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
@@ -24,6 +25,7 @@ export type TmuAppOptions = {
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
   player?: Player;
+  dependencyRunner?: DependencyCommandRunner;
 };
 
 export type TmuRuntimeOptions = {
@@ -32,13 +34,22 @@ export type TmuRuntimeOptions = {
 };
 
 export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoordinator } {
-  const providers = createSkeletonProviders();
+  const config = createDefaultTmuConfig(options.config);
+  const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
+  const providers = createDefaultProviders({
+    local: {
+      dependencyHealth,
+      ffprobeCommand: config.helpers.ffprobe,
+      runner: options.dependencyRunner,
+      metadataTimeoutMs: config.dependencyPolicy.checkTimeoutMs,
+    },
+  });
   const coordinator = new AppCoordinator({
     appState: createInitialAppState(providers, {
-      config: options.config,
+      config,
       configPath: options.configPath,
       configSource: options.configSource,
-      dependencyHealth: options.dependencyHealth,
+      dependencyHealth,
     }),
     uiState: createInitialUiState(),
     queue: new MemoryQueue(),
@@ -93,6 +104,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
         checkHelperDependencyHealth(loaded.config, helper, currentHealth, {
           runner: options.dependencyRunner,
         }),
+      dependencyRunner: options.dependencyRunner,
     }),
     config: loaded.config,
   };

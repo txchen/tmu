@@ -7,7 +7,7 @@ import {
   TerminalTui,
   createInitialAppState,
   createInitialUiState,
-  createSkeletonProviders,
+  createDefaultProviders,
   intentFromKey,
 } from "../src/index";
 
@@ -52,7 +52,7 @@ describe("TerminalTui", () => {
   test("redraws when App Coordinator state changes outside key input", async () => {
     const player = new NoopPlayer();
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player,
@@ -76,7 +76,7 @@ describe("TerminalTui", () => {
 
   test("redraws on input even when no intent is mapped", () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),

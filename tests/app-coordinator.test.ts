@@ -1,15 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AppCoordinator,
   InMemoryLastQueueSnapshotPersistence,
   MemoryQueue,
   NoopPlayer,
   NAVIGATION_TARGETS,
+  createTmuApp,
   createDefaultDependencyHealth,
   createInitialAppState,
   createInitialUiState,
-  createSkeletonProviders,
+  createDefaultProviders,
+  renderShellText,
+  type DependencyCommandRunner,
   type Player,
   type PlayerPlaybackState,
   type PlaybackLocator,
@@ -38,6 +43,23 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
       return { kind: "file", path: `/resolved/${identity.providerId}/${identity.stableId}` };
     },
   };
+}
+
+async function waitFor(assertion: () => void, timeoutMs = 500): Promise<void> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await Bun.sleep(5);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 class RecordingPlayer extends NoopPlayer implements Player {
@@ -116,7 +138,7 @@ class VolumeFailingPlayer extends RecordingPlayer {
 describe("AppCoordinator", () => {
   test("starts empty on the target switcher with separate app and UI state", () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
@@ -131,31 +153,140 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState).not.toBe(coordinator.uiState);
   });
 
-  test("starts with CLI file args as canonical local Tracks without playback locators", () => {
-    const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
-      uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
-      player: new NoopPlayer(),
-    });
+  test("starts with CLI file args as canonical local Tracks without playback locators", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-seed-"));
+    const amber = join(dir, "amber.flac");
+    const cinder = join(dir, "cinder.mp3");
 
-    coordinator.start(["./music/amber.flac", "/tmp/cinder.mp3"]);
+    try {
+      await writeFile(amber, "not real audio");
+      await writeFile(cinder, "not real audio");
+      const coordinator = new AppCoordinator({
+        appState: createInitialAppState(createDefaultProviders()),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+      });
 
-    expect(coordinator.appState.startupMode).toBe("cli-seeded");
-    expect(coordinator.uiState.activeTargetId).toBe("queue");
-    expect(coordinator.uiState.focusedPane).toBe("queue");
-    expect(coordinator.appState.queue.entries).toHaveLength(2);
-    expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
-      identity: { providerId: "local", stableId: resolve("./music/amber.flac") },
-      title: "amber.flac",
-      providerLabel: "Local",
+      await coordinator.start([amber, cinder]);
+
+      expect(coordinator.appState.startupMode).toBe("cli-seeded");
+      expect(coordinator.uiState.activeTargetId).toBe("queue");
+      expect(coordinator.uiState.focusedPane).toBe("queue");
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries).toHaveLength(2);
+      });
+      expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
+        identity: { providerId: "local", stableId: await realpath(amber) },
+        title: "amber.flac",
+        providerLabel: "Local",
+      });
+      expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lazy local metadata updates App State and notifies TUI subscribers without blocking enqueue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-metadata-"));
+    const file = join(dir, "plain-name.flac");
+    let resolveMetadata!: () => void;
+    const metadataReady = new Promise<void>((resolve) => {
+      resolveMetadata = resolve;
     });
-    expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
+    const runner: DependencyCommandRunner = async () => {
+      await metadataReady;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          format: {
+            duration: "193.5",
+            tags: {
+              title: "Tagged Title",
+              artist: "Tagged Artist",
+              album: "Tagged Album",
+            },
+          },
+        }),
+        stderr: "",
+      };
+    };
+
+    try {
+      await writeFile(file, "not real audio");
+      const { coordinator } = createTmuApp({
+        dependencyRunner: runner,
+        dependencyHealth: createDefaultDependencyHealth(),
+      });
+      let stateChanges = 0;
+      coordinator.onStateChange(() => {
+        stateChanges += 1;
+      });
+
+      await coordinator.start([file]);
+      const canonicalFile = await realpath(file);
+
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
+          title: "plain-name.flac",
+          identity: { providerId: "local", stableId: canonicalFile },
+        });
+      });
+      const stateChangesBeforeMetadata = stateChanges;
+
+      resolveMetadata();
+
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
+          title: "Tagged Title",
+          artist: "Tagged Artist",
+          album: "Tagged Album",
+          durationSeconds: 193.5,
+        });
+      });
+      expect(stateChanges).toBeGreaterThan(stateChangesBeforeMetadata);
+      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Tagged Title [queued]");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("loads CLI-seeded Local Tracks through the App Coordinator into the Player", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-playback-"));
+    const file = join(dir, "play-me.mp3");
+    const player = new RecordingPlayer();
+
+    try {
+      await writeFile(file, "not real audio");
+      const { coordinator } = createTmuApp({
+        player,
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            ffprobe: { name: "ffprobe", command: "/missing/ffprobe", status: "missing" },
+          },
+          metadata: {
+            degraded: true,
+            message: "Metadata degraded: ffprobe missing at /missing/ffprobe",
+          },
+        }),
+      });
+
+      await coordinator.start([file]);
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries).toHaveLength(1);
+      });
+      await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+      expect(player.loaded).toEqual([{ kind: "file", path: await realpath(file) }]);
+      expect(coordinator.appState.playback.status).toBe("playing");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("routes navigation intents through the coordinator into UI State", () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
@@ -322,7 +453,7 @@ describe("AppCoordinator", () => {
   test("tears down the Player boundary when the coordinator exits", async () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player,
@@ -336,7 +467,7 @@ describe("AppCoordinator", () => {
   test("quit intent tears down the Player through the App Coordinator", async () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player,
@@ -352,7 +483,7 @@ describe("AppCoordinator", () => {
   test("notifies subscribers when Player state changes outside input dispatch", async () => {
     const player = new NoopPlayer();
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player,
@@ -569,7 +700,7 @@ describe("AppCoordinator", () => {
     });
     const refreshes: string[] = [];
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
@@ -597,7 +728,7 @@ describe("AppCoordinator", () => {
     const refreshedHealth = createDefaultDependencyHealth();
     const refreshes: string[] = [];
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),

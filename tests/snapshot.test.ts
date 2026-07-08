@@ -115,6 +115,8 @@ describe("Last Queue Snapshot persistence", () => {
     let second: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
 
     try {
+      const seededFile = join(dir, "song-a.flac");
+      await writeFile(seededFile, "not real audio");
       await writeFile(configPath, JSON.stringify({
         persistence: {
           lastQueueSnapshotPath: snapshotPath,
@@ -122,7 +124,7 @@ describe("Last Queue Snapshot persistence", () => {
       }));
 
       first = await createTmuRuntime({ configPath, dependencyRunner: runner });
-      first.coordinator.start(["./song-a.flac"]);
+      await first.coordinator.start([seededFile]);
       await first.coordinator.dispatch({ type: "setVolume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "toggleShuffle" });
       await first.coordinator.dispatch({ type: "saveLastQueueSnapshot" });

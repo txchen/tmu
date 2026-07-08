@@ -1,5 +1,67 @@
-import { resolve } from "node:path";
-import type { PlaybackLocator, Provider, NavigationTargetId, Track, TrackIdentity } from "./domain";
+import { realpathSync, statSync } from "node:fs";
+import { basename, extname } from "node:path";
+import {
+  createDefaultDependencyHealth,
+  nodeDependencyCommandRunner,
+  type DependencyCommandRunner,
+  type DependencyHealthState,
+} from "./dependencies";
+import {
+  identityKey,
+  type NavigationTargetId,
+  type PlaybackLocator,
+  type Provider,
+  type Track,
+  type TrackIdentity,
+} from "./domain";
+
+const LOCAL_PROVIDER_ID = "local";
+
+const COMMON_AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".aif",
+  ".aiff",
+  ".alac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".webm",
+  ".wma",
+]);
+
+type CanonicalLocalFile = {
+  path: string;
+  title: string;
+  size: number;
+  mtimeMs: number;
+};
+
+type FfprobeJson = {
+  streams?: Array<{ codec_type?: unknown }>;
+  format?: {
+    duration?: unknown;
+    tags?: Record<string, unknown>;
+  };
+};
+
+export type LocalTrackMetadataListener = (track: Track) => void;
+
+export type LocalProviderOptions = {
+  dependencyHealth?: DependencyHealthState;
+  ffprobeCommand?: string;
+  runner?: DependencyCommandRunner;
+  metadataTimeoutMs?: number;
+  metadataConcurrency?: number;
+};
+
+export type LocalProvider = Provider & {
+  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void;
+};
 
 function skeletonTrack(providerId: NavigationTargetId, stableId: string, title: string, providerLabel: string): Track {
   return {
@@ -26,12 +88,205 @@ class SkeletonProvider implements Provider {
   }
 }
 
-export function createSkeletonProviders(): Record<string, Provider> {
+class FileSystemLocalProvider implements LocalProvider {
+  readonly id = LOCAL_PROVIDER_ID;
+  readonly label = "Local";
+  readonly hint = "files and folders";
+
+  private readonly dependencyHealth: DependencyHealthState;
+  private readonly ffprobeCommand: string;
+  private readonly runner: DependencyCommandRunner;
+  private readonly metadataTimeoutMs: number;
+  private readonly metadataConcurrency: number;
+  private readonly tracks = new Map<string, Track>();
+  private readonly metadataCache = new Map<string, Partial<Track>>();
+  private readonly metadataInFlight = new Set<string>();
+  private readonly metadataQueue: Array<{ file: CanonicalLocalFile; track: Track; cacheKey: string }> = [];
+  private readonly metadataListeners = new Set<LocalTrackMetadataListener>();
+  private activeMetadataJobs = 0;
+
+  constructor(options: LocalProviderOptions = {}) {
+    this.dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
+    this.ffprobeCommand = options.ffprobeCommand ?? this.dependencyHealth.helpers.ffprobe.command;
+    this.runner = options.runner ?? nodeDependencyCommandRunner;
+    this.metadataTimeoutMs = options.metadataTimeoutMs ?? 2000;
+    this.metadataConcurrency = Math.max(1, Math.floor(options.metadataConcurrency ?? 2));
+  }
+
+  listVisibleTracks(): readonly Track[] {
+    return [...this.tracks.values()];
+  }
+
+  async createTrackFromCliArg(path: string): Promise<Track | undefined> {
+    const file = canonicalLocalFileFromArg(path);
+    if (!file) return undefined;
+
+    if (isCommonAudioExtension(file.path)) {
+      return this.acceptFile(file);
+    }
+
+    if (!this.canUseFfprobe()) return undefined;
+
+    return await this.probeAudio(file) ? this.acceptFile(file) : undefined;
+  }
+
+  async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
+    if (identity.providerId !== LOCAL_PROVIDER_ID) {
+      throw new Error(`Local Provider cannot resolve ${identity.providerId}`);
+    }
+
+    return { kind: "file", path: identity.stableId };
+  }
+
+  onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void {
+    this.metadataListeners.add(listener);
+    return () => this.metadataListeners.delete(listener);
+  }
+
+  private acceptFile(file: CanonicalLocalFile): Track {
+    const identity = {
+      providerId: LOCAL_PROVIDER_ID,
+      stableId: file.path,
+    };
+    const key = identityKey(identity);
+    const existing = this.tracks.get(key);
+    if (existing) return existing;
+
+    const track: Track = {
+      identity,
+      title: file.title,
+      providerLabel: "Local",
+    };
+    this.tracks.set(key, track);
+    this.scheduleLazyMetadata(file, track);
+    return track;
+  }
+
+  private scheduleLazyMetadata(file: CanonicalLocalFile, track: Track): void {
+    if (!this.canUseFfprobe()) return;
+
+    const cacheKey = `${file.path}:${file.size}:${file.mtimeMs}`;
+    const cached = this.metadataCache.get(cacheKey);
+    if (cached) {
+      this.applyMetadata(track, cached);
+      return;
+    }
+
+    if (this.metadataInFlight.has(cacheKey)) return;
+    this.metadataInFlight.add(cacheKey);
+    this.metadataQueue.push({ file, track, cacheKey });
+    this.drainMetadataQueue();
+  }
+
+  private drainMetadataQueue(): void {
+    while (this.activeMetadataJobs < this.metadataConcurrency && this.metadataQueue.length > 0) {
+      const job = this.metadataQueue.shift();
+      if (!job) return;
+
+      this.activeMetadataJobs += 1;
+      void this.readMetadata(job.file)
+        .then((metadata) => {
+          if (!metadata || Object.keys(metadata).length === 0) return;
+          this.metadataCache.set(job.cacheKey, metadata);
+          this.applyMetadata(job.track, metadata);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.activeMetadataJobs -= 1;
+          this.metadataInFlight.delete(job.cacheKey);
+          this.drainMetadataQueue();
+        });
+    }
+  }
+
+  private applyMetadata(track: Track, metadata: Partial<Track>): void {
+    const updated = {
+      ...track,
+      ...metadata,
+      identity: track.identity,
+      providerLabel: track.providerLabel,
+    };
+    this.tracks.set(identityKey(track.identity), updated);
+    for (const listener of this.metadataListeners) listener(updated);
+  }
+
+  private async probeAudio(file: CanonicalLocalFile): Promise<boolean> {
+    const parsed = await this.runFfprobeJson(file, [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_type",
+    ]);
+    return parsed?.streams?.some((stream) => stream.codec_type === "audio") ?? false;
+  }
+
+  private async readMetadata(file: CanonicalLocalFile): Promise<Partial<Track> | null> {
+    const parsed = await this.runFfprobeJson(file, [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration:format_tags=title,artist,album",
+    ]);
+    if (!parsed?.format) return null;
+
+    const metadata: Partial<Track> = {};
+    const title = tagValue(parsed.format.tags, "title");
+    const artist = tagValue(parsed.format.tags, "artist");
+    const album = tagValue(parsed.format.tags, "album");
+    const durationSeconds = numberValue(parsed.format.duration);
+
+    if (title) metadata.title = title;
+    if (artist) metadata.artist = artist;
+    if (album) metadata.album = album;
+    if (durationSeconds !== undefined) metadata.durationSeconds = durationSeconds;
+    return metadata;
+  }
+
+  private async runFfprobeJson(file: CanonicalLocalFile, args: string[]): Promise<FfprobeJson | null> {
+    const result = await this.runner({
+      helper: "ffprobe",
+      command: this.ffprobeCommand,
+      args: [...args, "-of", "json", file.path],
+      timeoutMs: this.metadataTimeoutMs,
+    });
+
+    if (result.exitCode !== 0) return null;
+    return parseFfprobeJson(result.stdout);
+  }
+
+  private canUseFfprobe(): boolean {
+    return !this.dependencyHealth.metadata.degraded
+      && this.dependencyHealth.helpers.ffprobe.status === "present";
+  }
+}
+
+export function createLocalProvider(options: LocalProviderOptions = {}): LocalProvider {
+  return new FileSystemLocalProvider(options);
+}
+
+export function isLocalProvider(provider: Provider | undefined): provider is LocalProvider {
+  return Boolean(provider)
+    && typeof (provider as Partial<LocalProvider>).createTrackFromCliArg === "function"
+    && typeof (provider as Partial<LocalProvider>).onTrackMetadataChange === "function";
+}
+
+export function createDefaultProviders(options: { local?: LocalProviderOptions } = {}): Record<string, Provider> {
+  const localOptions = options.local ?? {
+    dependencyHealth: createDefaultDependencyHealth({
+      helpers: {
+        ffprobe: { name: "ffprobe", command: "ffprobe", status: "missing" },
+      },
+      metadata: {
+        degraded: true,
+        message: "Metadata degraded: ffprobe missing at ffprobe",
+      },
+    }),
+  };
+
   return {
-    local: new SkeletonProvider("local", "Local", "files and folders", [
-      skeletonTrack("local", "/music/amber.flac", "Amber Path", "Local"),
-      skeletonTrack("local", "/music/cinder.mp3", "Cinder Room", "Local"),
-    ]),
+    local: createLocalProvider(localOptions),
     navidrome: new SkeletonProvider("navidrome", "Navidrome", "artists, albums, playlists", [
       skeletonTrack("navidrome", "song-101", "Northbound", "Navidrome"),
       skeletonTrack("navidrome", "song-102", "Station Light", "Navidrome"),
@@ -54,18 +309,47 @@ export function createSkeletonProviders(): Record<string, Provider> {
   };
 }
 
-export function createLocalTrackFromCliArg(path: string): Track {
+function canonicalLocalFileFromArg(path: string): CanonicalLocalFile | undefined {
   const normalizedPath = path.trim();
-  const pieces = normalizedPath.split(/[\\/]/).filter(Boolean);
-  const title = pieces.at(-1) || normalizedPath || "local file";
-  const canonicalPath = resolve(normalizedPath);
+  if (!normalizedPath) return undefined;
 
-  return {
-    identity: {
-      providerId: "local",
-      stableId: canonicalPath,
-    },
-    title,
-    providerLabel: "Local",
-  };
+  try {
+    const canonicalPath = realpathSync.native(normalizedPath);
+    const stat = statSync(canonicalPath);
+    if (!stat.isFile()) return undefined;
+
+    return {
+      path: canonicalPath,
+      title: basename(canonicalPath) || canonicalPath,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function isCommonAudioExtension(path: string): boolean {
+  return COMMON_AUDIO_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function parseFfprobeJson(stdout: string): FfprobeJson | null {
+  try {
+    return JSON.parse(stdout) as FfprobeJson;
+  } catch {
+    return null;
+  }
+}
+
+function tagValue(tags: Record<string, unknown> | undefined, name: string): string | undefined {
+  if (!tags) return undefined;
+
+  const match = Object.entries(tags).find(([key]) => key.toLowerCase() === name);
+  const value = match?.[1];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
 }

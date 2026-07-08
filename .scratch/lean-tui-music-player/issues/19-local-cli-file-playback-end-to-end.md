@@ -1,6 +1,6 @@
 # Local CLI File Playback End To End
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 

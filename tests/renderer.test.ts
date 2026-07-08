@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AppCoordinator,
   MemoryQueue,
@@ -6,11 +9,28 @@ import {
   createDefaultDependencyHealth,
   createInitialAppState,
   createInitialUiState,
-  createSkeletonProviders,
+  createDefaultProviders,
   renderShell,
   renderShellText,
   type Track,
 } from "../src/index";
+
+async function waitFor(assertion: () => void, timeoutMs = 500): Promise<void> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await Bun.sleep(5);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
 
 function track(providerId: string, stableId: string, title: string): Track {
   return {
@@ -23,7 +43,7 @@ function track(providerId: string, stableId: string, title: string): Track {
 describe("renderShell", () => {
   test("exposes navigation targets, Provider Browsing Surface, and persistent queue/player region", () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
@@ -45,21 +65,32 @@ describe("renderShell", () => {
     expect(shell.queuePlayer.nowPlaying).toBe("Idle - add a Track to the shared Queue");
   });
 
-  test("renders CLI-seeded queue state without requiring a TTY", () => {
-    const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
-      uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
-      player: new NoopPlayer(),
-    });
+  test("renders CLI-seeded queue state without requiring a TTY", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-renderer-cli-"));
+    const file = join(dir, "song-a.flac");
 
-    coordinator.start(["./song-a.flac"]);
-    const text = renderShellText(coordinator.appState, coordinator.uiState);
+    try {
+      await writeFile(file, "not real audio");
+      const coordinator = new AppCoordinator({
+        appState: createInitialAppState(createDefaultProviders()),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+      });
 
-    expect(text).toContain("Provider Browsing Surface");
-    expect(text).toContain("Queue / Player");
-    expect(text).toContain("song-a.flac [queued]");
-    expect(text).toContain("> Queue");
+      await coordinator.start([file]);
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries).toHaveLength(1);
+      });
+      const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+      expect(text).toContain("Provider Browsing Surface");
+      expect(text).toContain("Queue / Player");
+      expect(text).toContain("song-a.flac [queued]");
+      expect(text).toContain("> Queue");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("renders queue modes, volume readiness, current selection, and Track Availability", () => {
@@ -71,7 +102,7 @@ describe("renderShell", () => {
     queue.setRepeatAll(true);
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders()),
+      appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue,
       player: new NoopPlayer(),
@@ -96,7 +127,7 @@ describe("renderShell", () => {
 
   test("surfaces dependency health without exposing config secrets", async () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createSkeletonProviders(), {
+      appState: createInitialAppState(createDefaultProviders(), {
         config: {
           providers: {
             navidrome: {

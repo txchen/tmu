@@ -17,7 +17,7 @@ export function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
 export async function main(args: readonly string[] = Bun.argv.slice(2)): Promise<void> {
   const runtime = parseRuntimeArgs(args);
   const app = await createTmuRuntime();
-  app.coordinator.start(runtime.cliFileArgs);
+  await app.coordinator.start(runtime.cliFileArgs);
 
   if (runtime.snapshot || !process.stdin.isTTY || !process.stdout.isTTY) {
     try {

@@ -131,6 +131,7 @@ export type Queue = {
   setShuffle(enabled: boolean): void;
   setRepeatAll(enabled: boolean): void;
   markAvailability(identity: TrackIdentity, availability: TrackAvailability): void;
+  updateTrack(track: Track): QueueEntry | undefined;
   snapshot(): QueueState;
   restore(snapshot: QueueState): void;
 };

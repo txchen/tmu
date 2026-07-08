@@ -19,7 +19,7 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
-import { createLocalTrackFromCliArg } from "./providers";
+import { isLocalProvider } from "./providers";
 import {
   InMemoryLastQueueSnapshotPersistence,
   createLastQueueSnapshot,
@@ -48,6 +48,7 @@ export class AppCoordinator {
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
   private readonly unsubscribeFromPlayer: () => void;
+  private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<() => void>();
   private tornDown = false;
 
@@ -62,15 +63,21 @@ export class AppCoordinator {
       this.mergePlayerPlayback(playback);
       this.notifyStateChanged();
     });
+    this.unsubscribeFromProviders = Object.values(this.appState.providers)
+      .filter(isLocalProvider)
+      .map((provider) => provider.onTrackMetadataChange((track) => {
+        if (!this.queue.updateTrack(track)) return;
+
+        this.syncQueueState();
+        this.appState.lastEvent = `updated metadata for ${track.title}`;
+        this.notifyStateChanged();
+      }));
     this.syncQueueState();
   }
 
-  start(cliArgs: readonly string[]): void {
-    for (const arg of cliArgs) {
-      if (arg.trim()) this.queue.enqueue(createLocalTrackFromCliArg(arg));
-    }
-
-    if (cliArgs.length > 0) {
+  async start(cliArgs: readonly string[]): Promise<void> {
+    const fileArgs = cliArgs.filter((arg) => arg.trim());
+    if (fileArgs.length > 0) {
       this.appState.startupMode = "cli-seeded";
       this.uiState.activeTargetId = "queue";
       this.uiState.focusedPane = "queue";
@@ -82,6 +89,10 @@ export class AppCoordinator {
       this.uiState.focusedPane = "targets";
       this.uiState.selectedTargetIndex = navigationTargetIndex("local");
       this.appState.lastEvent = "opened target switcher";
+    }
+
+    for (const arg of fileArgs) {
+      await this.seedLocalCliArg(arg);
     }
 
     this.syncQueueState();
@@ -168,6 +179,7 @@ export class AppCoordinator {
     if (this.tornDown) return;
     this.tornDown = true;
     this.unsubscribeFromPlayer();
+    for (const unsubscribe of this.unsubscribeFromProviders) unsubscribe();
     await this.player.teardown();
   }
 
@@ -432,6 +444,35 @@ export class AppCoordinator {
     };
     this.appState.lastEvent = `started ${entry.track.title}`;
     this.syncQueueState();
+  }
+
+  private async seedLocalCliArg(arg: string): Promise<void> {
+    try {
+      const track = await this.localCliTrackFromArg(arg);
+      if (!track || this.tornDown) return;
+
+      this.enqueueCliTrack(track);
+      this.syncQueueState();
+      this.notifyStateChanged();
+    } catch (error) {
+      if (this.tornDown) return;
+
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      this.notifyStateChanged();
+    }
+  }
+
+  private async localCliTrackFromArg(arg: string): Promise<QueueEntry["track"] | undefined> {
+    const localProvider = this.appState.providers.local;
+    if (isLocalProvider(localProvider)) return await localProvider.createTrackFromCliArg(arg);
+    throw new Error("Local Provider cannot open CLI file arguments");
+  }
+
+  private enqueueCliTrack(track: QueueEntry["track"]): void {
+    const entry = this.queue.enqueue(track);
+    const index = this.queue.entries.indexOf(entry);
+    this.uiState.selectedQueueIndex = Math.max(0, index);
+    this.appState.lastEvent = `added ${track.title} to shared Queue`;
   }
 
   private async togglePlayPause(): Promise<void> {

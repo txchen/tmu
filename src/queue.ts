@@ -165,6 +165,14 @@ export class MemoryQueue implements Queue {
     if (entry) entry.availability = availability;
   }
 
+  updateTrack(track: Track): QueueEntry | undefined {
+    const entry = this.items.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
+    if (!entry) return undefined;
+
+    entry.track = track;
+    return entry;
+  }
+
   snapshot(): QueueState {
     return {
       entries: this.items.map((entry) => ({
