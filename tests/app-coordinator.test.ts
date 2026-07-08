@@ -270,6 +270,35 @@ class LoadFailingPlayer extends RecordingPlayer {
   }
 }
 
+class LoadFailingOncePlayer extends RecordingPlayer {
+  failed = false;
+
+  async load(locator: PlaybackLocator): Promise<void> {
+    if (!this.failed) {
+      this.failed = true;
+      this.loaded.push(locator);
+      throw new Error("mpv error: first load failed");
+    }
+
+    await super.load(locator);
+  }
+}
+
+class LoadFailingForPathPlayer extends RecordingPlayer {
+  constructor(private readonly failingPath: string) {
+    super();
+  }
+
+  async load(locator: PlaybackLocator): Promise<void> {
+    if (locator.kind === "file" && locator.path === this.failingPath) {
+      this.loaded.push(locator);
+      throw new Error(`mpv error: cannot load ${this.failingPath}`);
+    }
+
+    await super.load(locator);
+  }
+}
+
 class StopFailingPlayer extends RecordingPlayer {
   async stop(): Promise<PlayerPlaybackState> {
     this.stops += 1;
@@ -579,6 +608,47 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
   });
 
+  test("marks Provider resolution failures unavailable with a visible reason while preserving Queue contents", async () => {
+    const brokenTrack = track("broken-provider", "missing-track", "Broken Track");
+    const provider: Provider = {
+      id: "broken-provider",
+      label: "Broken Provider",
+      hint: "failure seam",
+      listVisibleTracks() {
+        return [brokenTrack];
+      },
+      async resolvePlaybackLocator() {
+        throw new Error("Provider could not resolve this Track");
+      },
+    };
+    const player = new RecordingPlayer();
+    const queue = new MemoryQueue();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "broken-provider": provider }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.start([]);
+    queue.enqueue(brokenTrack);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([]);
+    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable",
+      reason: "Provider could not resolve this Track",
+    });
+    expect(coordinator.appState.playback).toEqual({
+      status: "error",
+      currentTrackIdentity: brokenTrack.identity,
+      message: "Provider could not resolve this Track",
+    });
+    expect(coordinator.appState.lastEvent).toBe("Provider could not resolve this Track");
+  });
+
   test("browses Navidrome artist albums, enqueues a canonical Track, and plays via a resolved stream URL", async () => {
     const player = new RecordingPlayer();
     const seenEndpoints: string[] = [];
@@ -670,6 +740,54 @@ describe("AppCoordinator", () => {
       stableId: "Navidrome:https://music.example.test:track:track-1",
     });
     expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtist", "getAlbum", "scrobble"]);
+  });
+
+  test("does not persist Navidrome stream URLs after a Player load failure", async () => {
+    const player = new LoadFailingPlayer();
+    const queue = new MemoryQueue();
+    const remoteTrack = navidromeTrack("track-fail", "Remote Failure Track", 180);
+    queue.enqueue(remoteTrack);
+    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      fetcher: async () => navidromeJson({ status: "ok" }),
+      saltFactory: () => "failure-salt",
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+      snapshotPersistence,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toHaveLength(1);
+    expect(player.loaded[0]).toMatchObject({ kind: "url" });
+    expect(coordinator.appState.lastEvent).toBe("mpv error: load failed");
+    expect(coordinator.appState.queue.entries[0]?.track).toEqual(remoteTrack);
+    expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
+    expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("url");
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable",
+      reason: "mpv error: load failed",
+    });
+
+    await coordinator.dispatch({ type: "saveLastQueueSnapshot" });
+    const snapshot = await snapshotPersistence.load();
+
+    expect(snapshot?.entries[0]).toEqual({
+      track: remoteTrack,
+      availability: {
+        status: "unavailable",
+        reason: "mpv error: load failed",
+      },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain("/rest/stream.view");
+    expect(JSON.stringify(snapshot)).not.toContain("failure-salt");
   });
 
   test("browses Navidrome playlists and enqueues playlist Tracks through coordinator intents", async () => {
@@ -1072,7 +1190,7 @@ describe("AppCoordinator", () => {
     expect(volumeCoordinator.appState.volume).toEqual({ percent: 100, ready: false });
   });
 
-  test("keeps Player load failures local to playback state without marking Track unavailable", async () => {
+  test("marks Player load failures visible without removing the Track from the Queue", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new LoadFailingPlayer();
     const coordinator = new AppCoordinator({
@@ -1092,7 +1210,102 @@ describe("AppCoordinator", () => {
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.lastEvent).toBe("mpv error: load failed");
-    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({ status: "unknown" });
+    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable",
+      reason: "mpv error: load failed",
+    });
+    expect(coordinator.appState.playback).toEqual({
+      status: "error",
+      currentTrackIdentity: localTrack.identity,
+      message: "mpv error: load failed",
+    });
+  });
+
+  test("auto-advance continues past a Track with a Player load failure without corrupting Queue state", async () => {
+    const first = track("local", "/music/first.flac", "First File");
+    const second = track("local", "/music/second.flac", "Second File");
+    const player = new LoadFailingOncePlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [first, second]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "moveSelection", delta: -1 });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(coordinator.appState.lastEvent).toBe("mpv error: first load failed");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.availability)).toEqual([
+      { status: "unavailable", reason: "mpv error: first load failed" },
+      { status: "unknown" },
+    ]);
+
+    await coordinator.dispatch({ type: "nextTrack" });
+
+    expect(player.loaded).toEqual([
+      { kind: "file", path: "/resolved/local//music/first.flac" },
+      { kind: "file", path: "/resolved/local//music/second.flac" },
+    ]);
+    expect(coordinator.appState.playback.status).toBe("playing");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
+    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      "First File",
+      "Second File",
+    ]);
+  });
+
+  test("auto-advance skips a failed Player load candidate in the middle of the Queue", async () => {
+    const first = track("local", "/music/first.flac", "First File");
+    const broken = track("local", "/music/broken.flac", "Broken File");
+    const third = track("local", "/music/third.flac", "Third File");
+    const player = new LoadFailingForPathPlayer("/resolved/local//music/broken.flac");
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [first, broken, third]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "moveSelection", delta: -2 });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "nextTrack" });
+
+    expect(player.loaded).toEqual([
+      { kind: "file", path: "/resolved/local//music/first.flac" },
+      { kind: "file", path: "/resolved/local//music/broken.flac" },
+      { kind: "file", path: "/resolved/local//music/third.flac" },
+    ]);
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
+      status: "unavailable",
+      reason: "mpv error: cannot load /resolved/local//music/broken.flac",
+    });
+    expect(coordinator.appState.playback.status).toBe("playing");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(third.identity);
+    expect(coordinator.appState.queue.currentIndex).toBe(2);
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
+      "Broken File [unavailable: mpv error: cannot load /resolved/local//music/broken.flac]",
+    );
   });
 
   test("tears down the Player boundary when the coordinator exits", async () => {
@@ -1418,6 +1631,62 @@ describe("AppCoordinator", () => {
       status: "unavailable",
       reason: "Local file no longer exists: /music/missing.flac",
     });
+  });
+
+  test("keeps Offline YouTube Cache missing-media failures visible in the Queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-missing-visible-"));
+
+    try {
+      await writeOfflineYouTubeCacheMetadata({
+        cacheDir: dir,
+        mediaDirName: "media",
+        metadataFileName: "metadata.json",
+      }, {
+        version: 1,
+        extractor: "YouTube",
+        id: "MissingMedia",
+        title: "Missing Cached Track",
+        mediaFileName: "missing.opus",
+      });
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+      await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+      expect(coordinator.appState.queue.entries[0]).toMatchObject({
+        track: {
+          identity: { providerId: "offline-youtube-cache", stableId: "youtube:MissingMedia" },
+          title: "Missing Cached Track",
+        },
+        availability: { status: "unavailable", reason: "Cached media file is missing" },
+      });
+      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
+        "Missing Cached Track [unavailable: Cached media file is missing]",
+      );
+
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+      await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+      expect(coordinator.appState.queue.entries).toHaveLength(1);
+      expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+        status: "unavailable",
+        reason: "Cached media file is missing",
+      });
+      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
+        "Missing Cached Track [unavailable: Cached media file is missing]",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("blocks playback actions when mpv dependency health is missing", async () => {

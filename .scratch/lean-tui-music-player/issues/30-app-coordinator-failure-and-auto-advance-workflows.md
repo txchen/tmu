@@ -1,6 +1,6 @@
 # App Coordinator Failure And Auto-Advance Workflows
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,14 +14,14 @@ This slice should verify TMU's main behavioral test seam: UI intent in, observab
 
 ## Acceptance criteria
 
-- [ ] Provider resolution failures mark the affected Track unavailable with a visible reason.
-- [ ] Player load or command failures mark playback state without corrupting Queue state.
-- [ ] Missing mpv prevents load attempts and exposes dependency health through App State.
-- [ ] Missing yt-dlp prevents YouTube URL Download actions without affecting other Provider workflows.
-- [ ] Auto-advance skips unavailable or failed Tracks according to Queue policy while preserving visible Track Availability.
-- [ ] Navidrome stream URLs are resolved at playback time and not persisted after failures.
-- [ ] Offline YouTube Cache missing-media failures stay visible in the Queue.
-- [ ] Coordinator tests cover UI intents through fake Providers, fake Player, fake dependency health, fake cache/download services, Queue state, and App State outcomes.
+- [x] Provider resolution failures mark the affected Track unavailable with a visible reason.
+- [x] Player load or command failures mark playback state without corrupting Queue state.
+- [x] Missing mpv prevents load attempts and exposes dependency health through App State.
+- [x] Missing yt-dlp prevents YouTube URL Download actions without affecting other Provider workflows.
+- [x] Auto-advance skips unavailable or failed Tracks according to Queue policy while preserving visible Track Availability.
+- [x] Navidrome stream URLs are resolved at playback time and not persisted after failures.
+- [x] Offline YouTube Cache missing-media failures stay visible in the Queue.
+- [x] Coordinator tests cover UI intents through fake Providers, fake Player, fake dependency health, fake cache/download services, Queue state, and App State outcomes.
 
 ## Blocked by
 

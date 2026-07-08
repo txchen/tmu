@@ -746,9 +746,8 @@ export class AppCoordinator {
     try {
       await this.player.load(locator);
     } catch (error) {
-      this.mergePlayerPlayback(this.player.playback);
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      this.syncQueueState();
+      const message = error instanceof Error ? error.message : String(error);
+      this.markUnavailable(entry, message);
       return false;
     }
 
