@@ -1,6 +1,6 @@
 # mpv Player Adapter And Playback Controls
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 

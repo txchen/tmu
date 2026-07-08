@@ -111,6 +111,8 @@ describe("Last Queue Snapshot persistence", () => {
       stdout: helper === "ffprobe" ? "ffprobe version 7.1\n" : `${helper} 1.0\n`,
       stderr: "",
     });
+    let first: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
+    let second: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
 
     try {
       await writeFile(configPath, JSON.stringify({
@@ -119,13 +121,13 @@ describe("Last Queue Snapshot persistence", () => {
         },
       }));
 
-      const first = await createTmuRuntime({ configPath, dependencyRunner: runner });
+      first = await createTmuRuntime({ configPath, dependencyRunner: runner });
       first.coordinator.start(["./song-a.flac"]);
       await first.coordinator.dispatch({ type: "setVolume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "toggleShuffle" });
       await first.coordinator.dispatch({ type: "saveLastQueueSnapshot" });
 
-      const second = await createTmuRuntime({ configPath, dependencyRunner: runner });
+      second = await createTmuRuntime({ configPath, dependencyRunner: runner });
       second.coordinator.start([]);
       await second.coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
 
@@ -133,6 +135,8 @@ describe("Last Queue Snapshot persistence", () => {
       expect(second.coordinator.appState.queue.shuffle).toBe(true);
       expect(second.coordinator.appState.volume).toEqual({ percent: 61, ready: true });
     } finally {
+      await first?.coordinator.teardown();
+      await second?.coordinator.teardown();
       await rm(dir, { recursive: true, force: true });
     }
   });

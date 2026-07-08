@@ -26,20 +26,27 @@ export class TerminalTui {
     this.input.setRawMode(true);
     this.input.resume();
     this.output.write("\x1b[?25l");
+    let drewFromStateChange = false;
+    const unsubscribe = this.app.coordinator.onStateChange(() => {
+      drewFromStateChange = true;
+      this.draw();
+    });
     this.draw();
 
     this.input.on("data", async (data) => {
+      drewFromStateChange = false;
       for (const key of splitKeys(data)) {
         const intent = intentFromKey(key);
         if (!intent) continue;
         await this.app.coordinator.dispatch(intent);
         if (intent.type === "quit") {
+          unsubscribe();
           this.output.write("\x1b[?25h\x1b[2J\x1b[H");
           this.input.setRawMode(false);
           process.exit(0);
         }
       }
-      this.draw();
+      if (!drewFromStateChange) this.draw();
     });
   }
 
@@ -54,6 +61,11 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === " ") return { type: "togglePlayPause" };
   if (key === "n") return { type: "nextTrack" };
   if (key === "p") return { type: "previousTrack" };
+  if (key === "s") return { type: "stop" };
+  if (key === "[") return { type: "seekBy", seconds: -5 };
+  if (key === "]") return { type: "seekBy", seconds: 5 };
+  if (key === "-") return { type: "adjustVolume", delta: -5 };
+  if (key === "+") return { type: "adjustVolume", delta: 5 };
   if (key === "z") return { type: "toggleShuffle" };
   if (key === "r") return { type: "toggleRepeatAll" };
   if (key === "S") return { type: "saveLastQueueSnapshot" };

@@ -20,7 +20,11 @@ export async function main(args: readonly string[] = Bun.argv.slice(2)): Promise
   app.coordinator.start(runtime.cliFileArgs);
 
   if (runtime.snapshot || !process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stdout.write(`${renderShellText(app.coordinator.appState, app.coordinator.uiState)}\n`);
+    try {
+      process.stdout.write(`${renderShellText(app.coordinator.appState, app.coordinator.uiState)}\n`);
+    } finally {
+      await app.coordinator.teardown();
+    }
     return;
   }
 

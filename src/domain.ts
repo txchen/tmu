@@ -52,6 +52,24 @@ export type VolumeState = {
   ready: boolean;
 };
 
+export type PlaybackCommandError = {
+  command: string;
+  message: string;
+  recoverable: boolean;
+};
+
+export type PlayerPlaybackState = {
+  status: "idle" | "playing" | "paused" | "stopped" | "error";
+  positionSeconds?: number | null;
+  durationSeconds?: number | null;
+  paused?: boolean | null;
+  idle?: boolean | null;
+  eof?: boolean;
+  volumePercent?: number | null;
+  commandError?: PlaybackCommandError;
+  message?: string;
+};
+
 export type SnapshotTrack = {
   identity: TrackIdentity;
   title: string;
@@ -75,10 +93,8 @@ export type LastQueueSnapshot = {
   volume: VolumeState;
 };
 
-export type PlaybackState = {
-  status: "idle" | "playing" | "paused" | "stopped" | "error";
+export type PlaybackState = PlayerPlaybackState & {
   currentTrackIdentity: TrackIdentity | null;
-  message?: string;
 };
 
 export type Provider = {
@@ -90,10 +106,16 @@ export type Provider = {
 };
 
 export type Player = {
-  readonly playback: PlaybackState;
+  readonly playback: PlayerPlaybackState;
+  start(): Promise<PlayerPlaybackState>;
   load(locator: PlaybackLocator): Promise<void>;
-  togglePause(): Promise<PlaybackState>;
-  stop(): Promise<PlaybackState>;
+  togglePause(): Promise<PlayerPlaybackState>;
+  setPaused(paused: boolean): Promise<PlayerPlaybackState>;
+  stop(): Promise<PlayerPlaybackState>;
+  seekBy(seconds: number): Promise<PlayerPlaybackState>;
+  setVolume(percent: number): Promise<PlayerPlaybackState>;
+  teardown(): Promise<void>;
+  onPlaybackStateChange(listener: (state: PlayerPlaybackState) => void): () => void;
 };
 
 export type Queue = {
@@ -162,6 +184,8 @@ export type AppIntent =
   | { type: "toggleShuffle" }
   | { type: "toggleRepeatAll" }
   | { type: "setVolume"; percent: number; ready: boolean }
+  | { type: "adjustVolume"; delta: number }
+  | { type: "seekBy"; seconds: number }
   | { type: "saveLastQueueSnapshot" }
   | { type: "restoreLastQueueSnapshot" }
   | { type: "togglePlayPause" }

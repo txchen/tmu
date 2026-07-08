@@ -11,6 +11,7 @@ import {
   createInitialUiState,
   createSkeletonProviders,
   type Player,
+  type PlayerPlaybackState,
   type PlaybackLocator,
   type Provider,
   type Track,
@@ -41,8 +42,11 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
 
 class RecordingPlayer extends NoopPlayer implements Player {
   readonly loaded: PlaybackLocator[] = [];
+  readonly seeks: number[] = [];
+  readonly volumes: number[] = [];
   toggles = 0;
   stops = 0;
+  teardowns = 0;
 
   async load(locator: PlaybackLocator): Promise<void> {
     this.loaded.push(locator);
@@ -57,6 +61,55 @@ class RecordingPlayer extends NoopPlayer implements Player {
   async stop() {
     this.stops += 1;
     return super.stop();
+  }
+
+  async seekBy(seconds: number) {
+    this.seeks.push(seconds);
+    return super.seekBy(seconds);
+  }
+
+  async setVolume(percent: number) {
+    this.volumes.push(percent);
+    return super.setVolume(percent);
+  }
+
+  async teardown() {
+    this.teardowns += 1;
+    await super.teardown();
+  }
+}
+
+class FailingThenRecoveringPlayer extends RecordingPlayer {
+  failNextSeek = true;
+
+  async seekBy(seconds: number) {
+    if (this.failNextSeek) {
+      this.failNextSeek = false;
+      await super.seekBy(seconds);
+      throw new Error("mpv error: seek failed");
+    }
+    return super.seekBy(seconds);
+  }
+}
+
+class LoadFailingPlayer extends RecordingPlayer {
+  async load(locator: PlaybackLocator): Promise<void> {
+    this.loaded.push(locator);
+    throw new Error("mpv error: load failed");
+  }
+}
+
+class StopFailingPlayer extends RecordingPlayer {
+  async stop(): Promise<PlayerPlaybackState> {
+    this.stops += 1;
+    throw new Error("mpv error: stop failed");
+  }
+}
+
+class VolumeFailingPlayer extends RecordingPlayer {
+  async setVolume(percent: number): Promise<PlayerPlaybackState> {
+    this.volumes.push(percent);
+    throw new Error("mpv error: volume failed");
   }
 }
 
@@ -142,6 +195,179 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
+  });
+
+  test("routes playback controls through the Player after a Track is resolved", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    await coordinator.dispatch({ type: "seekBy", seconds: 15 });
+    await coordinator.dispatch({ type: "setVolume", percent: 73, ready: true });
+    await coordinator.dispatch({ type: "adjustVolume", delta: 40 });
+    await coordinator.dispatch({ type: "stop" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
+    expect(player.toggles).toBe(2);
+    expect(player.seeks).toEqual([15]);
+    expect(player.volumes).toEqual([73, 100]);
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.volume).toEqual({ percent: 100, ready: true });
+    expect(coordinator.appState.playback.status).toBe("stopped");
+  });
+
+  test("keeps recoverable Player command errors in App State and allows later controls", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const player = new FailingThenRecoveringPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "seekBy", seconds: 5 });
+
+    expect(coordinator.appState.lastEvent).toBe("mpv error: seek failed");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
+
+    await coordinator.dispatch({ type: "stop" });
+
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.playback.status).toBe("stopped");
+  });
+
+  test("does not overwrite failed Player control errors with success events", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const stopPlayer = new StopFailingPlayer();
+    const stopCoordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: stopPlayer,
+    });
+
+    stopCoordinator.start([]);
+    await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await stopCoordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await stopCoordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await stopCoordinator.dispatch({ type: "stop" });
+
+    expect(stopCoordinator.appState.lastEvent).toBe("mpv error: stop failed");
+
+    const volumePlayer = new VolumeFailingPlayer();
+    const volumeCoordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: volumePlayer,
+    });
+
+    volumeCoordinator.start([]);
+    await volumeCoordinator.dispatch({ type: "setVolume", percent: 71, ready: true });
+
+    expect(volumeCoordinator.appState.lastEvent).toBe("mpv error: volume failed");
+    expect(volumeCoordinator.appState.volume).toEqual({ percent: 100, ready: false });
+  });
+
+  test("keeps Player load failures local to playback state without marking Track unavailable", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const player = new LoadFailingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
+    expect(coordinator.appState.lastEvent).toBe("mpv error: load failed");
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({ status: "unknown" });
+  });
+
+  test("tears down the Player boundary when the coordinator exits", async () => {
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.teardown();
+
+    expect(player.teardowns).toBe(1);
+  });
+
+  test("quit intent tears down the Player through the App Coordinator", async () => {
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.dispatch({ type: "quit" });
+    await coordinator.teardown();
+
+    expect(player.teardowns).toBe(1);
+    expect(coordinator.appState.lastEvent).toBe("quit requested");
+  });
+
+  test("notifies subscribers when Player state changes outside input dispatch", async () => {
+    const player = new NoopPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+    const states: string[] = [];
+
+    const unsubscribe = coordinator.onStateChange(() => {
+      states.push(coordinator.appState.playback.status);
+    });
+
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+    unsubscribe();
+    await player.stop();
+
+    expect(states).toEqual(["playing"]);
   });
 
   test("drives queue remove, move, clear, next, previous, and modes through intents", async () => {
@@ -281,10 +507,14 @@ describe("AppCoordinator", () => {
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
     await coordinator.dispatch({ type: "togglePlayPause" });
+    await coordinator.dispatch({ type: "seekBy", seconds: 10 });
+    await coordinator.dispatch({ type: "setVolume", percent: 41, ready: true });
     await coordinator.dispatch({ type: "stop" });
 
     expect(player.loaded).toEqual([]);
     expect(player.toggles).toBe(0);
+    expect(player.seeks).toEqual([]);
+    expect(player.volumes).toEqual([]);
     expect(player.stops).toBe(0);
     expect(coordinator.appState.playback).toEqual({
       status: "error",

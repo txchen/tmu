@@ -6,6 +6,7 @@ import {
   type AppIntent,
   type AppState,
   type Player,
+  type PlayerPlaybackState,
   type Provider,
   type Queue,
   type QueueEntry,
@@ -46,6 +47,9 @@ export class AppCoordinator {
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
+  private readonly unsubscribeFromPlayer: () => void;
+  private readonly stateListeners = new Set<() => void>();
+  private tornDown = false;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
@@ -54,6 +58,10 @@ export class AppCoordinator {
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
+    this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
+      this.mergePlayerPlayback(playback);
+      this.notifyStateChanged();
+    });
     this.syncQueueState();
   }
 
@@ -77,68 +85,95 @@ export class AppCoordinator {
     }
 
     this.syncQueueState();
+    this.notifyStateChanged();
   }
 
   async dispatch(intent: AppIntent): Promise<void> {
-    switch (intent.type) {
-      case "selectNavigationTarget":
-        await this.selectNavigationTarget(intent.targetId);
-        return;
-      case "moveSelection":
-        await this.moveSelection(intent.delta);
-        return;
-      case "cycleFocus":
-        this.cycleFocus();
-        return;
-      case "enqueueSelectedTrack":
-        await this.enqueueSelectedTrack();
-        return;
-      case "startSelectedQueueEntry":
-        await this.startSelectedQueueEntry();
-        return;
-      case "removeSelectedQueueEntry":
-        this.removeSelectedQueueEntry();
-        return;
-      case "moveSelectedQueueEntry":
-        this.moveSelectedQueueEntry(intent.delta);
-        return;
-      case "clearQueue":
-        this.clearQueue();
-        return;
-      case "nextTrack":
-        await this.nextTrack();
-        return;
-      case "previousTrack":
-        await this.previousTrack();
-        return;
-      case "toggleShuffle":
-        this.toggleShuffle();
-        return;
-      case "toggleRepeatAll":
-        this.toggleRepeatAll();
-        return;
-      case "setVolume":
-        this.setVolume(intent.percent, intent.ready);
-        return;
-      case "saveLastQueueSnapshot":
-        await this.saveLastQueueSnapshot();
-        return;
-      case "restoreLastQueueSnapshot":
-        await this.restoreLastQueueSnapshot();
-        return;
-      case "togglePlayPause":
-        await this.togglePlayPause();
-        return;
-      case "stop":
-        if (this.blockPlaybackActionIfUnavailable()) return;
+    try {
+      switch (intent.type) {
+        case "selectNavigationTarget":
+          await this.selectNavigationTarget(intent.targetId);
+          return;
+        case "moveSelection":
+          await this.moveSelection(intent.delta);
+          return;
+        case "cycleFocus":
+          this.cycleFocus();
+          return;
+        case "enqueueSelectedTrack":
+          await this.enqueueSelectedTrack();
+          return;
+        case "startSelectedQueueEntry":
+          await this.startSelectedQueueEntry();
+          return;
+        case "removeSelectedQueueEntry":
+          this.removeSelectedQueueEntry();
+          return;
+        case "moveSelectedQueueEntry":
+          this.moveSelectedQueueEntry(intent.delta);
+          return;
+        case "clearQueue":
+          this.clearQueue();
+          return;
+        case "nextTrack":
+          await this.nextTrack();
+          return;
+        case "previousTrack":
+          await this.previousTrack();
+          return;
+        case "toggleShuffle":
+          this.toggleShuffle();
+          return;
+        case "toggleRepeatAll":
+          this.toggleRepeatAll();
+          return;
+        case "setVolume":
+          await this.setVolume(intent.percent, intent.ready);
+          return;
+        case "adjustVolume":
+          await this.setVolume((this.appState.volume.ready ? this.appState.volume.percent : 100) + intent.delta, true);
+          return;
+        case "seekBy":
+          await this.seekBy(intent.seconds);
+          return;
+        case "saveLastQueueSnapshot":
+          await this.saveLastQueueSnapshot();
+          return;
+        case "restoreLastQueueSnapshot":
+          await this.restoreLastQueueSnapshot();
+          return;
+        case "togglePlayPause":
+          await this.togglePlayPause();
+          return;
+        case "stop":
+          if (this.blockPlaybackActionIfUnavailable()) return;
 
-        this.appState.playback = await this.player.stop();
-        this.appState.lastEvent = "stopped";
-        return;
-      case "quit":
-        this.appState.lastEvent = "quit requested";
-        return;
+          await this.runPlayerCommand(
+            () => this.player.stop(),
+            "stopped",
+            { clearCurrentTrack: true },
+          );
+          return;
+        case "quit":
+          this.appState.lastEvent = "quit requested";
+          await this.teardown();
+          return;
+      }
+    } finally {
+      this.notifyStateChanged();
     }
+  }
+
+  async teardown(): Promise<void> {
+    if (this.tornDown) return;
+    this.tornDown = true;
+    this.unsubscribeFromPlayer();
+    await this.player.teardown();
+  }
+
+  onStateChange(listener: () => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
   }
 
   private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
@@ -314,14 +349,33 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private setVolume(percent: number, ready: boolean): void {
-    this.appState.volume = {
-      percent: Math.max(0, Math.min(100, Math.round(percent))),
-      ready,
-    };
-    this.appState.lastEvent = this.appState.volume.ready
-      ? `volume ${this.appState.volume.percent}%`
-      : "volume unavailable";
+  private async setVolume(percent: number, ready: boolean): Promise<void> {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    if (!ready) {
+      this.appState.volume = { percent: clamped, ready };
+      this.appState.lastEvent = "volume unavailable";
+      return;
+    }
+
+    if (this.blockPlaybackActionIfUnavailable()) return;
+    const ok = await this.runPlayerCommand(() => this.player.setVolume(clamped));
+    if (!ok) return;
+
+    this.appState.volume = { percent: clamped, ready };
+    this.appState.lastEvent = `volume ${clamped}%`;
+  }
+
+  private async seekBy(seconds: number): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+
+    if (!this.appState.playback.currentTrackIdentity) {
+      this.appState.lastEvent = "nothing is playing";
+      return;
+    }
+
+    const ok = await this.runPlayerCommand(() => this.player.seekBy(seconds));
+    if (!ok) return;
+    this.appState.lastEvent = `seeked ${seconds}s`;
   }
 
   private async saveLastQueueSnapshot(): Promise<void> {
@@ -352,20 +406,32 @@ export class AppCoordinator {
       return;
     }
 
+    let locator;
     try {
-      const locator = await provider.resolvePlaybackLocator(entry.track.identity);
-      await this.player.load(locator);
-      this.queue.markAvailability(entry.track.identity, { status: "available" });
-      this.appState.playback = {
-        status: "playing",
-        currentTrackIdentity: entry.track.identity,
-      };
-      this.appState.lastEvent = `started ${entry.track.title}`;
-      this.syncQueueState();
+      locator = await provider.resolvePlaybackLocator(entry.track.identity);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Playback Locator could not be resolved";
       this.markUnavailable(entry, message);
+      return;
     }
+
+    try {
+      await this.player.load(locator);
+    } catch (error) {
+      this.mergePlayerPlayback(this.player.playback);
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      this.syncQueueState();
+      return;
+    }
+
+    this.queue.markAvailability(entry.track.identity, { status: "available" });
+    this.appState.playback = {
+      ...this.player.playback,
+      status: "playing",
+      currentTrackIdentity: entry.track.identity,
+    };
+    this.appState.lastEvent = `started ${entry.track.title}`;
+    this.syncQueueState();
   }
 
   private async togglePlayPause(): Promise<void> {
@@ -376,11 +442,8 @@ export class AppCoordinator {
       return;
     }
 
-    const playback = await this.player.togglePause();
-    this.appState.playback = {
-      ...playback,
-      currentTrackIdentity: this.appState.playback.currentTrackIdentity,
-    };
+    const ok = await this.runPlayerCommand(() => this.player.togglePause());
+    if (!ok) return;
     this.appState.lastEvent = this.appState.playback.status === "paused" ? "paused" : "resumed";
   }
 
@@ -413,6 +476,34 @@ export class AppCoordinator {
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
+  private async runPlayerCommand(
+    command: () => Promise<PlayerPlaybackState>,
+    fallbackEvent?: string,
+    options: { clearCurrentTrack?: boolean } = {},
+  ): Promise<boolean> {
+    try {
+      const playback = await command();
+      this.mergePlayerPlayback(playback, options);
+      if (fallbackEvent) this.appState.lastEvent = fallbackEvent;
+      return true;
+    } catch (error) {
+      this.mergePlayerPlayback(this.player.playback);
+      const message = error instanceof Error ? error.message : String(error);
+      this.appState.lastEvent = message;
+      return false;
+    }
+  }
+
+  private mergePlayerPlayback(
+    playback: PlayerPlaybackState,
+    options: { clearCurrentTrack?: boolean } = {},
+  ): void {
+    this.appState.playback = {
+      ...playback,
+      currentTrackIdentity: options.clearCurrentTrack ? null : this.appState.playback.currentTrackIdentity,
+    };
+  }
+
   private selectedVisibleTrack() {
     const targetId = this.uiState.activeTargetId;
     const tracks = this.visibleTracks(targetId);
@@ -431,5 +522,9 @@ export class AppCoordinator {
 
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
+  }
+
+  private notifyStateChanged(): void {
+    for (const listener of this.stateListeners) listener();
   }
 }
