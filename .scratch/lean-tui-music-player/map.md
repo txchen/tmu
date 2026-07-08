@@ -21,12 +21,15 @@ A ready-to-build MVP architecture and product spec for TMU, a lean, low-power TU
 - [Define Navidrome OpenSubsonic Scope](./issues/05-define-navidrome-opensubsonic-scope.md) — Build a read-only, queue-first Navidrome provider around token-authenticated ID3 browsing, playlists, song search, raw stream URLs, optional cover-art fetches, and best-effort scrobble reporting.
 - [Define Local Library Indexing Model](./issues/06-define-local-library-indexing-model.md) — Keep Local as direct file/folder expansion into the shared queue with lazy ffprobe metadata, exact-path dedupe, no persistent library index, no watcher, and no local playlist manager.
 - [Define YouTube URL Download Pipeline](./issues/07-define-youtube-music-and-download-pipeline.md) — Treat YouTube as URL-only download-to-cache: identify with yt-dlp, store one media file plus sidecars under stable extractor/id directories, skip existing cache entries, and enqueue the cached local file.
+- [Prototype Low-Power TUI Rendering Model](./issues/08-prototype-low-power-tui-rendering-model.md) — Use event-driven rendering with immediate redraws on input/state changes, optional 500ms playback-position ticks while playing, and no visualizer/EQ/fixed-FPS render loop in the MVP.
+- [Choose Core Domain And State Boundaries](./issues/09-choose-core-domain-and-state-boundaries.md) — Use Track as the canonical queue item, split durable Track Identity from runtime Playback Locator, keep Provider/Queue/Player separated by an App Coordinator, skip a central Library module, and keep MVP persistence to config/cache metadata/last queue snapshot.
+- [Define Source Switcher And Navigation Shell](./issues/11-define-source-switcher-and-navigation-shell.md) — Use a source-rail shell with provider browsing, a persistent queue/player strip, CLI-seeded startup focused on the Queue, and YouTube URL Download as an action surface that feeds the Offline YouTube Cache.
+- [Prototype Bun mpv Controller](./issues/13-prototype-bun-mpv-controller.md) — Bun can control a long-lived idle audio-only mpv process over JSON IPC with request IDs, observed playback properties, reliable EOF via `end-file`, bounded command errors, and explicit teardown.
+- [Define Runtime Dependency And Packaging Policy](./issues/14-define-runtime-dependency-and-packaging-policy.md) — Ship TMU as a Linux x64 Bun-compiled app, keep `mpv`/`ffprobe`/`yt-dlp` external, require `mpv` for playback, warn for `ffprobe`, gate YouTube downloads on `yt-dlp`, and show source-specific dependency health.
 
 ## Not yet specified
 
-- Cross-platform packaging and install story for Bun plus required `mpv` and recommended `ffprobe`.
-- Background/daemon mode, desktop media keys, MPRIS, notifications, and IPC after the foreground MVP is shaped.
-- Authentication and credential storage UX after the Navidrome API approach and config model are narrowed.
+None.
 
 ## Out of scope
 
@@ -34,3 +37,5 @@ A ready-to-build MVP architecture and product spec for TMU, a lean, low-power TU
 - Terminal spectrum visualizers and always-on EQ displays are outside the MVP because they conflict with the low-power constraint.
 - Installing or activating a Go toolchain is outside the current MVP route because Bun/TypeScript is now the chosen implementation runtime.
 - Automatic Offline YouTube Cache eviction, stale archive repair UI, thumbnail/comment/chapter downloads, cache migrations, and broad yt-dlp site support are outside the MVP.
+- [Write MVP Implementation Plan](./issues/10-write-mvp-implementation-plan.md) is outside the wayfinder route because creating implementation issues belongs after wayfinding, via `to-prd` and then `to-issues`.
+- Background/daemon mode, desktop media keys, MPRIS, notifications, and IPC are outside this foreground MVP map; revisit them after the ready-to-build terminal app spec exists.
