@@ -1,6 +1,6 @@
 # Offline YouTube Cache Provider
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,14 +14,14 @@ This slice does not need to run yt-dlp yet. It prepares the cache behavior that 
 
 ## Acceptance criteria
 
-- [ ] Offline YouTube Cache entries are discovered from normalized TMU metadata plus media file presence.
-- [ ] Cache entries produce canonical Tracks with durable extractor/id Track Identity.
-- [ ] Missing media files are represented as unavailable cache entries rather than crashing or disappearing silently.
-- [ ] Users can browse Offline YouTube Cache entries as a Provider.
-- [ ] Users can enqueue cached Tracks into the shared Queue.
-- [ ] Cached Tracks resolve to local media Playback Locators and play through mpv.
-- [ ] Cache metadata persistence is covered without introducing a broad app database.
-- [ ] Tests cover cache lookup, metadata parsing, media presence checks, Track generation, browse ordering, unavailable media, enqueue, and playback resolution.
+- [x] Offline YouTube Cache entries are discovered from normalized TMU metadata plus media file presence.
+- [x] Cache entries produce canonical Tracks with durable extractor/id Track Identity.
+- [x] Missing media files are represented as unavailable cache entries rather than crashing or disappearing silently.
+- [x] Users can browse Offline YouTube Cache entries as a Provider.
+- [x] Users can enqueue cached Tracks into the shared Queue.
+- [x] Cached Tracks resolve to local media Playback Locators and play through mpv.
+- [x] Cache metadata persistence is covered without introducing a broad app database.
+- [x] Tests cover cache lookup, metadata parsing, media presence checks, Track generation, browse ordering, unavailable media, enqueue, and playback resolution.
 
 ## Blocked by
 

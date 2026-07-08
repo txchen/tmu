@@ -11,6 +11,7 @@ import {
 } from "./domain";
 import { youtubeDownloadHealthMessage, type DependencyHealthState, type HelperDependencyHealth } from "./dependencies";
 import { isNavidromeProvider, navidromeConnectionStateLine, type NavidromeLibraryBrowserEntry } from "./navidrome";
+import { OFFLINE_YOUTUBE_CACHE_PROVIDER_ID, isOfflineYouTubeCacheProvider } from "./offline-youtube-cache";
 
 export type RenderedNavigationTarget = NavigationTarget & {
   selected: boolean;
@@ -43,11 +44,7 @@ export type RenderedShell = {
 
 export function renderShell(appState: AppState, uiState: UiState): RenderedShell {
   const activeTarget = NAVIGATION_TARGETS[navigationTargetIndex(uiState.activeTargetId)] ?? NAVIGATION_TARGETS[0];
-  const providerTracks = visibleProviderTracks(appState, uiState);
-  const providerLines = providerTracks.map((track, index) => {
-    const selected = index === selectedContentIndex(uiState);
-    return row(`${track.title}  ${track.providerLabel}`, selected, uiState.focusedPane === "content");
-  });
+  const providerLines = providerTrackLines(appState, uiState);
   const providerSurfaceStatusLines = providerSurfaceStatusLinesFor(appState, uiState);
   const promptLines = providerSurfacePromptLines(uiState);
   const queueView = expandedQueueView(appState, uiState);
@@ -122,6 +119,30 @@ function visibleProviderTracks(appState: AppState, uiState: UiState): readonly T
   return appState.providers[uiState.activeTargetId]?.listVisibleTracks() ?? [];
 }
 
+function providerTrackLines(appState: AppState, uiState: UiState): string[] {
+  if (uiState.activeTargetId === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) {
+    const provider = appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
+    if (isOfflineYouTubeCacheProvider(provider)) {
+      return provider.listCacheEntries().map((entry, index) => {
+        const selected = index === selectedContentIndex(uiState);
+        const suffix = entry.availability.status === "unavailable"
+          ? ` [unavailable: ${entry.availability.reason}]`
+          : "";
+        return row(
+          `${entry.track.title}  ${entry.track.providerLabel}${suffix}`,
+          selected,
+          uiState.focusedPane === "content",
+        );
+      });
+    }
+  }
+
+  return visibleProviderTracks(appState, uiState).map((track, index) => {
+    const selected = index === selectedContentIndex(uiState);
+    return row(`${track.title}  ${track.providerLabel}`, selected, uiState.focusedPane === "content");
+  });
+}
+
 function expandedQueueView(
   appState: AppState,
   uiState: UiState,
@@ -145,6 +166,7 @@ function emptyMessageFor(targetId: NavigationTarget["id"]): string {
   }
   if (targetId === "local") return "Provider Browsing Surface has no Local Tracks opened";
   if (targetId === "navidrome") return "Navidrome Library Browser has no loaded entries";
+  if (targetId === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) return "Offline YouTube Cache has no cached Tracks";
   return "Provider Browsing Surface placeholder; provider behavior lands in later slices";
 }
 

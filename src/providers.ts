@@ -10,13 +10,17 @@ import {
 import { createDefaultTmuConfig } from "./config";
 import {
   identityKey,
-  type NavigationTargetId,
   type PlaybackLocator,
   type Provider,
   type Track,
   type TrackIdentity,
 } from "./domain";
 import { createNavidromeProvider, type NavidromeProviderOptions } from "./navidrome";
+import {
+  OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
+  createOfflineYouTubeCacheProvider,
+  type OfflineYouTubeCacheProviderOptions,
+} from "./offline-youtube-cache";
 
 const LOCAL_PROVIDER_ID = "local";
 export const DEFAULT_LOCAL_DIRECTORY_SOFT_CAP = 10_000;
@@ -79,14 +83,6 @@ export type LocalProvider = Provider & {
   createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
   onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void;
 };
-
-function skeletonTrack(providerId: NavigationTargetId, stableId: string, title: string, providerLabel: string): Track {
-  return {
-    identity: { providerId, stableId },
-    title,
-    providerLabel,
-  };
-}
 
 class SkeletonProvider implements Provider {
   constructor(
@@ -399,6 +395,7 @@ export function isLocalProvider(provider: Provider | undefined): provider is Loc
 export function createDefaultProviders(options: {
   local?: LocalProviderOptions;
   navidrome?: Partial<NavidromeProviderOptions>;
+  offlineYouTubeCache?: OfflineYouTubeCacheProviderOptions;
 } = {}): Record<string, Provider> {
   const localOptions = options.local ?? {
     dependencyHealth: createDefaultDependencyHealth({
@@ -416,19 +413,12 @@ export function createDefaultProviders(options: {
     config: defaultConfig.providers.navidrome,
     ...options.navidrome,
   };
+  const offlineYouTubeCacheOptions = options.offlineYouTubeCache ?? defaultConfig.offlineYouTubeCache;
 
   return {
     local: createLocalProvider(localOptions),
     navidrome: createNavidromeProvider(navidromeOptions),
-    "offline-youtube-cache": new SkeletonProvider(
-      "offline-youtube-cache",
-      "Offline YouTube Cache",
-      "downloaded YouTube audio",
-      [
-        skeletonTrack("offline-youtube-cache", "youtube:late-upload", "Late Upload", "Offline YouTube Cache"),
-        skeletonTrack("offline-youtube-cache", "youtube:offline-copy", "Offline Copy", "Offline YouTube Cache"),
-      ],
-    ),
+    [OFFLINE_YOUTUBE_CACHE_PROVIDER_ID]: createOfflineYouTubeCacheProvider(offlineYouTubeCacheOptions),
     "youtube-url-download": new SkeletonProvider(
       "youtube-url-download",
       "YouTube URL Download",

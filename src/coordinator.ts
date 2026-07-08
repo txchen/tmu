@@ -22,6 +22,7 @@ import {
   type HelperName,
 } from "./dependencies";
 import { isNavidromeProvider } from "./navidrome";
+import { OFFLINE_YOUTUBE_CACHE_PROVIDER_ID, isOfflineYouTubeCacheProvider } from "./offline-youtube-cache";
 import { isLocalProvider } from "./providers";
 import {
   InMemoryLastQueueSnapshotPersistence,
@@ -232,8 +233,7 @@ export class AppCoordinator {
     this.uiState.activeTargetId = targetId;
     this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
     this.uiState.focusedPane = targetId === "queue" ? "queue" : "content";
-    if (targetId === "navidrome") await this.refreshNavidromeConnection();
-    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
+    await this.refreshEnteredTarget(targetId);
     this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
       ? "youtube-url"
       : null;
@@ -245,8 +245,7 @@ export class AppCoordinator {
     if (this.uiState.focusedPane === "targets") {
       this.uiState.selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
       this.uiState.activeTargetId = NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.id ?? "local";
-      if (this.uiState.activeTargetId === "navidrome") await this.refreshNavidromeConnection();
-      if (this.uiState.activeTargetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
+      await this.refreshEnteredTarget(this.uiState.activeTargetId);
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
       return;
     }
@@ -314,6 +313,7 @@ export class AppCoordinator {
     }
 
     const entry = this.queue.enqueue(selected);
+    this.markSelectedOfflineYouTubeCacheAvailability(entry);
     this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
     this.appState.lastEvent = `added ${selected.title} to shared Queue`;
     this.syncQueueState();
@@ -731,6 +731,22 @@ export class AppCoordinator {
     }
   }
 
+  private refreshOfflineYouTubeCache(): void {
+    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isOfflineYouTubeCacheProvider(provider)) return;
+    provider.refresh();
+  }
+
+  private markSelectedOfflineYouTubeCacheAvailability(entry: QueueEntry): void {
+    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isOfflineYouTubeCacheProvider(provider)) return;
+    if (entry.track.identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) return;
+
+    const cacheEntry = provider.findByIdentity(entry.track.identity);
+    if (!cacheEntry) return;
+    this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
+  }
+
   private async seedLocalCliArg(arg: string): Promise<void> {
     try {
       const track = await this.localCliTrackFromArg(arg);
@@ -816,6 +832,12 @@ export class AppCoordinator {
       }
     }
     this.appState.lastEvent = state.message;
+  }
+
+  private async refreshEnteredTarget(targetId: NavigationTargetId): Promise<void> {
+    if (targetId === "navidrome") await this.refreshNavidromeConnection();
+    if (targetId === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) this.refreshOfflineYouTubeCache();
+    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
   }
 
   private async refreshNavidromeLibrary(): Promise<void> {

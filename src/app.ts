@@ -52,6 +52,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
       fetcher: options.navidromeFetcher,
       saltFactory: options.navidromeSaltFactory,
     },
+    offlineYouTubeCache: config.offlineYouTubeCache,
   });
   const coordinator = new AppCoordinator({
     appState: createInitialAppState(providers, {
