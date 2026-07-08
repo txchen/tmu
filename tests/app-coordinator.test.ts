@@ -681,7 +681,7 @@ describe("AppCoordinator", () => {
     expect(states).toEqual(["playing"]);
   });
 
-  test("drives queue remove, move, clear, next, previous, and modes through intents", async () => {
+  test("drives Queue-focused remove, move, clear, next, previous, and modes through intents", async () => {
     const amber = track("local", "/music/amber.flac", "Amber Path");
     const cinder = track("local", "/music/cinder.mp3", "Cinder Room");
     const drift = track("local", "/music/drift.ogg", "Drift Signal");
@@ -704,6 +704,9 @@ describe("AppCoordinator", () => {
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
 
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    expect(coordinator.uiState.activeTargetId).toBe("queue");
+    expect(coordinator.uiState.focusedPane).toBe("queue");
+
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
     await coordinator.dispatch({ type: "moveSelectedQueueEntry", delta: -2 });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
@@ -739,6 +742,67 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.queue.currentIndex).toBe(-1);
     expect(coordinator.appState.queue.shuffle).toBe(true);
     expect(coordinator.appState.queue.repeatAll).toBe(true);
+  });
+
+  test("drives Queue-focused playback controls through App Coordinator intents", async () => {
+    const playable = track("local", "/music/playable.flac", "Playable File");
+    const missing = track("local", "/music/missing.flac", "Missing File");
+    const local = restoringLocalProvider({
+      tracks: [playable, missing],
+      unavailableStableIds: [missing.identity.stableId],
+    });
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+
+    expect(coordinator.uiState.activeTargetId).toBe("queue");
+    expect(coordinator.uiState.focusedPane).toBe("queue");
+
+    await coordinator.dispatch({ type: "moveSelection", delta: -1 });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    await coordinator.dispatch({ type: "seekBy", seconds: 15 });
+    await coordinator.dispatch({ type: "setVolume", percent: 55, ready: true });
+    await coordinator.dispatch({ type: "toggleShuffle" });
+    await coordinator.dispatch({ type: "toggleRepeatAll" });
+    await coordinator.dispatch({ type: "stop" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/music/playable.flac" }]);
+    expect(player.toggles).toBe(1);
+    expect(player.seeks).toEqual([15]);
+    expect(player.volumes).toEqual([55]);
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.volume).toEqual({ percent: 55, ready: true });
+    expect(coordinator.appState.queue.shuffle).toBe(true);
+    expect(coordinator.appState.queue.repeatAll).toBe(true);
+    expect(coordinator.appState.playback).toEqual({
+      status: "stopped",
+      currentTrackIdentity: null,
+    });
+
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/music/playable.flac" }]);
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
+      status: "unavailable",
+      reason: "Local file no longer exists: /music/missing.flac",
+    });
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Expanded Queue");
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
+      "Missing File [unavailable: Local file no longer exists: /music/missing.flac]",
+    );
   });
 
   test("saves and restores Last Queue Snapshot through a persistence adapter", async () => {

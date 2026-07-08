@@ -1,6 +1,6 @@
 # Queue-Focused View And Persistent Player Strip
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,13 +14,13 @@ This slice turns the already-working Queue and Player behavior into the core use
 
 ## Acceptance criteria
 
-- [ ] The persistent queue/player strip shows current Track, playback state, progress, volume, shuffle, repeat-all, and basic availability information.
-- [ ] Provider browsing keeps queue/player context visible.
-- [ ] The Queue source opens an expanded Queue view.
-- [ ] The expanded Queue view supports remove, move, clear, start selected Track, next, previous, play/pause, stop, seek, volume, shuffle, and repeat-all through App Coordinator intents.
-- [ ] Unavailable Tracks remain visible with useful status in both persistent and expanded Queue surfaces.
-- [ ] Layout states are covered by stable snapshot or rendered-model tests without brittle terminal escape assertions.
-- [ ] App Coordinator tests cover Queue-focused user workflows end to end.
+- [x] The persistent queue/player strip shows current Track, playback state, progress, volume, shuffle, repeat-all, and basic availability information.
+- [x] Provider browsing keeps queue/player context visible.
+- [x] The Queue source opens an expanded Queue view.
+- [x] The expanded Queue view supports remove, move, clear, start selected Track, next, previous, play/pause, stop, seek, volume, shuffle, and repeat-all through App Coordinator intents.
+- [x] Unavailable Tracks remain visible with useful status in both persistent and expanded Queue surfaces.
+- [x] Layout states are covered by stable snapshot or rendered-model tests without brittle terminal escape assertions.
+- [x] App Coordinator tests cover Queue-focused user workflows end to end.
 
 ## Blocked by
 

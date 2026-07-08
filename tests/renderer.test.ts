@@ -61,8 +61,11 @@ describe("renderShell", () => {
     ]);
     expect(shell.providerSurface.title).toBe("Local");
     expect(shell.providerSurface.emptyMessage).toContain("Provider Browsing Surface");
-    expect(shell.queuePlayer.title).toBe("Queue / Player");
+    expect(shell.queuePlayer.title).toBe("Queue / Player Strip");
     expect(shell.queuePlayer.nowPlaying).toBe("Idle - add a Track to the shared Queue");
+    expect(shell.queuePlayer.playbackState).toBe("State: idle");
+    expect(shell.queuePlayer.progress).toBe("Progress: --:--");
+    expect(shell.queuePlayer.availability).toBe("Availability: no queued Tracks");
   });
 
   test("renders CLI-seeded queue state without requiring a TTY", async () => {
@@ -85,7 +88,7 @@ describe("renderShell", () => {
       const text = renderShellText(coordinator.appState, coordinator.uiState);
 
       expect(text).toContain("Provider Browsing Surface");
-      expect(text).toContain("Queue / Player");
+      expect(text).toContain("Queue / Player Strip");
       expect(text).toContain("song-a.flac [queued]");
       expect(text).toContain("> Queue");
     } finally {
@@ -93,7 +96,7 @@ describe("renderShell", () => {
     }
   });
 
-  test("renders queue modes, volume readiness, current selection, and Track Availability", () => {
+  test("renders persistent strip playback details, current selection, and Track Availability", () => {
     const missing = track("local", "/missing.flac", "Missing File");
     const queue = new MemoryQueue();
     queue.enqueue(missing);
@@ -111,6 +114,8 @@ describe("renderShell", () => {
     coordinator.appState.playback = {
       status: "error",
       currentTrackIdentity: missing.identity,
+      positionSeconds: 65,
+      durationSeconds: 210,
       message: "file no longer exists",
     };
     coordinator.appState.volume = { percent: 42, ready: true };
@@ -119,10 +124,60 @@ describe("renderShell", () => {
     const shell = renderShell(coordinator.appState, coordinator.uiState);
     const text = renderShellText(coordinator.appState, coordinator.uiState);
 
+    expect(shell.queuePlayer.nowPlaying).toBe("Error Missing File - file no longer exists");
+    expect(shell.queuePlayer.playbackState).toBe("State: error");
+    expect(shell.queuePlayer.progress).toBe("Progress: 01:05 / 03:30");
     expect(shell.queuePlayer.modes).toBe("Shuffle: on | Repeat: all | Volume: 42%");
+    expect(shell.queuePlayer.availability).toBe("Availability: Missing File - unavailable: file no longer exists");
     expect(shell.queuePlayer.lines).toEqual([">* Missing File [unavailable: file no longer exists]"]);
+    expect(text).toContain("Progress: 01:05 / 03:30");
     expect(text).toContain("Shuffle: on | Repeat: all | Volume: 42%");
     expect(text).toContain("Missing File [unavailable: file no longer exists]");
+  });
+
+  test("renders the Queue navigation target as an expanded Queue view while keeping the player strip", () => {
+    const playable = {
+      ...track("local", "/music/playable.flac", "Playable File"),
+      durationSeconds: 125,
+    };
+    const missing = track("local", "/music/missing.flac", "Missing File");
+    const queue = new MemoryQueue();
+    queue.enqueue(playable);
+    queue.enqueue(missing);
+    queue.startAt(0);
+    queue.markAvailability(playable.identity, { status: "available" });
+    queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue,
+      player: new NoopPlayer(),
+    });
+
+    coordinator.appState.playback = {
+      status: "playing",
+      currentTrackIdentity: playable.identity,
+      positionSeconds: 5,
+      durationSeconds: 125,
+    };
+    coordinator.appState.volume = { percent: 80, ready: true };
+    coordinator.uiState.activeTargetId = "queue";
+    coordinator.uiState.focusedPane = "queue";
+    coordinator.uiState.selectedQueueIndex = 1;
+
+    const shell = renderShell(coordinator.appState, coordinator.uiState);
+    const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+    expect(shell.providerSurface.title).toBe("Expanded Queue");
+    expect(shell.providerSurface.lines).toEqual([
+      "   1. Playable File - local - 02:05 - playing - current",
+      ">* 2. Missing File - local - unavailable: file no longer exists",
+    ]);
+    expect(shell.queuePlayer.nowPlaying).toBe("Playing Playable File");
+    expect(shell.queuePlayer.progress).toBe("Progress: 00:05 / 02:05");
+    expect(shell.queuePlayer.lines).toContain(">* Missing File [unavailable: file no longer exists]");
+    expect(text).toContain("Expanded Queue");
+    expect(text).toContain("Queue / Player Strip");
   });
 
   test("surfaces dependency health without exposing config secrets", async () => {

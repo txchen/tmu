@@ -27,7 +27,10 @@ export type RenderedShell = {
   queuePlayer: {
     title: string;
     nowPlaying: string;
+    playbackState: string;
+    progress: string;
     modes: string;
+    availability: string;
     lines: string[];
   };
   health: {
@@ -46,6 +49,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
   });
   const providerSurfaceHealthLines = providerSurfaceHealthLinesFor(appState, uiState.activeTargetId);
   const promptLines = providerSurfacePromptLines(uiState);
+  const queueView = expandedQueueView(appState, uiState);
 
   return {
     title: "TMU",
@@ -55,14 +59,17 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
       focused: uiState.focusedPane === "targets" && target.id === uiState.activeTargetId,
     })),
     providerSurface: {
-      title: activeTarget.label,
-      lines: [...providerSurfaceHealthLines, ...promptLines, ...providerLines],
+      title: queueView?.title ?? activeTarget.label,
+      lines: queueView?.lines ?? [...providerSurfaceHealthLines, ...promptLines, ...providerLines],
       emptyMessage: emptyMessageFor(activeTarget.id),
     },
     queuePlayer: {
-      title: "Queue / Player",
+      title: "Queue / Player Strip",
       nowPlaying: nowPlaying(appState),
+      playbackState: playbackState(appState),
+      progress: progressText(appState),
       modes: queueModes(appState),
+      availability: queueAvailability(appState, uiState),
       lines: appState.queue.entries.map((entry, index) => queueLine(appState, uiState, entry, index)),
     },
     health: {
@@ -95,7 +102,10 @@ export function renderShellText(appState: AppState, uiState: UiState): string {
     shell.queuePlayer.title,
     "--------------",
     shell.queuePlayer.nowPlaying,
+    shell.queuePlayer.playbackState,
+    shell.queuePlayer.progress,
     shell.queuePlayer.modes,
+    shell.queuePlayer.availability,
     queueLines,
     "",
     shell.health.title,
@@ -111,12 +121,24 @@ function visibleProviderTracks(appState: AppState, uiState: UiState): readonly T
   return appState.providers[uiState.activeTargetId]?.listVisibleTracks() ?? [];
 }
 
+function expandedQueueView(
+  appState: AppState,
+  uiState: UiState,
+): { title: string; lines: string[] } | null {
+  if (uiState.activeTargetId !== "queue") return null;
+
+  return {
+    title: "Expanded Queue",
+    lines: appState.queue.entries.map((entry, index) => expandedQueueLine(appState, uiState, entry, index)),
+  };
+}
+
 function selectedContentIndex(uiState: UiState): number {
   return uiState.selectedContentIndexByTarget[uiState.activeTargetId] ?? 0;
 }
 
 function emptyMessageFor(targetId: NavigationTarget["id"]): string {
-  if (targetId === "queue") return "Queue is shown in the persistent Queue / Player region";
+  if (targetId === "queue") return "Queue is empty";
   if (targetId === "youtube-url-download") {
     return "Provider Browsing Surface placeholder for the YouTube URL Download Flow";
   }
@@ -152,15 +174,34 @@ function formatHelperLine(helper: HelperDependencyHealth, consequence: string | 
 }
 
 function nowPlaying(appState: AppState): string {
-  const current = appState.queue.entries.find((entry) =>
-    sameIdentity(entry.track.identity, appState.playback.currentTrackIdentity),
-  );
+  const current = currentQueueEntry(appState);
   if (!current || appState.playback.status === "idle" || appState.playback.status === "stopped") {
     return "Idle - add a Track to the shared Queue";
   }
 
+  if (appState.playback.status === "error") {
+    const suffix = appState.playback.message ? ` - ${appState.playback.message}` : "";
+    return `Error ${current.track.title}${suffix}`;
+  }
+
   const verb = appState.playback.status === "paused" ? "Paused" : "Playing";
   return `${verb} ${current.track.title}`;
+}
+
+function playbackState(appState: AppState): string {
+  return `State: ${appState.playback.status}`;
+}
+
+function progressText(appState: AppState): string {
+  const current = currentQueueEntry(appState);
+  const position = appState.playback.positionSeconds;
+  const duration = appState.playback.durationSeconds ?? current?.track.durationSeconds;
+  const hasPosition = typeof position === "number" && Number.isFinite(position);
+  const hasDuration = typeof duration === "number" && Number.isFinite(duration);
+
+  if (!hasPosition && !hasDuration) return "Progress: --:--";
+
+  return `Progress: ${hasPosition ? formatDuration(position) : "--:--"} / ${hasDuration ? formatDuration(duration) : "--:--"}`;
 }
 
 function queueModes(appState: AppState): string {
@@ -170,11 +211,43 @@ function queueModes(appState: AppState): string {
   return `Shuffle: ${shuffle} | Repeat: ${repeat} | Volume: ${volume}`;
 }
 
+function queueAvailability(appState: AppState, uiState: UiState): string {
+  const selected = selectedQueueEntry(appState, uiState);
+  const current = currentQueueEntry(appState);
+  const entry = current ?? selected;
+  if (!entry) return "Availability: no queued Tracks";
+
+  return `Availability: ${entry.track.title} - ${availabilityText(entry.availability)}`;
+}
+
 function queueLine(appState: AppState, uiState: UiState, entry: QueueEntry, index: number): string {
+  const state = queueRowState(appState, uiState, entry, index);
+  return row(`${entry.track.title} [${state.status}]`, state.selected, state.focused);
+}
+
+function expandedQueueLine(appState: AppState, uiState: UiState, entry: QueueEntry, index: number): string {
+  const state = queueRowState(appState, uiState, entry, index);
+  const duration = typeof entry.track.durationSeconds === "number"
+    ? ` - ${formatDuration(entry.track.durationSeconds)}`
+    : "";
+  const current = state.active ? " - current" : "";
+
+  return row(
+    `${index + 1}. ${entry.track.title} - ${entry.track.providerLabel}${duration} - ${state.status}${current}`,
+    state.selected,
+    state.focused,
+  );
+}
+
+function queueRowState(appState: AppState, uiState: UiState, entry: QueueEntry, index: number) {
   const selected = index === clampIndex(uiState.selectedQueueIndex, appState.queue.entries.length);
   const active = sameIdentity(entry.track.identity, appState.playback.currentTrackIdentity);
-  const status = queueEntryStatus(appState, entry, active);
-  return row(`${entry.track.title} [${status}]`, selected, uiState.focusedPane === "queue");
+  return {
+    selected,
+    active,
+    focused: uiState.focusedPane === "queue",
+    status: queueEntryStatus(appState, entry, active),
+  };
 }
 
 function queueEntryStatus(appState: AppState, entry: QueueEntry, active: boolean): string {
@@ -185,6 +258,28 @@ function queueEntryStatus(appState: AppState, entry: QueueEntry, active: boolean
   if (active) return appState.playback.status;
   if (entry.availability.status === "available") return "available";
   return "queued";
+}
+
+function currentQueueEntry(appState: AppState): QueueEntry | undefined {
+  return appState.queue.entries.find((entry) =>
+    sameIdentity(entry.track.identity, appState.playback.currentTrackIdentity),
+  );
+}
+
+function selectedQueueEntry(appState: AppState, uiState: UiState): QueueEntry | undefined {
+  return appState.queue.entries[clampIndex(uiState.selectedQueueIndex, appState.queue.entries.length)];
+}
+
+function availabilityText(availability: QueueEntry["availability"]): string {
+  if (availability.status === "unavailable") return `unavailable: ${availability.reason}`;
+  return availability.status;
+}
+
+function formatDuration(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safeSeconds / 60);
+  const remainingSeconds = safeSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 }
 
 function row(label: string, selected: boolean, focused: boolean): string {
