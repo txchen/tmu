@@ -33,6 +33,7 @@ export type Track = {
   artist?: string;
   album?: string;
   durationSeconds?: number;
+  coverArtId?: string;
 };
 
 export type QueueEntry = {
@@ -77,6 +78,7 @@ export type SnapshotTrack = {
   artist?: string;
   album?: string;
   durationSeconds?: number;
+  coverArtId?: string;
 };
 
 export type LastQueueSnapshotEntry = {
@@ -175,8 +177,10 @@ export type UiState = {
 export type AppIntent =
   | { type: "selectNavigationTarget"; targetId: NavigationTargetId }
   | { type: "moveSelection"; delta: number }
+  | { type: "activateSelectedContent" }
   | { type: "cycleFocus" }
   | { type: "enqueueSelectedTrack" }
+  | { type: "refreshNavidromeLibrary" }
   | { type: "openLocalPathPrompt" }
   | { type: "setPromptInput"; value: string }
   | { type: "submitPrompt" }

@@ -93,6 +93,12 @@ describe("intentFromKey", () => {
     expect(intentFromKey("o")).toEqual({ type: "openLocalPathPrompt" });
     expect(intentFromKey("\x1b")).toEqual({ type: "cancelLocalOpen" });
   });
+
+  test("maps Provider Browsing Surface action keys", () => {
+    expect(intentFromKey("\r")).toEqual({ type: "activateSelectedContent" });
+    expect(intentFromKey("a")).toEqual({ type: "enqueueSelectedTrack" });
+    expect(intentFromKey("f")).toEqual({ type: "refreshNavidromeLibrary" });
+  });
 });
 
 describe("RenderScheduler", () => {

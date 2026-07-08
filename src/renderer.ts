@@ -175,7 +175,7 @@ function navidromeLibraryBrowserEntryLine(
   selected: boolean,
   focused: boolean,
 ): string {
-  const prefix = entry.depth === 0 ? "" : "  ";
+  const prefix = "  ".repeat(entry.depth);
   const albumCount = entry.kind === "artist" && entry.albumCount !== undefined
     ? ` (${entry.albumCount} ${entry.albumCount === 1 ? "album" : "albums"})`
     : "";

@@ -440,6 +440,7 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === "r") return { type: "toggleRepeatAll" };
   if (key === "S") return { type: "saveLastQueueSnapshot" };
   if (key === "R") return { type: "restoreLastQueueSnapshot" };
+  if (key === "f") return { type: "refreshNavidromeLibrary" };
   if (key === "o") return { type: "openLocalPathPrompt" };
   if (key === "x") return { type: "removeSelectedQueueEntry" };
   if (key === "c") return { type: "clearQueue" };
@@ -447,7 +448,8 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === "K") return { type: "moveSelectedQueueEntry", delta: -1 };
   if (key === "\x1b[A" || key === "\x1b[D") return { type: "moveSelection", delta: -1 };
   if (key === "\x1b[B" || key === "\x1b[C") return { type: "moveSelection", delta: 1 };
-  if (key === "\r" || key === "a") return { type: "enqueueSelectedTrack" };
+  if (key === "\r") return { type: "activateSelectedContent" };
+  if (key === "a") return { type: "enqueueSelectedTrack" };
   if (/^[1-5]$/.test(key)) {
     const target = NAVIGATION_TARGETS[Number(key) - 1];
     if (target) return { type: "selectNavigationTarget", targetId: target.id as NavigationTargetId };

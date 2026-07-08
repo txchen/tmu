@@ -14,6 +14,7 @@ import {
   createInitialUiState,
   createDefaultProviders,
   renderShellText,
+  type NavidromeFetcher,
   type DependencyCommandRunner,
   type LocalOpenOptions,
   type LocalOpenResult,
@@ -21,6 +22,7 @@ import {
   type PlayerPlaybackState,
   type PlaybackLocator,
   type Provider,
+  type TmuConfigInput,
   type Track,
   type TrackIdentity,
 } from "../src/index";
@@ -511,6 +513,154 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
+  });
+
+  test("browses Navidrome artist albums, enqueues a canonical Track, and plays via a resolved stream URL", async () => {
+    const player = new RecordingPlayer();
+    const seenEndpoints: string[] = [];
+    const fetcher: NavidromeFetcher = async (url) => {
+      seenEndpoints.push(navidromeEndpointName(url));
+      if (url.pathname.endsWith("/getArtists.view")) {
+        return navidromeJson({
+          status: "ok",
+          artists: {
+            index: [{
+              name: "A",
+              artist: [{ id: "artist-1", name: "Alpha", albumCount: 1, coverArt: "artist-cover" }],
+            }],
+          },
+        });
+      }
+      if (url.pathname.endsWith("/getArtist.view")) {
+        return navidromeJson({
+          status: "ok",
+          artist: {
+            id: "artist-1",
+            name: "Alpha",
+            album: [{ id: "album-1", name: "Album One", artist: "Alpha", songCount: 1, coverArt: "album-cover" }],
+          },
+        });
+      }
+      if (url.pathname.endsWith("/getAlbum.view")) {
+        return navidromeJson({
+          status: "ok",
+          album: {
+            id: "album-1",
+            name: "Album One",
+            artist: "Alpha",
+            song: [{
+              id: "track-1",
+              title: "Remote Opening",
+              artist: "Alpha",
+              album: "Album One",
+              duration: 123,
+              coverArt: "track-cover",
+            }],
+          },
+        });
+      }
+      return navidromeJson({ status: "ok" });
+    };
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      player,
+      navidromeFetcher: fetcher,
+      navidromeSaltFactory: () => "stream-salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "activateSelectedContent" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "activateSelectedContent" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    expect(coordinator.appState.queue.entries[0]?.track).toEqual({
+      identity: {
+        providerId: "navidrome",
+        stableId: "Navidrome:https://music.example.test:track:track-1",
+      },
+      title: "Remote Opening",
+      providerLabel: "Navidrome",
+      artist: "Alpha",
+      album: "Album One",
+      durationSeconds: 123,
+      coverArtId: "track-cover",
+    });
+    expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
+
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toHaveLength(1);
+    expect(player.loaded[0]?.kind).toBe("url");
+    const streamUrl = new URL((player.loaded[0] as { kind: "url"; url: string }).url);
+    expect(streamUrl.pathname).toBe("/rest/stream.view");
+    expect(streamUrl.searchParams.get("id")).toBe("track-1");
+    expect(streamUrl.searchParams.get("s")).toBe("stream-salt");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual({
+      providerId: "navidrome",
+      stableId: "Navidrome:https://music.example.test:track:track-1",
+    });
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtist", "getAlbum"]);
+  });
+
+  test("loads Navidrome artists once through navigation and reloads them on explicit refresh", async () => {
+    let artistCall = 0;
+    const seenEndpoints: string[] = [];
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async (url) => {
+        seenEndpoints.push(navidromeEndpointName(url));
+        if (url.pathname.endsWith("/getArtists.view")) {
+          artistCall += 1;
+          return navidromeJson({
+            status: "ok",
+            artists: {
+              index: [{
+                name: "A",
+                artist: [{ id: `artist-${artistCall}`, name: `Artist ${artistCall}` }],
+              }],
+            },
+          });
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Artist 1");
+
+    await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
+
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Artist 2");
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "ping", "ping", "getArtists"]);
+  });
+
+  test("ignores Navidrome refresh intent outside the Navidrome Library Browser", async () => {
+    const seenEndpoints: string[] = [];
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async (url) => {
+        seenEndpoints.push(navidromeEndpointName(url));
+        return navidromeJson({ status: "ok" });
+      },
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
+
+    expect(coordinator.uiState.activeTargetId).toBe("local");
+    expect(seenEndpoints).toEqual([]);
   });
 
   test("routes playback controls through the Player after a Track is resolved", async () => {
@@ -1151,3 +1301,32 @@ describe("AppCoordinator", () => {
     ]);
   });
 });
+
+function connectedNavidromeConfig(): TmuConfigInput {
+  return {
+    providers: {
+      navidrome: {
+        enabled: true,
+        serverUrl: "https://music.example.test",
+        username: "alex",
+        password: "secret-password",
+        clientName: "tmu-test",
+      },
+    },
+  };
+}
+
+function navidromeJson(subsonicResponse: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({
+    "subsonic-response": {
+      version: "1.16.1",
+      ...subsonicResponse,
+    },
+  }), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function navidromeEndpointName(url: URL): string {
+  return url.pathname.split("/").at(-1)?.replace(/\.view$/, "") ?? "";
+}

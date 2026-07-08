@@ -1,6 +1,6 @@
 # Navidrome Artist Album Playback Path
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,15 +14,15 @@ This slice establishes Navidrome as a real Provider without adding playlist brow
 
 ## Acceptance criteria
 
-- [ ] Navidrome Library Browser loads artists once per session and supports explicit refresh.
-- [ ] Users can browse from artist to album to Track.
-- [ ] Album and Track loading supports lazy paging where needed.
-- [ ] Navidrome Tracks enqueue into the shared Queue as canonical Tracks.
-- [ ] Navidrome Track Identity uses Provider name, server URL, and song ID.
-- [ ] Auth-bearing stream URLs are generated only at playback time and are not persisted as Track Identity.
-- [ ] Stream Playback Locators are passed to the shared mpv Player through the App Coordinator.
-- [ ] coverArt IDs from responses are preserved without substituting unrelated IDs.
-- [ ] Tests cover artist/album browsing, ID string behavior, Track shape, enqueue, stream URL generation, playback handoff, and coverArt preservation using fake HTTP responses.
+- [x] Navidrome Library Browser loads artists once per session and supports explicit refresh.
+- [x] Users can browse from artist to album to Track.
+- [x] Album and Track loading supports lazy paging where needed.
+- [x] Navidrome Tracks enqueue into the shared Queue as canonical Tracks.
+- [x] Navidrome Track Identity uses Provider name, server URL, and song ID.
+- [x] Auth-bearing stream URLs are generated only at playback time and are not persisted as Track Identity.
+- [x] Stream Playback Locators are passed to the shared mpv Player through the App Coordinator.
+- [x] coverArt IDs from responses are preserved without substituting unrelated IDs.
+- [x] Tests cover artist/album browsing, ID string behavior, Track shape, enqueue, stream URL generation, playback handoff, and coverArt preservation using fake HTTP responses.
 
 ## Blocked by
 

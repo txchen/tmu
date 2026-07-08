@@ -133,6 +133,7 @@ function snapshotTrackFromTrack(track: Track | SnapshotTrack): SnapshotTrack {
   if (track.artist !== undefined) snapshotTrack.artist = track.artist;
   if (track.album !== undefined) snapshotTrack.album = track.album;
   if (track.durationSeconds !== undefined) snapshotTrack.durationSeconds = track.durationSeconds;
+  if (track.coverArtId !== undefined) snapshotTrack.coverArtId = track.coverArtId;
   return snapshotTrack;
 }
 

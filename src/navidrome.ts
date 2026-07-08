@@ -24,21 +24,58 @@ export type NavidromeArtist = {
   coverArtId?: string;
 };
 
+export type NavidromeAlbum = {
+  id: string;
+  name: string;
+  artist?: string;
+  trackCount?: number;
+  coverArtId?: string;
+};
+
 export type NavidromeLibraryBrowserEntry =
   | { kind: "artists-root"; label: string; depth: 0 }
-  | { kind: "artist"; id: string; label: string; albumCount?: number; depth: 1 };
+  | { kind: "artist"; id: string; label: string; albumCount?: number; coverArtId?: string; depth: 1 }
+  | {
+    kind: "album";
+    id: string;
+    artistId: string;
+    label: string;
+    artist?: string;
+    trackCount?: number;
+    coverArtId?: string;
+    depth: 2;
+  }
+  | {
+    kind: "track";
+    id: string;
+    artistId: string;
+    albumId: string;
+    label: string;
+    track: Track;
+    coverArtId?: string;
+    depth: 3;
+  }
+  | { kind: "load-more-albums"; artistId: string; label: string; depth: 2 }
+  | { kind: "load-more-tracks"; artistId: string; albumId: string; label: string; depth: 3 };
 
 export type NavidromeProvider = Provider & {
   getConnectionState(): NavidromeConnectionState;
   getLibraryBrowserEntries(): readonly NavidromeLibraryBrowserEntry[];
   validateConnection(): Promise<NavidromeConnectionState>;
   listArtists(): Promise<readonly NavidromeArtist[]>;
+  refreshArtists(): Promise<readonly NavidromeArtist[]>;
+  listArtistAlbums(artistId: string): Promise<readonly NavidromeAlbum[]>;
+  listAlbumTracks(albumId: string): Promise<readonly Track[]>;
+  openLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Promise<void>;
+  refreshLibraryBrowser(): Promise<void>;
+  trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined;
 };
 
 export type NavidromeProviderOptions = {
   config: NavidromeConfig;
   fetcher?: NavidromeFetcher;
   saltFactory?: () => string;
+  pageSize?: number;
 };
 
 type SubsonicEnvelope<T extends Record<string, unknown> = Record<string, unknown>> = {
@@ -78,7 +115,13 @@ export function isNavidromeProvider(provider: Provider | undefined): provider is
     && typeof (provider as Partial<NavidromeProvider>).getConnectionState === "function"
     && typeof (provider as Partial<NavidromeProvider>).getLibraryBrowserEntries === "function"
     && typeof (provider as Partial<NavidromeProvider>).validateConnection === "function"
-    && typeof (provider as Partial<NavidromeProvider>).listArtists === "function";
+    && typeof (provider as Partial<NavidromeProvider>).listArtists === "function"
+    && typeof (provider as Partial<NavidromeProvider>).refreshArtists === "function"
+    && typeof (provider as Partial<NavidromeProvider>).listArtistAlbums === "function"
+    && typeof (provider as Partial<NavidromeProvider>).listAlbumTracks === "function"
+    && typeof (provider as Partial<NavidromeProvider>).openLibraryBrowserEntry === "function"
+    && typeof (provider as Partial<NavidromeProvider>).refreshLibraryBrowser === "function"
+    && typeof (provider as Partial<NavidromeProvider>).trackForLibraryBrowserEntry === "function";
 }
 
 export function navidromeServerId(value: unknown): string {
@@ -112,13 +155,21 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   private readonly config: NavidromeConfig;
   private readonly fetcher: NavidromeFetcher;
   private readonly saltFactory: () => string;
+  private readonly pageSize: number;
   private connectionState: NavidromeConnectionState;
   private artists: NavidromeArtist[] | null = null;
+  private expandedArtistId: string | null = null;
+  private expandedAlbumId: string | null = null;
+  private readonly artistAlbums = new Map<string, NavidromeAlbum[]>();
+  private readonly albumTracks = new Map<string, Track[]>();
+  private readonly albumVisibleCounts = new Map<string, number>();
+  private readonly trackVisibleCounts = new Map<string, number>();
 
   constructor(options: NavidromeProviderOptions) {
     this.config = options.config;
     this.fetcher = options.fetcher ?? defaultFetcher;
     this.saltFactory = options.saltFactory ?? defaultSalt;
+    this.pageSize = normalizePageSize(options.pageSize);
     this.connectionState = missingConfigState(this.config) ?? {
       status: "checking",
       message: "connection not validated",
@@ -129,8 +180,22 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     return [];
   }
 
-  async resolvePlaybackLocator(_identity: TrackIdentity): Promise<PlaybackLocator> {
-    throw new Error("Navidrome playback is not available until the artist/album playback slice");
+  async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
+    if (identity.providerId !== NAVIDROME_PROVIDER_ID) {
+      throw new Error(`Navidrome Provider cannot resolve ${identity.providerId}`);
+    }
+
+    const missing = missingConfigState(this.config);
+    if (missing) throw new Error(missing.message);
+
+    const trackId = this.trackIdFromIdentity(identity);
+    if (!trackId) {
+      throw new Error("Navidrome Track Identity does not match this server");
+    }
+
+    const auth = authParameters(this.config, this.saltFactory);
+    const url = this.buildUrl("stream", { id: trackId }, auth);
+    return { kind: "url", url: url.toString() };
   }
 
   getConnectionState(): NavidromeConnectionState {
@@ -140,16 +205,75 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   getLibraryBrowserEntries(): readonly NavidromeLibraryBrowserEntry[] {
     if (this.connectionState.status !== "connected") return [];
 
-    return [
+    const entries: NavidromeLibraryBrowserEntry[] = [
       { kind: "artists-root", label: "Artists", depth: 0 },
-      ...(this.artists ?? []).map((artist): NavidromeLibraryBrowserEntry => ({
+    ];
+
+    for (const artist of this.artists ?? []) {
+      entries.push({
         kind: "artist",
         id: artist.id,
         label: artist.name,
         albumCount: artist.albumCount,
+        coverArtId: artist.coverArtId,
         depth: 1,
-      })),
-    ];
+      });
+
+      if (this.expandedArtistId !== artist.id) continue;
+
+      const albums = this.artistAlbums.get(artist.id) ?? [];
+      const visibleAlbumCount = Math.min(this.albumVisibleCounts.get(artist.id) ?? this.pageSize, albums.length);
+      for (const album of albums.slice(0, visibleAlbumCount)) {
+        entries.push({
+          kind: "album",
+          id: album.id,
+          artistId: artist.id,
+          label: album.name,
+          artist: album.artist,
+          trackCount: album.trackCount,
+          coverArtId: album.coverArtId,
+          depth: 2,
+        });
+
+        if (this.expandedAlbumId !== album.id) continue;
+
+        const tracks = this.albumTracks.get(album.id) ?? [];
+        const visibleTrackCount = Math.min(this.trackVisibleCounts.get(album.id) ?? this.pageSize, tracks.length);
+        for (const track of tracks.slice(0, visibleTrackCount)) {
+          entries.push({
+            kind: "track",
+            id: this.trackIdFromIdentity(track.identity) ?? track.identity.stableId,
+            artistId: artist.id,
+            albumId: album.id,
+            label: track.title,
+            track,
+            coverArtId: track.coverArtId,
+            depth: 3,
+          });
+        }
+
+        if (visibleTrackCount < tracks.length) {
+          entries.push({
+            kind: "load-more-tracks",
+            artistId: artist.id,
+            albumId: album.id,
+            label: "Load more tracks",
+            depth: 3,
+          });
+        }
+      }
+
+      if (visibleAlbumCount < albums.length) {
+        entries.push({
+          kind: "load-more-albums",
+          artistId: artist.id,
+          label: "Load more albums",
+          depth: 2,
+        });
+      }
+    }
+
+    return entries;
   }
 
   async validateConnection(): Promise<NavidromeConnectionState> {
@@ -191,6 +315,99 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
       this.connectionState = failedConnectionState(apiError);
       throw apiError;
     }
+  }
+
+  async refreshArtists(): Promise<readonly NavidromeArtist[]> {
+    this.artists = null;
+    this.expandedArtistId = null;
+    this.expandedAlbumId = null;
+    this.artistAlbums.clear();
+    this.albumTracks.clear();
+    this.albumVisibleCounts.clear();
+    this.trackVisibleCounts.clear();
+    return await this.listArtists();
+  }
+
+  async listArtistAlbums(artistId: string): Promise<readonly NavidromeAlbum[]> {
+    const cached = this.artistAlbums.get(artistId);
+    if (cached) return cached;
+
+    try {
+      const response = await this.requestSubsonic<{ artist?: unknown }>("getArtist", { id: artistId });
+      const albums = parseAlbums(response.artist);
+      this.artistAlbums.set(artistId, albums);
+      this.albumVisibleCounts.set(artistId, Math.min(this.pageSize, albums.length));
+      return albums;
+    } catch (error) {
+      const apiError = toNavidromeApiError(error, this.config);
+      this.connectionState = failedConnectionState(apiError);
+      throw apiError;
+    }
+  }
+
+  async listAlbumTracks(albumId: string): Promise<readonly Track[]> {
+    const cached = this.albumTracks.get(albumId);
+    if (cached) return cached;
+
+    try {
+      const response = await this.requestSubsonic<{ album?: unknown }>("getAlbum", { id: albumId });
+      const tracks = parseTracks(response.album, normalizedServerUrl(this.config.serverUrl));
+      this.albumTracks.set(albumId, tracks);
+      this.trackVisibleCounts.set(albumId, Math.min(this.pageSize, tracks.length));
+      return tracks;
+    } catch (error) {
+      const apiError = toNavidromeApiError(error, this.config);
+      this.connectionState = failedConnectionState(apiError);
+      throw apiError;
+    }
+  }
+
+  async openLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Promise<void> {
+    switch (entry.kind) {
+      case "artists-root":
+        await this.listArtists();
+        this.expandedArtistId = null;
+        this.expandedAlbumId = null;
+        return;
+      case "artist":
+        this.expandedArtistId = entry.id;
+        this.expandedAlbumId = null;
+        await this.listArtistAlbums(entry.id);
+        return;
+      case "album":
+        this.expandedArtistId = entry.artistId;
+        this.expandedAlbumId = entry.id;
+        await this.listAlbumTracks(entry.id);
+        return;
+      case "load-more-albums": {
+        const albums = await this.listArtistAlbums(entry.artistId);
+        const current = this.albumVisibleCounts.get(entry.artistId) ?? this.pageSize;
+        this.albumVisibleCounts.set(entry.artistId, Math.min(current + this.pageSize, albums.length));
+        return;
+      }
+      case "load-more-tracks": {
+        const tracks = await this.listAlbumTracks(entry.albumId);
+        const current = this.trackVisibleCounts.get(entry.albumId) ?? this.pageSize;
+        this.trackVisibleCounts.set(entry.albumId, Math.min(current + this.pageSize, tracks.length));
+        return;
+      }
+      case "track":
+        return;
+    }
+  }
+
+  async refreshLibraryBrowser(): Promise<void> {
+    await this.refreshArtists();
+  }
+
+  trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined {
+    return entry.kind === "track" ? entry.track : undefined;
+  }
+
+  private trackIdFromIdentity(identity: TrackIdentity): string | undefined {
+    const prefix = `${this.label}:${normalizedServerUrl(this.config.serverUrl)}:track:`;
+    if (!identity.stableId.startsWith(prefix)) return undefined;
+    return identity.stableId.slice(prefix.length);
   }
 
   private async requestSubsonic<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -305,6 +522,76 @@ function parseArtists(value: unknown): NavidromeArtist[] {
   }
 
   return artists;
+}
+
+function parseAlbums(value: unknown): NavidromeAlbum[] {
+  if (!isRecord(value)) return [];
+  const rawAlbums = Array.isArray(value.album) ? value.album : [];
+  const albums: NavidromeAlbum[] = [];
+
+  for (const album of rawAlbums) {
+    if (!isRecord(album)) continue;
+    const id = navidromeServerId(album.id);
+    const name = stringValue(album.name) ?? stringValue(album.title);
+    if (!id || !name) continue;
+
+    albums.push({
+      id,
+      name,
+      artist: stringValue(album.artist),
+      trackCount: numberValue(album.songCount),
+      coverArtId: album.coverArt === undefined ? undefined : navidromeServerId(album.coverArt),
+    });
+  }
+
+  return albums;
+}
+
+function parseTracks(value: unknown, serverUrl: string): Track[] {
+  if (!isRecord(value)) return [];
+  const rawTracks = Array.isArray(value.song)
+    ? value.song
+    : Array.isArray(value.child)
+      ? value.child
+      : [];
+  const albumName = stringValue(value.name) ?? stringValue(value.title);
+  const albumArtist = stringValue(value.artist);
+  const tracks: Track[] = [];
+
+  for (const rawTrack of rawTracks) {
+    if (!isRecord(rawTrack)) continue;
+    const id = navidromeServerId(rawTrack.id);
+    const title = stringValue(rawTrack.title) ?? stringValue(rawTrack.name) ?? id;
+    if (!id || !title) continue;
+
+    const track: Track = {
+      identity: {
+        providerId: NAVIDROME_PROVIDER_ID,
+        stableId: navidromeTrackStableId(serverUrl, id),
+      },
+      title,
+      providerLabel: "Navidrome",
+    };
+    const artist = stringValue(rawTrack.artist) ?? albumArtist;
+    const album = stringValue(rawTrack.album) ?? albumName;
+    const durationSeconds = numberValue(rawTrack.duration);
+    if (artist !== undefined) track.artist = artist;
+    if (album !== undefined) track.album = album;
+    if (durationSeconds !== undefined) track.durationSeconds = durationSeconds;
+    if (rawTrack.coverArt !== undefined) track.coverArtId = navidromeServerId(rawTrack.coverArt);
+    tracks.push(track);
+  }
+
+  return tracks;
+}
+
+function navidromeTrackStableId(serverUrl: string, trackId: string): string {
+  return `Navidrome:${serverUrl}:track:${trackId}`;
+}
+
+function normalizePageSize(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined) return 50;
+  return Math.max(1, Math.floor(value));
 }
 
 function missingConfigState(config: NavidromeConfig): NavidromeConnectionState | null {

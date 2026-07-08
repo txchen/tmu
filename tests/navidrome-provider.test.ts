@@ -7,6 +7,7 @@ import {
   navidromeServerId,
   type NavidromeConfig,
   type NavidromeFetcher,
+  type Track,
 } from "../src/index";
 
 function navidromeConfig(overrides: Partial<NavidromeConfig> = {}): NavidromeConfig {
@@ -208,8 +209,224 @@ describe("Navidrome Provider", () => {
     expect(state.message).not.toContain(generatedSalt);
     expect(state.message).not.toContain(generatedToken);
   });
+
+  test("loads artists once per session and refreshes them only when explicit", async () => {
+    const seenEndpoints: string[] = [];
+    let artistCall = 0;
+    const provider = createNavidromeProvider({
+      config: navidromeConfig(),
+      fetcher: async (url) => {
+        seenEndpoints.push(endpointName(url));
+        if (url.pathname.endsWith("/getArtists.view")) {
+          artistCall += 1;
+          return jsonResponse(okPayload({
+            artists: {
+              index: [{
+                name: "A",
+                artist: [{ id: `artist-${artistCall}`, name: `Artist ${artistCall}` }],
+              }],
+            },
+          }));
+        }
+        return jsonResponse(okPayload());
+      },
+      saltFactory: () => "salt",
+    });
+
+    await provider.validateConnection();
+    expect(await provider.listArtists()).toEqual([{ id: "artist-1", name: "Artist 1" }]);
+    expect(await provider.listArtists()).toEqual([{ id: "artist-1", name: "Artist 1" }]);
+
+    await provider.refreshArtists();
+
+    expect(await provider.listArtists()).toEqual([{ id: "artist-2", name: "Artist 2" }]);
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtists"]);
+  });
+
+  test("browses artist to paged album rows to paged Track rows while preserving IDs and coverArt", async () => {
+    const seenRequests: Array<{ endpoint: string; params: Record<string, string> }> = [];
+    const provider = createNavidromeProvider({
+      config: navidromeConfig(),
+      fetcher: async (url) => {
+        seenRequests.push({
+          endpoint: endpointName(url),
+          params: Object.fromEntries(url.searchParams.entries()),
+        });
+        if (url.pathname.endsWith("/getArtists.view")) {
+          return jsonResponse(okPayload({
+            artists: {
+              index: [{
+                name: "A",
+                artist: [{ id: 42, name: "Alpha", albumCount: "2", coverArt: "artist-cover" }],
+              }],
+            },
+          }));
+        }
+        if (url.pathname.endsWith("/getArtist.view")) {
+          expect(url.searchParams.get("id")).toBe("42");
+          return jsonResponse(okPayload({
+            artist: {
+              id: 42,
+              name: "Alpha",
+              album: [
+                { id: 9001, name: "First Album", artist: "Alpha", songCount: "2", coverArt: "album-cover-1" },
+                { id: "9002", name: "Second Album", artist: "Alpha", songCount: 1, coverArt: 902 },
+              ],
+            },
+          }));
+        }
+        if (url.pathname.endsWith("/getAlbum.view")) {
+          expect(url.searchParams.get("id")).toBe("9001");
+          return jsonResponse(okPayload({
+            album: {
+              id: 9001,
+              name: "First Album",
+              artist: "Alpha",
+                  coverArt: "album-cover-should-not-replace-track-cover",
+              song: [
+                {
+                  id: 7001,
+                  title: "Opening",
+                  artist: "Alpha",
+                  album: "First Album",
+                  duration: "125",
+                  coverArt: "track-cover-1",
+                },
+                {
+                  id: "7002",
+                  title: "No Track Cover",
+                  artist: "Alpha",
+                  album: "First Album",
+                  duration: 130,
+                },
+              ],
+            },
+          }));
+        }
+        return jsonResponse(okPayload());
+      },
+      saltFactory: () => "salt",
+      pageSize: 1,
+    });
+
+    await provider.validateConnection();
+    await provider.listArtists();
+
+    expect(provider.getLibraryBrowserEntries()).toEqual([
+      { kind: "artists-root", label: "Artists", depth: 0 },
+      { kind: "artist", id: "42", label: "Alpha", albumCount: 2, coverArtId: "artist-cover", depth: 1 },
+    ]);
+
+    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[1]!);
+    expect(provider.getLibraryBrowserEntries()).toEqual([
+      { kind: "artists-root", label: "Artists", depth: 0 },
+      { kind: "artist", id: "42", label: "Alpha", albumCount: 2, coverArtId: "artist-cover", depth: 1 },
+      {
+        kind: "album",
+        id: "9001",
+        artistId: "42",
+        label: "First Album",
+        artist: "Alpha",
+        trackCount: 2,
+        coverArtId: "album-cover-1",
+        depth: 2,
+      },
+      { kind: "load-more-albums", artistId: "42", label: "Load more albums", depth: 2 },
+    ]);
+
+    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[3]!);
+    expect(provider.getLibraryBrowserEntries().map((entry) => entry.kind)).toEqual([
+      "artists-root",
+      "artist",
+      "album",
+      "album",
+    ]);
+
+    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[2]!);
+    expect(provider.getLibraryBrowserEntries().map((entry) => entry.kind)).toEqual([
+      "artists-root",
+      "artist",
+      "album",
+      "track",
+      "load-more-tracks",
+      "album",
+    ]);
+
+    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[4]!);
+    const entries = provider.getLibraryBrowserEntries();
+    const trackEntries = entries.filter((entry) => entry.kind === "track");
+    expect(trackEntries).toHaveLength(2);
+    expect(trackEntries[0]).toMatchObject({
+      kind: "track",
+      id: "7001",
+      albumId: "9001",
+      artistId: "42",
+      label: "Opening",
+      depth: 3,
+    });
+    const opening = provider.trackForLibraryBrowserEntry(trackEntries[0]!);
+    const noTrackCover = provider.trackForLibraryBrowserEntry(trackEntries[1]!);
+
+    expect(opening).toEqual({
+      identity: {
+        providerId: "navidrome",
+        stableId: "Navidrome:https://music.example.test:track:7001",
+      },
+      title: "Opening",
+      providerLabel: "Navidrome",
+      artist: "Alpha",
+      album: "First Album",
+      durationSeconds: 125,
+      coverArtId: "track-cover-1",
+    } satisfies Track);
+    expect(noTrackCover?.coverArtId).toBeUndefined();
+    expect(noTrackCover?.identity.stableId).toBe("Navidrome:https://music.example.test:track:7002");
+    expect(opening).not.toHaveProperty("playbackLocator");
+    expect(opening?.identity.stableId).not.toContain("stream.view");
+    expect(opening?.identity.stableId).not.toContain("secret-password");
+    expect(seenRequests.map((request) => request.endpoint)).toEqual([
+      "ping",
+      "getArtists",
+      "getArtist",
+      "getAlbum",
+    ]);
+  });
+
+  test("generates authenticated stream URLs only while resolving playback locators", async () => {
+    const seenUrls: URL[] = [];
+    const provider = createNavidromeProvider({
+      config: navidromeConfig(),
+      fetcher: async (url) => {
+        seenUrls.push(new URL(url));
+        return jsonResponse(okPayload());
+      },
+      saltFactory: () => "stream-salt",
+    });
+    const trackIdentity = {
+      providerId: "navidrome",
+      stableId: "Navidrome:https://music.example.test:track:track-123",
+    };
+
+    const locator = await provider.resolvePlaybackLocator(trackIdentity);
+
+    expect(locator.kind).toBe("url");
+    if (locator.kind !== "url") throw new Error("expected Navidrome stream URL locator");
+    const streamUrl = new URL(locator.url);
+    expect(streamUrl.pathname).toBe("/rest/stream.view");
+    expect(streamUrl.searchParams.get("id")).toBe("track-123");
+    expect(streamUrl.searchParams.get("u")).toBe("alex");
+    expect(streamUrl.searchParams.get("s")).toBe("stream-salt");
+    expect(streamUrl.searchParams.get("t")).toBe(md5("secret-passwordstream-salt"));
+    expect(trackIdentity.stableId).not.toContain("stream.view");
+    expect(trackIdentity.stableId).not.toContain(streamUrl.searchParams.get("t") ?? "");
+    expect(seenUrls).toEqual([]);
+  });
 });
 
 function md5(value: string): string {
   return createHash("md5").update(value).digest("hex");
+}
+
+function endpointName(url: URL): string {
+  return url.pathname.split("/").at(-1)?.replace(/\.view$/, "") ?? "";
 }

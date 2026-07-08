@@ -110,11 +110,18 @@ export class AppCoordinator {
         case "moveSelection":
           await this.moveSelection(intent.delta);
           return;
+        case "activateSelectedContent":
+          await this.activateSelectedContent();
+          return;
         case "cycleFocus":
           this.cycleFocus();
           return;
         case "enqueueSelectedTrack":
           await this.enqueueSelectedTrack();
+          return;
+        case "refreshNavidromeLibrary":
+          if (this.uiState.activeTargetId !== "navidrome") return;
+          await this.refreshNavidromeLibrary();
           return;
         case "openLocalPathPrompt":
           this.openLocalPathPrompt();
@@ -261,6 +268,20 @@ export class AppCoordinator {
       return;
     }
 
+    if (this.uiState.activeTargetId === "navidrome" && isNavidromeProvider(this.appState.providers.navidrome)) {
+      const selected = this.selectedNavidromeTrack();
+      if (!selected) {
+        this.appState.lastEvent = "no Navidrome Track selected";
+        return;
+      }
+
+      const entry = this.queue.enqueue(selected);
+      this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
+      this.appState.lastEvent = `added ${selected.title} to shared Queue`;
+      this.syncQueueState();
+      return;
+    }
+
     if (this.uiState.activeTargetId === "youtube-url-download") {
       await this.refreshHelperDependency("yt-dlp");
       const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
@@ -285,6 +306,45 @@ export class AppCoordinator {
     this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
     this.appState.lastEvent = `added ${selected.title} to shared Queue`;
     this.syncQueueState();
+  }
+
+  private async activateSelectedContent(): Promise<void> {
+    if (this.uiState.activeTargetId !== "navidrome") {
+      await this.enqueueSelectedTrack();
+      return;
+    }
+
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) {
+      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
+      return;
+    }
+
+    const index = this.uiState.selectedContentIndexByTarget.navidrome ?? 0;
+    const entry = provider.getLibraryBrowserEntries()[index];
+    if (!entry) {
+      this.appState.lastEvent = "no Navidrome Library Browser row selected";
+      return;
+    }
+
+    try {
+      await provider.openLibraryBrowserEntry(entry);
+    } catch (error) {
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      return;
+    }
+
+    if (entry.kind === "artist") {
+      this.appState.lastEvent = `opened Navidrome artist ${entry.label}`;
+    } else if (entry.kind === "album") {
+      this.appState.lastEvent = `opened Navidrome album ${entry.label}`;
+    } else if (entry.kind === "load-more-albums" || entry.kind === "load-more-tracks") {
+      this.appState.lastEvent = entry.label;
+    } else if (entry.kind === "track") {
+      this.appState.lastEvent = `selected Navidrome Track ${entry.label}`;
+    } else {
+      this.appState.lastEvent = "opened Navidrome artists";
+    }
   }
 
   private openLocalPathPrompt(): void {
@@ -724,6 +784,30 @@ export class AppCoordinator {
     this.appState.lastEvent = state.message;
   }
 
+  private async refreshNavidromeLibrary(): Promise<void> {
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) {
+      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
+      return;
+    }
+
+    const state = await provider.validateConnection();
+    if (state.status !== "connected") {
+      this.appState.lastEvent = state.message;
+      return;
+    }
+
+    try {
+      await provider.refreshLibraryBrowser();
+    } catch (error) {
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      return;
+    }
+
+    this.uiState.selectedContentIndexByTarget.navidrome = 0;
+    this.appState.lastEvent = "refreshed Navidrome Library Browser";
+  }
+
   private async runPlayerCommand(
     command: () => Promise<PlayerPlaybackState>,
     fallbackEvent?: string,
@@ -757,6 +841,16 @@ export class AppCoordinator {
     const tracks = this.visibleTracks(targetId);
     const index = clampIndex(this.uiState.selectedContentIndexByTarget[targetId] ?? 0, tracks.length);
     return tracks[index];
+  }
+
+  private selectedNavidromeTrack() {
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) return undefined;
+
+    const entries = provider.getLibraryBrowserEntries();
+    const index = clampIndex(this.uiState.selectedContentIndexByTarget.navidrome ?? 0, entries.length);
+    const entry = entries[index];
+    return entry ? provider.trackForLibraryBrowserEntry(entry) : undefined;
   }
 
   private visibleTracks(targetId: NavigationTargetId) {
