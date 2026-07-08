@@ -1,6 +1,6 @@
 # Walking Skeleton For Queue-First TMU
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
