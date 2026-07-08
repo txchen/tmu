@@ -66,6 +66,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     player: options.player ?? new NoopPlayer(),
     refreshDependencyHealth: options.refreshDependencyHealth,
     snapshotPersistence: options.snapshotPersistence,
+    dependencyRunner: options.dependencyRunner,
   });
 
   return { coordinator };

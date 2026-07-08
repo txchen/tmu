@@ -15,8 +15,10 @@ import {
   createInitialUiState,
   createDefaultProviders,
   createNavidromeProvider,
+  writeOfflineYouTubeCacheMetadata,
   renderShellText,
   type NavidromeFetcher,
+  type DependencyCommandRequest,
   type DependencyCommandRunner,
   type LocalOpenOptions,
   type LocalOpenResult,
@@ -1594,6 +1596,174 @@ describe("AppCoordinator", () => {
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/offline-youtube-cache/youtube:abc123" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
+  });
+
+  test("submits a direct YouTube URL, identifies it, and enqueues a complete Offline YouTube Cache hit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-url-cache-hit-"));
+    const requests: DependencyCommandRequest[] = [];
+    const runner: DependencyCommandRunner = async (request) => {
+      requests.push(request);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          extractor_key: "YouTube",
+          id: "AbC123",
+          title: "Cached Prompt Track",
+          uploader: "Prompt Artist",
+          duration: 188,
+        }),
+        stderr: "",
+      };
+    };
+
+    try {
+      await writeOfflineYouTubeCacheMetadata({
+        cacheDir: dir,
+        mediaDirName: "media",
+        metadataFileName: "metadata.json",
+      }, {
+        version: 1,
+        extractor: "YouTube",
+        id: "AbC123",
+        title: "Cached Prompt Track",
+        artist: "Prompt Artist",
+        durationSeconds: 188,
+        mediaFileName: "cached.opus",
+      });
+      await mkdir(join(dir, "youtube", "AbC123", "media"), { recursive: true });
+      await writeFile(join(dir, "youtube", "AbC123", "media", "cached.opus"), "audio bytes");
+      const { coordinator } = createTmuApp({
+        config: {
+          helpers: {
+            ytDlp: "/opt/bin/yt-dlp",
+          },
+          dependencyPolicy: {
+            checkTimeoutMs: 4321,
+          },
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        dependencyRunner: runner,
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://music.youtube.com/watch?v=AbC123" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        helper: "yt-dlp",
+        command: "/opt/bin/yt-dlp",
+        timeoutMs: 4321,
+      });
+      expect(requests[0]?.args).toEqual([
+        "--dump-single-json",
+        "--skip-download",
+        "--no-playlist",
+        "--",
+        "https://music.youtube.com/watch?v=AbC123",
+      ]);
+      expect(coordinator.appState.queue.entries).toHaveLength(1);
+      expect(coordinator.appState.queue.entries[0]).toMatchObject({
+        availability: { status: "available" },
+        track: {
+          identity: {
+            providerId: "offline-youtube-cache",
+            stableId: "youtube:AbC123",
+          },
+          title: "Cached Prompt Track",
+          artist: "Prompt Artist",
+        },
+      });
+      expect(coordinator.appState.downloads).toEqual({ active: false, lines: [] });
+      expect(coordinator.appState.lastEvent).toBe("added Cached Prompt Track to shared Queue");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not enqueue or redownload when identified cache metadata has no media file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-url-cache-miss-"));
+    const requests: DependencyCommandRequest[] = [];
+    const runner: DependencyCommandRunner = async (request) => {
+      requests.push(request);
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          extractor_key: "YouTube",
+          id: "Missing123",
+          title: "Missing Cached Media",
+        }),
+        stderr: "",
+      };
+    };
+
+    try {
+      await writeOfflineYouTubeCacheMetadata({
+        cacheDir: dir,
+        mediaDirName: "media",
+        metadataFileName: "metadata.json",
+      }, {
+        version: 1,
+        extractor: "youtube",
+        id: "Missing123",
+        title: "Missing Cached Media",
+        mediaFileName: "missing.opus",
+      });
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        dependencyRunner: runner,
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Missing123" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+
+      expect(requests).toHaveLength(1);
+      expect(coordinator.appState.queue.entries).toEqual([]);
+      expect(coordinator.appState.downloads).toEqual({ active: false, lines: [] });
+      expect(coordinator.appState.lastEvent).toBe(
+        "Offline YouTube Cache entry is incomplete: Cached media file is missing",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces yt-dlp identify stderr from the YouTube URL prompt without starting a download", async () => {
+    const requests: DependencyCommandRequest[] = [];
+    const runner: DependencyCommandRunner = async (request) => {
+      requests.push(request);
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "ERROR: [youtube] BotCheck: Sign in to confirm you are not a bot.",
+      };
+    };
+    const { coordinator } = createTmuApp({ dependencyRunner: runner });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=BotCheck" });
+    await coordinator.dispatch({ type: "submitPrompt" });
+
+    expect(requests).toHaveLength(1);
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.downloads).toEqual({ active: false, lines: [] });
+    expect(coordinator.appState.lastEvent).toBe(
+      "yt-dlp identify failed: ERROR: [youtube] BotCheck: Sign in to confirm you are not a bot.",
+    );
   });
 
   test("keeps all issue-15 navigation targets as siblings", () => {

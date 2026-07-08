@@ -16,8 +16,10 @@ import {
   type UiState,
 } from "./domain";
 import {
+  nodeDependencyCommandRunner,
   playbackHealthMessage,
   youtubeDownloadHealthMessage,
+  type DependencyCommandRunner,
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
@@ -29,6 +31,7 @@ import {
   createLastQueueSnapshot,
   type LastQueueSnapshotPersistence,
 } from "./snapshot";
+import { identifyYouTubeUrl } from "./youtube-url-download";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -42,6 +45,7 @@ export type AppCoordinatorOptions = {
   player: Player;
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
+  dependencyRunner?: DependencyCommandRunner;
 };
 
 export class AppCoordinator {
@@ -51,6 +55,7 @@ export class AppCoordinator {
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
+  private readonly dependencyRunner: DependencyCommandRunner;
   private readonly unsubscribeFromPlayer: () => void;
   private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<() => void>();
@@ -66,6 +71,7 @@ export class AppCoordinator {
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
+    this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       this.mergePlayerPlayback(playback);
       this.maybeReportCompletedPlay(playback);
@@ -394,9 +400,10 @@ export class AppCoordinator {
     }
 
     if (this.uiState.activePrompt === "youtube-url") {
+      const url = this.uiState.promptInput;
       this.uiState.activePrompt = null;
       this.uiState.promptInput = "";
-      this.appState.lastEvent = "YouTube URL Download is not implemented yet";
+      await this.submitYouTubeUrl(url);
       return;
     }
 
@@ -735,6 +742,53 @@ export class AppCoordinator {
     const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
     if (!isOfflineYouTubeCacheProvider(provider)) return;
     provider.refresh();
+  }
+
+  private async submitYouTubeUrl(url: string): Promise<void> {
+    await this.refreshHelperDependency("yt-dlp");
+    const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
+    if (healthMessage) {
+      this.appState.lastEvent = healthMessage;
+      return;
+    }
+
+    const identified = await identifyYouTubeUrl(url, {
+      command: this.appState.config.helpers.ytDlp,
+      timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
+      cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
+      runner: this.dependencyRunner,
+    });
+    if (!identified.ok) {
+      this.appState.lastEvent = identified.message;
+      return;
+    }
+
+    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isOfflineYouTubeCacheProvider(provider)) {
+      this.appState.lastEvent = "Offline YouTube Cache Provider is unavailable";
+      return;
+    }
+
+    provider.refresh();
+    const cacheEntry = provider.findByIdentity(identified.identity);
+    if (!cacheEntry) {
+      this.appState.lastEvent = `No complete Offline YouTube Cache entry for ${identified.metadata.title}`;
+      return;
+    }
+    if (cacheEntry.availability.status === "unavailable") {
+      this.appState.lastEvent = `Offline YouTube Cache entry is incomplete: ${cacheEntry.availability.reason}`;
+      return;
+    }
+    if (cacheEntry.availability.status !== "available") {
+      this.appState.lastEvent = "Offline YouTube Cache entry is incomplete";
+      return;
+    }
+
+    const entry = this.queue.enqueue(cacheEntry.track);
+    this.queue.markAvailability(cacheEntry.track.identity, cacheEntry.availability);
+    this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
+    this.appState.lastEvent = `added ${cacheEntry.track.title} to shared Queue`;
+    this.syncQueueState();
   }
 
   private markSelectedOfflineYouTubeCacheAvailability(entry: QueueEntry): void {

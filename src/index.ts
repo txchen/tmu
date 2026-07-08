@@ -13,3 +13,4 @@ export * from "./renderer";
 export * from "./snapshot";
 export * from "./state";
 export * from "./tui";
+export * from "./youtube-url-download";

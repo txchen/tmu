@@ -1,6 +1,6 @@
 # YouTube URL Identify, Cache Hit, And Enqueue
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,15 +14,15 @@ This slice should establish URL validation, identity, metadata normalization, ca
 
 ## Acceptance criteria
 
-- [ ] YouTube URL Download accepts direct YouTube and YouTube Music URLs.
-- [ ] YouTube URL Download rejects search strings, ytsearch-style inputs, playlists, channels, account/library URLs, live streams, and non-YouTube sites with clear messages.
-- [ ] yt-dlp identify runs before any download attempt and uses a finite timeout.
-- [ ] Stable identity uses lowercased extractor key plus extracted ID.
-- [ ] Existing complete cache entries are detected from normalized metadata plus media file presence.
-- [ ] Cache hits enqueue the cached Track without redownloading.
-- [ ] Missing yt-dlp disables this source action while leaving other sources usable.
-- [ ] yt-dlp identify stderr is surfaced when it explains unavailable, restricted, bot-detected, DRM, or region failures.
-- [ ] Tests cover accepted URL forms, rejected inputs, identify timeout, identity generation, cache-hit enqueue, dependency gating, stderr surfacing, and no-redownload behavior.
+- [x] YouTube URL Download accepts direct YouTube and YouTube Music URLs.
+- [x] YouTube URL Download rejects search strings, ytsearch-style inputs, playlists, channels, account/library URLs, live streams, and non-YouTube sites with clear messages.
+- [x] yt-dlp identify runs before any download attempt and uses a finite timeout.
+- [x] Stable identity uses lowercased extractor key plus extracted ID.
+- [x] Existing complete cache entries are detected from normalized metadata plus media file presence.
+- [x] Cache hits enqueue the cached Track without redownloading.
+- [x] Missing yt-dlp disables this source action while leaving other sources usable.
+- [x] yt-dlp identify stderr is surfaced when it explains unavailable, restricted, bot-detected, DRM, or region failures.
+- [x] Tests cover accepted URL forms, rejected inputs, identify timeout, identity generation, cache-hit enqueue, dependency gating, stderr surfacing, and no-redownload behavior.
 
 ## Blocked by
 
