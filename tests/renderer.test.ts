@@ -9,7 +9,16 @@ import {
   createSkeletonProviders,
   renderShell,
   renderShellText,
+  type Track,
 } from "../src/index";
+
+function track(providerId: string, stableId: string, title: string): Track {
+  return {
+    identity: { providerId, stableId },
+    title,
+    providerLabel: providerId,
+  };
+}
 
 describe("renderShell", () => {
   test("exposes navigation targets, Provider Browsing Surface, and persistent queue/player region", () => {
@@ -51,6 +60,38 @@ describe("renderShell", () => {
     expect(text).toContain("Queue / Player");
     expect(text).toContain("song-a.flac [queued]");
     expect(text).toContain("> Queue");
+  });
+
+  test("renders queue modes, volume readiness, current selection, and Track Availability", () => {
+    const missing = track("local", "/missing.flac", "Missing File");
+    const queue = new MemoryQueue();
+    queue.enqueue(missing);
+    queue.startAt(0);
+    queue.setShuffle(true);
+    queue.setRepeatAll(true);
+    queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue,
+      player: new NoopPlayer(),
+    });
+
+    coordinator.appState.playback = {
+      status: "error",
+      currentTrackIdentity: missing.identity,
+      message: "file no longer exists",
+    };
+    coordinator.appState.volume = { percent: 42, ready: true };
+    coordinator.uiState.focusedPane = "queue";
+
+    const shell = renderShell(coordinator.appState, coordinator.uiState);
+    const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+    expect(shell.queuePlayer.modes).toBe("Shuffle: on | Repeat: all | Volume: 42%");
+    expect(shell.queuePlayer.lines).toEqual([">* Missing File [unavailable: file no longer exists]"]);
+    expect(text).toContain("Shuffle: on | Repeat: all | Volume: 42%");
+    expect(text).toContain("Missing File [unavailable: file no longer exists]");
   });
 
   test("surfaces dependency health without exposing config secrets", async () => {

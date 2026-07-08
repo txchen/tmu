@@ -1,6 +1,6 @@
 # Queue State, Modes, And Last Queue Snapshot
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 

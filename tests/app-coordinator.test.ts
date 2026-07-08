@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import {
   AppCoordinator,
+  InMemoryLastQueueSnapshotPersistence,
   MemoryQueue,
   NoopPlayer,
   NAVIGATION_TARGETS,
@@ -130,6 +131,7 @@ describe("AppCoordinator", () => {
     });
 
     coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -140,6 +142,116 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
+  });
+
+  test("drives queue remove, move, clear, next, previous, and modes through intents", async () => {
+    const amber = track("local", "/music/amber.flac", "Amber Path");
+    const cinder = track("local", "/music/cinder.mp3", "Cinder Room");
+    const drift = track("local", "/music/drift.ogg", "Drift Signal");
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [amber, cinder, drift]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue({ random: () => 0.99 }),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "moveSelectedQueueEntry", delta: -2 });
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      "Drift Signal",
+      "Amber Path",
+      "Cinder Room",
+    ]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+
+    await coordinator.dispatch({ type: "nextTrack" });
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+
+    await coordinator.dispatch({ type: "toggleRepeatAll" });
+    await coordinator.dispatch({ type: "nextTrack" });
+    await coordinator.dispatch({ type: "nextTrack" });
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(drift.identity);
+
+    await coordinator.dispatch({ type: "toggleShuffle" });
+    await coordinator.dispatch({ type: "nextTrack" });
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cinder.identity);
+
+    await coordinator.dispatch({ type: "previousTrack" });
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(drift.identity);
+
+    await coordinator.dispatch({ type: "removeSelectedQueueEntry" });
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      "Amber Path",
+      "Cinder Room",
+    ]);
+
+    await coordinator.dispatch({ type: "clearQueue" });
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.queue.shuffle).toBe(true);
+    expect(coordinator.appState.queue.repeatAll).toBe(true);
+  });
+
+  test("saves and restores Last Queue Snapshot through a persistence adapter", async () => {
+    const amber = track("local", "/music/amber.flac", "Amber Path");
+    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
+    const first = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [amber]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      snapshotPersistence,
+    });
+
+    first.start([]);
+    await first.dispatch({ type: "enqueueSelectedTrack" });
+    await first.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await first.dispatch({ type: "startSelectedQueueEntry" });
+    await first.dispatch({ type: "toggleShuffle" });
+    await first.dispatch({ type: "toggleRepeatAll" });
+    await first.dispatch({ type: "setVolume", percent: 64, ready: true });
+    await first.dispatch({ type: "saveLastQueueSnapshot" });
+
+    const second = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [amber]),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      snapshotPersistence,
+    });
+
+    second.start([]);
+    await second.dispatch({ type: "restoreLastQueueSnapshot" });
+
+    expect(second.appState.queue).toEqual({
+      entries: [
+        {
+          track: amber,
+          availability: { status: "available" },
+        },
+      ],
+      currentIndex: 0,
+      shuffle: true,
+      repeatAll: true,
+    });
+    expect(second.appState.volume).toEqual({ percent: 64, ready: true });
+    expect(second.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
   });
 
   test("blocks playback actions when mpv dependency health is missing", async () => {

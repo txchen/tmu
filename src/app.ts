@@ -11,6 +11,7 @@ import { MemoryQueue } from "./queue";
 import { createInitialAppState, createInitialUiState } from "./state";
 import { loadTmuConfig, type TmuConfig, type TmuConfigInput } from "./config";
 import type { DependencyHealthRefresh } from "./coordinator";
+import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 
 export type TmuAppOptions = {
   config?: TmuConfigInput;
@@ -18,6 +19,7 @@ export type TmuAppOptions = {
   configSource?: "defaults" | "file";
   dependencyHealth?: DependencyHealthState;
   refreshDependencyHealth?: DependencyHealthRefresh;
+  snapshotPersistence?: LastQueueSnapshotPersistence;
 };
 
 export type TmuRuntimeOptions = {
@@ -38,6 +40,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     queue: new MemoryQueue(),
     player: new NoopPlayer(),
     refreshDependencyHealth: options.refreshDependencyHealth,
+    snapshotPersistence: options.snapshotPersistence,
   });
 
   return { coordinator };
@@ -55,6 +58,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       configPath: loaded.path,
       configSource: loaded.source,
       dependencyHealth,
+      snapshotPersistence: new FileLastQueueSnapshotPersistence(loaded.config.persistence.lastQueueSnapshotPath),
       refreshDependencyHealth: (helper, currentHealth) =>
         checkHelperDependencyHealth(loaded.config, helper, currentHealth, {
           runner: options.dependencyRunner,

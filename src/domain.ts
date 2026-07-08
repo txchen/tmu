@@ -43,6 +43,36 @@ export type QueueEntry = {
 export type QueueState = {
   entries: QueueEntry[];
   currentIndex: number;
+  shuffle: boolean;
+  repeatAll: boolean;
+};
+
+export type VolumeState = {
+  percent: number;
+  ready: boolean;
+};
+
+export type SnapshotTrack = {
+  identity: TrackIdentity;
+  title: string;
+  providerLabel: string;
+  artist?: string;
+  album?: string;
+  durationSeconds?: number;
+};
+
+export type LastQueueSnapshotEntry = {
+  track: SnapshotTrack;
+  availability: TrackAvailability;
+};
+
+export type LastQueueSnapshot = {
+  version: 1;
+  entries: LastQueueSnapshotEntry[];
+  currentIndex: number;
+  shuffle: boolean;
+  repeatAll: boolean;
+  volume: VolumeState;
 };
 
 export type PlaybackState = {
@@ -70,9 +100,17 @@ export type Queue = {
   readonly entries: readonly QueueEntry[];
   readonly currentIndex: number;
   enqueue(track: Track): QueueEntry;
+  remove(index: number): QueueEntry | undefined;
+  move(fromIndex: number, toIndex: number): QueueEntry | undefined;
+  clear(): void;
   startAt(index: number): QueueEntry | undefined;
+  next(): QueueEntry | undefined;
+  previous(): QueueEntry | undefined;
+  setShuffle(enabled: boolean): void;
+  setRepeatAll(enabled: boolean): void;
   markAvailability(identity: TrackIdentity, availability: TrackAvailability): void;
   snapshot(): QueueState;
+  restore(snapshot: QueueState): void;
 };
 
 export type NavigationTarget = {
@@ -89,6 +127,7 @@ export type AppState = {
   providers: Record<string, Provider>;
   queue: QueueState;
   playback: PlaybackState;
+  volume: VolumeState;
   startupMode: StartupMode;
   downloads: {
     active: boolean;
@@ -115,6 +154,16 @@ export type AppIntent =
   | { type: "cycleFocus" }
   | { type: "enqueueSelectedTrack" }
   | { type: "startSelectedQueueEntry" }
+  | { type: "removeSelectedQueueEntry" }
+  | { type: "moveSelectedQueueEntry"; delta: number }
+  | { type: "clearQueue" }
+  | { type: "nextTrack" }
+  | { type: "previousTrack" }
+  | { type: "toggleShuffle" }
+  | { type: "toggleRepeatAll" }
+  | { type: "setVolume"; percent: number; ready: boolean }
+  | { type: "saveLastQueueSnapshot" }
+  | { type: "restoreLastQueueSnapshot" }
   | { type: "togglePlayPause" }
   | { type: "stop" }
   | { type: "quit" };

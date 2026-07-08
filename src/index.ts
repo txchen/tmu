@@ -8,5 +8,6 @@ export * from "./player";
 export * from "./providers";
 export * from "./queue";
 export * from "./renderer";
+export * from "./snapshot";
 export * from "./state";
 export * from "./tui";

@@ -2,6 +2,7 @@ import {
   NAVIGATION_TARGETS,
   clampIndex,
   navigationTargetIndex,
+  sameIdentity,
   type AppIntent,
   type AppState,
   type Player,
@@ -18,6 +19,11 @@ import {
   type HelperName,
 } from "./dependencies";
 import { createLocalTrackFromCliArg } from "./providers";
+import {
+  InMemoryLastQueueSnapshotPersistence,
+  createLastQueueSnapshot,
+  type LastQueueSnapshotPersistence,
+} from "./snapshot";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -30,6 +36,7 @@ export type AppCoordinatorOptions = {
   queue: Queue;
   player: Player;
   refreshDependencyHealth?: DependencyHealthRefresh;
+  snapshotPersistence?: LastQueueSnapshotPersistence;
 };
 
 export class AppCoordinator {
@@ -38,6 +45,7 @@ export class AppCoordinator {
   private readonly queue: Queue;
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
+  private readonly snapshotPersistence: LastQueueSnapshotPersistence;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
@@ -45,6 +53,7 @@ export class AppCoordinator {
     this.queue = options.queue;
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
+    this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
     this.syncQueueState();
   }
 
@@ -86,6 +95,36 @@ export class AppCoordinator {
         return;
       case "startSelectedQueueEntry":
         await this.startSelectedQueueEntry();
+        return;
+      case "removeSelectedQueueEntry":
+        this.removeSelectedQueueEntry();
+        return;
+      case "moveSelectedQueueEntry":
+        this.moveSelectedQueueEntry(intent.delta);
+        return;
+      case "clearQueue":
+        this.clearQueue();
+        return;
+      case "nextTrack":
+        await this.nextTrack();
+        return;
+      case "previousTrack":
+        await this.previousTrack();
+        return;
+      case "toggleShuffle":
+        this.toggleShuffle();
+        return;
+      case "toggleRepeatAll":
+        this.toggleRepeatAll();
+        return;
+      case "setVolume":
+        this.setVolume(intent.percent, intent.ready);
+        return;
+      case "saveLastQueueSnapshot":
+        await this.saveLastQueueSnapshot();
+        return;
+      case "restoreLastQueueSnapshot":
+        await this.restoreLastQueueSnapshot();
         return;
       case "togglePlayPause":
         await this.togglePlayPause();
@@ -187,6 +226,126 @@ export class AppCoordinator {
       return;
     }
 
+    await this.playQueueEntry(entry);
+  }
+
+  private removeSelectedQueueEntry(): void {
+    const removed = this.queue.remove(this.uiState.selectedQueueIndex);
+    if (!removed) {
+      this.appState.lastEvent = "Queue is empty";
+      this.syncQueueState();
+      return;
+    }
+
+    this.uiState.selectedQueueIndex = clampIndex(this.uiState.selectedQueueIndex, this.queue.entries.length);
+    if (sameIdentity(removed.track.identity, this.appState.playback.currentTrackIdentity)) {
+      this.appState.playback = {
+        status: "idle",
+        currentTrackIdentity: null,
+      };
+    }
+    this.appState.lastEvent = `removed ${removed.track.title}`;
+    this.syncQueueState();
+  }
+
+  private moveSelectedQueueEntry(delta: number): void {
+    const fromIndex = this.uiState.selectedQueueIndex;
+    const toIndex = clampIndex(fromIndex + delta, this.queue.entries.length);
+    const moved = this.queue.move(fromIndex, toIndex);
+    if (!moved) {
+      this.appState.lastEvent = "Queue is empty";
+      this.syncQueueState();
+      return;
+    }
+
+    this.uiState.selectedQueueIndex = toIndex;
+    this.appState.lastEvent = `moved ${moved.track.title}`;
+    this.syncQueueState();
+  }
+
+  private clearQueue(): void {
+    this.queue.clear();
+    this.uiState.selectedQueueIndex = 0;
+    this.appState.playback = {
+      status: "idle",
+      currentTrackIdentity: null,
+    };
+    this.appState.lastEvent = "cleared Queue";
+    this.syncQueueState();
+  }
+
+  private async nextTrack(): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+
+    const entry = this.queue.next();
+    if (!entry) {
+      this.appState.lastEvent = "end of Queue";
+      this.syncQueueState();
+      return;
+    }
+
+    this.uiState.selectedQueueIndex = this.queue.currentIndex;
+    await this.playQueueEntry(entry);
+  }
+
+  private async previousTrack(): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+
+    const entry = this.queue.previous();
+    if (!entry) {
+      this.appState.lastEvent = "start of Queue";
+      this.syncQueueState();
+      return;
+    }
+
+    this.uiState.selectedQueueIndex = this.queue.currentIndex;
+    await this.playQueueEntry(entry);
+  }
+
+  private toggleShuffle(): void {
+    this.queue.setShuffle(!this.queue.snapshot().shuffle);
+    this.appState.lastEvent = this.queue.snapshot().shuffle ? "shuffle on" : "shuffle off";
+    this.syncQueueState();
+  }
+
+  private toggleRepeatAll(): void {
+    this.queue.setRepeatAll(!this.queue.snapshot().repeatAll);
+    this.appState.lastEvent = this.queue.snapshot().repeatAll ? "repeat all on" : "repeat all off";
+    this.syncQueueState();
+  }
+
+  private setVolume(percent: number, ready: boolean): void {
+    this.appState.volume = {
+      percent: Math.max(0, Math.min(100, Math.round(percent))),
+      ready,
+    };
+    this.appState.lastEvent = this.appState.volume.ready
+      ? `volume ${this.appState.volume.percent}%`
+      : "volume unavailable";
+  }
+
+  private async saveLastQueueSnapshot(): Promise<void> {
+    await this.snapshotPersistence.save(createLastQueueSnapshot(this.queue.snapshot(), this.appState.volume));
+    this.appState.lastEvent = "saved Last Queue Snapshot";
+  }
+
+  private async restoreLastQueueSnapshot(): Promise<void> {
+    const snapshot = await this.snapshotPersistence.load();
+    if (!snapshot) {
+      this.appState.lastEvent = "no Last Queue Snapshot";
+      return;
+    }
+
+    this.queue.restore(snapshot);
+    this.appState.volume = snapshot.volume;
+    this.uiState.selectedQueueIndex = snapshot.currentIndex >= 0
+      ? snapshot.currentIndex
+      : 0;
+    this.appState.lastEvent = "restored Last Queue Snapshot";
+    this.syncQueueState();
+  }
+
+  private async playQueueEntry(entry: QueueEntry): Promise<void> {
     const provider = this.appState.providers[entry.track.identity.providerId];
     if (!provider) {
       this.markUnavailable(entry, `Provider ${entry.track.identity.providerId} is unavailable`);

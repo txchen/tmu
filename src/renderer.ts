@@ -27,6 +27,7 @@ export type RenderedShell = {
   queuePlayer: {
     title: string;
     nowPlaying: string;
+    modes: string;
     lines: string[];
   };
   health: {
@@ -60,6 +61,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     queuePlayer: {
       title: "Queue / Player",
       nowPlaying: nowPlaying(appState),
+      modes: queueModes(appState),
       lines: appState.queue.entries.map((entry, index) => queueLine(appState, uiState, entry, index)),
     },
     health: {
@@ -92,6 +94,7 @@ export function renderShellText(appState: AppState, uiState: UiState): string {
     shell.queuePlayer.title,
     "--------------",
     shell.queuePlayer.nowPlaying,
+    shell.queuePlayer.modes,
     queueLines,
     "",
     shell.health.title,
@@ -152,15 +155,28 @@ function nowPlaying(appState: AppState): string {
   return `${verb} ${current.track.title}`;
 }
 
+function queueModes(appState: AppState): string {
+  const shuffle = appState.queue.shuffle ? "on" : "off";
+  const repeat = appState.queue.repeatAll ? "all" : "off";
+  const volume = appState.volume.ready ? `${appState.volume.percent}%` : "not ready";
+  return `Shuffle: ${shuffle} | Repeat: ${repeat} | Volume: ${volume}`;
+}
+
 function queueLine(appState: AppState, uiState: UiState, entry: QueueEntry, index: number): string {
   const selected = index === clampIndex(uiState.selectedQueueIndex, appState.queue.entries.length);
   const active = sameIdentity(entry.track.identity, appState.playback.currentTrackIdentity);
-  const status = active
-    ? appState.playback.status
-    : entry.availability.status === "unavailable"
-      ? "unavailable"
-      : "queued";
+  const status = queueEntryStatus(appState, entry, active);
   return row(`${entry.track.title} [${status}]`, selected, uiState.focusedPane === "queue");
+}
+
+function queueEntryStatus(appState: AppState, entry: QueueEntry, active: boolean): string {
+  if (entry.availability.status === "unavailable") {
+    return `unavailable: ${entry.availability.reason}`;
+  }
+
+  if (active) return appState.playback.status;
+  if (entry.availability.status === "available") return "available";
+  return "queued";
 }
 
 function row(label: string, selected: boolean, focused: boolean): string {

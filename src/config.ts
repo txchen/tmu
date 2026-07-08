@@ -47,6 +47,9 @@ export type TmuConfig = {
   dependencyPolicy: {
     checkTimeoutMs: number;
   };
+  persistence: {
+    lastQueueSnapshotPath: string;
+  };
 };
 
 export type RedactedTmuConfig = Omit<TmuConfig, "providers"> & {
@@ -117,6 +120,9 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     dependencyPolicy: {
       checkTimeoutMs: 2000,
     },
+    persistence: {
+      lastQueueSnapshotPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "last-queue.json"),
+    },
   };
 
   return mergeConfig(base, normalizeConfigInput(overrides));
@@ -170,6 +176,7 @@ export function redactTmuConfig(config: TmuConfig): RedactedTmuConfig {
     offlineYouTubeCache: { ...config.offlineYouTubeCache },
     youtube: { ...config.youtube },
     dependencyPolicy: { ...config.dependencyPolicy },
+    persistence: { ...config.persistence },
   };
 }
 
@@ -212,6 +219,10 @@ function mergeConfig(base: TmuConfig, overrides: TmuConfigInput): TmuConfig {
     dependencyPolicy: {
       ...base.dependencyPolicy,
       ...overrides.dependencyPolicy,
+    },
+    persistence: {
+      ...base.persistence,
+      ...overrides.persistence,
     },
   };
 }

@@ -38,10 +38,16 @@ export function createInitialAppState(
     queue: {
       entries: [],
       currentIndex: -1,
+      shuffle: false,
+      repeatAll: false,
     },
     playback: {
       status: "idle",
       currentTrackIdentity: null,
+    },
+    volume: {
+      percent: 100,
+      ready: false,
     },
     startupMode: "empty",
     downloads: {
