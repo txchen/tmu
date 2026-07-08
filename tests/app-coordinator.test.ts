@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AppCoordinator,
+  FileAppPreferencesPersistence,
+  FileLastQueueSnapshotPersistence,
+  InMemoryAppPreferencesPersistence,
   InMemoryLastQueueSnapshotPersistence,
   MemoryQueue,
   NoopPlayer,
@@ -17,6 +20,7 @@ import {
   createNavidromeProvider,
   writeOfflineYouTubeCacheMetadata,
   renderShellText,
+  navigationTargetIndex,
   type NavidromeFetcher,
   type DependencyCommandRequest,
   type DependencyCommandRunner,
@@ -314,7 +318,7 @@ class VolumeFailingPlayer extends RecordingPlayer {
 }
 
 describe("AppCoordinator", () => {
-  test("starts empty on the target switcher with separate app and UI state", () => {
+  test("starts empty on the target switcher with separate app and UI state", async () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
@@ -322,13 +326,235 @@ describe("AppCoordinator", () => {
       player: new NoopPlayer(),
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
 
     expect(coordinator.appState.queue.entries).toEqual([]);
     expect(coordinator.appState.startupMode).toBe("empty");
     expect(coordinator.uiState.focusedPane).toBe("targets");
     expect(coordinator.uiState.activeTargetId).toBe("local");
     expect(coordinator.appState).not.toBe(coordinator.uiState);
+  });
+
+  test("persists last selected Provider and restores it on startup without CLI args", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-last-selected-provider-"));
+    const preferencesPath = join(dir, "preferences.json");
+
+    try {
+      const first = new AppCoordinator({
+        appState: createInitialAppState({
+          local: fakeProvider("local"),
+          navidrome: fakeProvider("navidrome"),
+        }),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+        appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
+      });
+
+      await first.start([]);
+      await first.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+      await first.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+
+      const second = new AppCoordinator({
+        appState: createInitialAppState({
+          local: fakeProvider("local"),
+          navidrome: fakeProvider("navidrome"),
+        }),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+        appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
+      });
+
+      await second.start([]);
+
+      expect(second.uiState.activeTargetId).toBe("navidrome");
+      expect(second.uiState.focusedPane).toBe("targets");
+      expect(second.uiState.selectedTargetIndex).toBe(navigationTargetIndex("navidrome"));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CLI startup overrides persisted Provider focus, restores settings, and seeds a fresh Queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-startup-persistence-"));
+    const cliFile = join(dir, "fresh.flac");
+    const appPreferencesPersistence = new InMemoryAppPreferencesPersistence();
+    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
+
+    try {
+      await writeFile(cliFile, "not real audio");
+      await appPreferencesPersistence.save({
+        version: 1,
+        lastSelectedProviderId: "navidrome",
+        shuffle: true,
+        repeatAll: true,
+        volume: { percent: 42, ready: true },
+      });
+      await snapshotPersistence.save({
+        version: 1,
+        entries: [
+          {
+            track: track("navidrome", "server/song-1", "Remote Restore"),
+            availability: { status: "unknown" },
+          },
+        ],
+        currentIndex: 0,
+        shuffle: true,
+        repeatAll: true,
+        volume: { percent: 42, ready: true },
+      });
+
+      const coordinator = new AppCoordinator({
+        appState: createInitialAppState(createDefaultProviders()),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+        snapshotPersistence,
+        appPreferencesPersistence,
+      });
+
+      await coordinator.start([cliFile]);
+
+      expect(coordinator.appState.startupMode).toBe("cli-seeded");
+      expect(coordinator.uiState.activeTargetId).toBe("queue");
+      expect(coordinator.uiState.focusedPane).toBe("queue");
+      expect(coordinator.appState.queue.shuffle).toBe(true);
+      expect(coordinator.appState.queue.repeatAll).toBe(true);
+      expect(coordinator.appState.volume).toEqual({ percent: 42, ready: true });
+      expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+        "fresh.flac",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("startup restores shuffle repeat-all and volume from preferences without a Last Queue Snapshot", async () => {
+    const appPreferencesPersistence = new InMemoryAppPreferencesPersistence();
+    const first = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      appPreferencesPersistence,
+    });
+
+    await first.start([]);
+    await first.dispatch({ type: "toggleShuffle" });
+    await first.dispatch({ type: "toggleRepeatAll" });
+    await first.dispatch({ type: "setVolume", percent: 36, ready: true });
+
+    const second = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      appPreferencesPersistence,
+    });
+
+    await second.start([]);
+
+    expect(second.appState.queue.shuffle).toBe(true);
+    expect(second.appState.queue.repeatAll).toBe(true);
+    expect(second.appState.volume).toEqual({ percent: 36, ready: true });
+  });
+
+  test("startup restores Offline YouTube Cache snapshot entries from cache metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-startup-restore-"));
+    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
+
+    try {
+      await writeOfflineYouTubeCacheMetadata({
+        cacheDir: dir,
+        mediaDirName: "media",
+        metadataFileName: "metadata.json",
+      }, {
+        version: 1,
+        extractor: "youtube",
+        id: "cached-id",
+        title: "Cached Metadata Title",
+        artist: "Cached Artist",
+        mediaFileName: "cached.opus",
+      });
+      await mkdir(join(dir, "youtube", "cached-id", "media"), { recursive: true });
+      await writeFile(join(dir, "youtube", "cached-id", "media", "cached.opus"), "audio bytes");
+      await snapshotPersistence.save({
+        version: 1,
+        entries: [
+          {
+            track: track("offline-youtube-cache", "youtube:cached-id", "Stale Snapshot Title"),
+            availability: { status: "unknown" },
+          },
+        ],
+        currentIndex: 0,
+        shuffle: false,
+        repeatAll: false,
+        volume: { percent: 77, ready: true },
+      });
+
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        snapshotPersistence,
+      });
+
+      await coordinator.start([]);
+
+      expect(coordinator.appState.queue.entries[0]).toMatchObject({
+        track: {
+          identity: { providerId: "offline-youtube-cache", stableId: "youtube:cached-id" },
+          title: "Cached Metadata Title",
+          artist: "Cached Artist",
+        },
+        availability: { status: "available" },
+      });
+      expect(coordinator.appState.volume).toEqual({ percent: 77, ready: true });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("recovers from missing or corrupted persistence files during startup", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-corrupt-persistence-"));
+    const snapshotPath = join(dir, "last-queue.json");
+    const preferencesPath = join(dir, "preferences.json");
+
+    try {
+      await writeFile(snapshotPath, "{not-json");
+      await writeFile(preferencesPath, "{not-json");
+      const coordinator = new AppCoordinator({
+        appState: createInitialAppState({
+          local: fakeProvider("local"),
+        }),
+        uiState: createInitialUiState(),
+        queue: new MemoryQueue(),
+        player: new NoopPlayer(),
+        snapshotPersistence: new FileLastQueueSnapshotPersistence(snapshotPath),
+        appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
+      });
+
+      await coordinator.start([]);
+
+      expect(coordinator.appState.queue.entries).toEqual([]);
+      expect(coordinator.uiState.activeTargetId).toBe("local");
+      expect(coordinator.appState.lastEvent).toContain("opened Local");
+      expect(coordinator.appState.appErrors).toEqual([
+        expect.stringContaining("Ignored corrupted Last Queue Snapshot"),
+        expect.stringContaining("Ignored corrupted app preferences"),
+      ]);
+      const text = renderShellText(coordinator.appState, coordinator.uiState);
+      expect(text).toContain("App Diagnostics");
+      expect(text).toContain("Ignored corrupted Last Queue Snapshot");
+      expect(text).toContain("Ignored corrupted app preferences");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("starts with CLI file args as canonical local Tracks without playback locators", async () => {
@@ -594,7 +820,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1103,7 +1329,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1136,7 +1362,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1164,7 +1390,7 @@ describe("AppCoordinator", () => {
       player: stopPlayer,
     });
 
-    stopCoordinator.start([]);
+    await stopCoordinator.start([]);
     await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await stopCoordinator.dispatch({ type: "enqueueSelectedTrack" });
     await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1183,7 +1409,7 @@ describe("AppCoordinator", () => {
       player: volumePlayer,
     });
 
-    volumeCoordinator.start([]);
+    await volumeCoordinator.start([]);
     await volumeCoordinator.dispatch({ type: "setVolume", percent: 71, ready: true });
 
     expect(volumeCoordinator.appState.lastEvent).toBe("mpv error: volume failed");
@@ -1202,7 +1428,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1373,7 +1599,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1496,7 +1722,7 @@ describe("AppCoordinator", () => {
       snapshotPersistence,
     });
 
-    first.start([]);
+    await first.start([]);
     await first.dispatch({ type: "enqueueSelectedTrack" });
     await first.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await first.dispatch({ type: "startSelectedQueueEntry" });
@@ -1515,7 +1741,7 @@ describe("AppCoordinator", () => {
       snapshotPersistence,
     });
 
-    second.start([]);
+    await second.start([]);
     await second.dispatch({ type: "restoreLastQueueSnapshot" });
 
     expect(second.appState.queue).toEqual({
@@ -1563,7 +1789,6 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start([]);
-    await coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
 
     expect(local.resolveCalls.map((identity) => identity.stableId)).toEqual([
       "/music/missing.flac",
@@ -1711,7 +1936,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -1756,7 +1981,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -1788,7 +2013,7 @@ describe("AppCoordinator", () => {
       },
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
     expect(refreshes).toEqual(["yt-dlp"]);
     expect(coordinator.uiState.activePrompt).toBeNull();
@@ -1816,7 +2041,7 @@ describe("AppCoordinator", () => {
       },
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "moveSelection", delta: 3 });
 
     expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
@@ -1849,7 +2074,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });

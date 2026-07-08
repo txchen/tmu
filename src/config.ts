@@ -50,6 +50,7 @@ export type TmuConfig = {
   };
   persistence: {
     lastQueueSnapshotPath: string;
+    appPreferencesPath: string;
   };
 };
 
@@ -124,6 +125,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     },
     persistence: {
       lastQueueSnapshotPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "last-queue.json"),
+      appPreferencesPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "preferences.json"),
     },
   };
 

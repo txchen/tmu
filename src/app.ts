@@ -14,6 +14,7 @@ import { MemoryQueue } from "./queue";
 import { createInitialAppState, createInitialUiState } from "./state";
 import { createDefaultTmuConfig, loadTmuConfig, type TmuConfig, type TmuConfigInput } from "./config";
 import type { DependencyHealthRefresh } from "./coordinator";
+import { FileAppPreferencesPersistence, type AppPreferencesPersistence } from "./preferences";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
 import type { NavidromeFetcher } from "./navidrome";
@@ -26,6 +27,7 @@ export type TmuAppOptions = {
   dependencyHealth?: DependencyHealthState;
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
+  appPreferencesPersistence?: AppPreferencesPersistence;
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
   youtubeDownloader?: YouTubeDownloader;
@@ -68,6 +70,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     player: options.player ?? new NoopPlayer(),
     refreshDependencyHealth: options.refreshDependencyHealth,
     snapshotPersistence: options.snapshotPersistence,
+    appPreferencesPersistence: options.appPreferencesPersistence,
     dependencyRunner: options.dependencyRunner,
     youtubeDownloader: options.youtubeDownloader,
   });
@@ -114,6 +117,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       dependencyHealth,
       player,
       snapshotPersistence: new FileLastQueueSnapshotPersistence(loaded.config.persistence.lastQueueSnapshotPath),
+      appPreferencesPersistence: new FileAppPreferencesPersistence(loaded.config.persistence.appPreferencesPath),
       refreshDependencyHealth: (helper, currentHealth) =>
         checkHelperDependencyHealth(loaded.config, helper, currentHealth, {
           runner: options.dependencyRunner,

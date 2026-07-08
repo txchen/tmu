@@ -43,7 +43,7 @@ function track(providerId: string, stableId: string, title: string): Track {
 }
 
 describe("renderShell", () => {
-  test("exposes navigation targets, Provider Browsing Surface, and persistent queue/player region", () => {
+  test("exposes navigation targets, Provider Browsing Surface, and persistent queue/player region", async () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
@@ -51,7 +51,7 @@ describe("renderShell", () => {
       player: new NoopPlayer(),
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     const shell = renderShell(coordinator.appState, coordinator.uiState);
 
     expect(shell.navigationTargets.map((target) => target.label)).toEqual([
@@ -220,7 +220,7 @@ describe("renderShell", () => {
       player: new NoopPlayer(),
     });
 
-    coordinator.start([]);
+    await coordinator.start([]);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
     const shell = renderShell(coordinator.appState, coordinator.uiState);
     const text = renderShellText(coordinator.appState, coordinator.uiState);

@@ -31,6 +31,7 @@ describe("TMU config", () => {
     expect(loaded.config.providers.local.directorySoftCap).toBe(10000);
     expect(loaded.config.offlineYouTubeCache.cacheDir).toContain("offline-youtube-cache");
     expect(loaded.config.persistence.lastQueueSnapshotPath).toContain("last-queue.json");
+    expect(loaded.config.persistence.appPreferencesPath).toContain("preferences.json");
     expect(loaded.config.lowPower).toEqual({
       playbackTickMs: 500,
       downloadProgressThrottleMs: 500,
@@ -76,6 +77,7 @@ describe("TMU config", () => {
       },
       persistence: {
         lastQueueSnapshotPath: "/var/lib/tmu/last-queue.json",
+        appPreferencesPath: "/var/lib/tmu/preferences.json",
       },
     }));
 
@@ -104,6 +106,7 @@ describe("TMU config", () => {
     expect(loaded.config.offlineYouTubeCache.metadataFileName).toBe("entry.json");
     expect(loaded.config.youtube.cookiesFromBrowser).toBe("firefox");
     expect(loaded.config.persistence.lastQueueSnapshotPath).toBe("/var/lib/tmu/last-queue.json");
+    expect(loaded.config.persistence.appPreferencesPath).toBe("/var/lib/tmu/preferences.json");
   });
 
   test("redacts secret fields from display and diagnostics copies", () => {

@@ -106,6 +106,7 @@ describe("Last Queue Snapshot persistence", () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-snapshot-"));
     const configPath = join(dir, "config.json");
     const snapshotPath = join(dir, "last-queue.json");
+    const preferencesPath = join(dir, "preferences.json");
     const runner: DependencyCommandRunner = async ({ helper }) => ({
       exitCode: 0,
       stdout: helper === "ffprobe" ? "ffprobe version 7.1\n" : `${helper} 1.0\n`,
@@ -120,6 +121,7 @@ describe("Last Queue Snapshot persistence", () => {
       await writeFile(configPath, JSON.stringify({
         persistence: {
           lastQueueSnapshotPath: snapshotPath,
+          appPreferencesPath: preferencesPath,
         },
       }));
 
@@ -130,7 +132,7 @@ describe("Last Queue Snapshot persistence", () => {
       await first.coordinator.dispatch({ type: "saveLastQueueSnapshot" });
 
       second = await createTmuRuntime({ configPath, dependencyRunner: runner });
-      second.coordinator.start([]);
+      await second.coordinator.start([]);
       await second.coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
 
       expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("song-a.flac");

@@ -6,6 +6,7 @@ import {
   sameIdentity,
   type AppIntent,
   type AppState,
+  type LastQueueSnapshot,
   type Player,
   type PlayerPlaybackState,
   type Provider,
@@ -31,6 +32,12 @@ import {
 } from "./offline-youtube-cache";
 import { isLocalProvider } from "./providers";
 import {
+  InMemoryAppPreferencesPersistence,
+  isRestorableProviderTargetId,
+  type AppPreferencesRecord,
+  type AppPreferencesPersistence,
+} from "./preferences";
+import {
   InMemoryLastQueueSnapshotPersistence,
   createLastQueueSnapshot,
   type LastQueueSnapshotPersistence,
@@ -54,6 +61,7 @@ export type AppCoordinatorOptions = {
   player: Player;
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
+  appPreferencesPersistence?: AppPreferencesPersistence;
   dependencyRunner?: DependencyCommandRunner;
   youtubeDownloader?: YouTubeDownloader;
 };
@@ -65,6 +73,7 @@ export class AppCoordinator {
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
+  private readonly appPreferencesPersistence: AppPreferencesPersistence;
   private readonly dependencyRunner: DependencyCommandRunner;
   private readonly youtubeDownloader: YouTubeDownloader;
   private readonly unsubscribeFromPlayer: () => void;
@@ -83,6 +92,8 @@ export class AppCoordinator {
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
+    this.appPreferencesPersistence = options.appPreferencesPersistence
+      ?? new InMemoryAppPreferencesPersistence();
     this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
     this.youtubeDownloader = options.youtubeDownloader ?? downloadYouTubeUrl;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
@@ -104,18 +115,18 @@ export class AppCoordinator {
 
   async start(cliArgs: readonly string[]): Promise<void> {
     const fileArgs = cliArgs.filter((arg) => arg.trim());
+
     if (fileArgs.length > 0) {
+      await this.restoreAppPreferences({ restoreProvider: false });
       this.appState.startupMode = "cli-seeded";
       this.uiState.activeTargetId = "queue";
       this.uiState.focusedPane = "queue";
       this.uiState.selectedTargetIndex = navigationTargetIndex("queue");
       this.appState.lastEvent = "CLI args seeded the shared Queue";
     } else {
+      await this.restoreQueueSnapshotIfPresent();
       this.appState.startupMode = "empty";
-      this.uiState.activeTargetId = "local";
-      this.uiState.focusedPane = "targets";
-      this.uiState.selectedTargetIndex = navigationTargetIndex("local");
-      this.appState.lastEvent = "opened target switcher";
+      await this.restoreAppPreferences({ restoreProvider: true });
     }
 
     for (const arg of fileArgs) {
@@ -155,7 +166,7 @@ export class AppCoordinator {
           await this.searchNavidromeTracks(intent.query);
           return;
         case "openLocalPathPrompt":
-          this.openLocalPathPrompt();
+          await this.openLocalPathPrompt();
           return;
         case "setPromptInput":
           this.setPromptInput(intent.value);
@@ -194,10 +205,10 @@ export class AppCoordinator {
           await this.previousTrack();
           return;
         case "toggleShuffle":
-          this.toggleShuffle();
+          await this.toggleShuffle();
           return;
         case "toggleRepeatAll":
-          this.toggleRepeatAll();
+          await this.toggleRepeatAll();
           return;
         case "setVolume":
           await this.setVolume(intent.percent, intent.ready);
@@ -253,10 +264,90 @@ export class AppCoordinator {
     return () => this.stateListeners.delete(listener);
   }
 
+  private async restoreAppPreferences(options: { restoreProvider: boolean }): Promise<void> {
+    const record = await this.appPreferencesPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
+
+    if (record?.shuffle !== undefined) this.queue.setShuffle(record.shuffle);
+    if (record?.repeatAll !== undefined) this.queue.setRepeatAll(record.repeatAll);
+    if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
+
+    if (options.restoreProvider) {
+      this.uiState.activeTargetId = "local";
+      this.uiState.selectedTargetIndex = navigationTargetIndex("local");
+      this.uiState.focusedPane = "targets";
+      this.appState.lastEvent = "opened Local";
+
+      if (record?.lastSelectedProviderId) {
+        const targetId = record.lastSelectedProviderId;
+        this.uiState.activeTargetId = targetId;
+        this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
+        this.uiState.focusedPane = "targets";
+        this.appState.lastEvent = `restored last selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
+      }
+    }
+
+    this.syncQueueState();
+  }
+
+  private async persistLastSelectedTarget(targetId: NavigationTargetId): Promise<void> {
+    if (!isRestorableProviderTargetId(targetId)) return;
+    await this.persistAppPreferences({ lastSelectedProviderId: targetId });
+  }
+
+  private async persistPlaybackPreferences(): Promise<void> {
+    const queue = this.queue.snapshot();
+    await this.persistAppPreferences({
+      shuffle: queue.shuffle,
+      repeatAll: queue.repeatAll,
+      volume: this.appState.volume,
+    });
+  }
+
+  private async persistAppPreferences(patch: Omit<Partial<AppPreferencesRecord>, "version">): Promise<void> {
+    try {
+      const existing = await this.appPreferencesPersistence.load();
+      this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
+      await this.appPreferencesPersistence.save({
+        ...(existing ?? {}),
+        ...patch,
+        version: 1,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appState.appErrors.push(`Could not persist app preferences: ${message}`);
+    }
+  }
+
+  private async restoreQueueSnapshotIfPresent(): Promise<void> {
+    const snapshot = await this.snapshotPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
+    if (!snapshot) return;
+
+    await this.applyLastQueueSnapshot(snapshot);
+  }
+
+  private recordPersistenceRecoveryMessages(persistence: { drainRecoveryMessages?(): string[] }): void {
+    for (const message of persistence.drainRecoveryMessages?.() ?? []) {
+      this.appState.appErrors.push(message);
+    }
+  }
+
+  private async applyLastQueueSnapshot(snapshot: LastQueueSnapshot): Promise<void> {
+    this.queue.restore(snapshot);
+    await this.refreshRestoredProviderAvailability();
+    this.appState.volume = snapshot.volume;
+    this.uiState.selectedQueueIndex = snapshot.currentIndex >= 0
+      ? snapshot.currentIndex
+      : 0;
+    this.syncQueueState();
+  }
+
   private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
     this.uiState.activeTargetId = targetId;
     this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
     this.uiState.focusedPane = targetId === "queue" ? "queue" : "content";
+    await this.persistLastSelectedTarget(targetId);
     await this.refreshEnteredTarget(targetId);
     this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
       ? "youtube-url"
@@ -269,6 +360,7 @@ export class AppCoordinator {
     if (this.uiState.focusedPane === "targets") {
       this.uiState.selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
       this.uiState.activeTargetId = NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.id ?? "local";
+      await this.persistLastSelectedTarget(this.uiState.activeTargetId);
       await this.refreshEnteredTarget(this.uiState.activeTargetId);
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
       return;
@@ -382,13 +474,14 @@ export class AppCoordinator {
     }
   }
 
-  private openLocalPathPrompt(): void {
+  private async openLocalPathPrompt(): Promise<void> {
     this.uiState.activeTargetId = "local";
     this.uiState.selectedTargetIndex = navigationTargetIndex("local");
     this.uiState.focusedPane = "content";
     this.uiState.activePrompt = "local-open-path";
     this.uiState.promptInput = "";
     this.appState.lastEvent = "opened Local path prompt";
+    await this.persistLastSelectedTarget("local");
   }
 
   private openNavidromeSearchPrompt(): void {
@@ -515,6 +608,7 @@ export class AppCoordinator {
     this.uiState.focusedPane = "content";
     this.uiState.activePrompt = null;
     this.uiState.promptInput = "";
+    await this.persistLastSelectedTarget("local");
 
     const result = await localProvider.createTracksFromOpenPath(path, {
       signal,
@@ -664,16 +758,18 @@ export class AppCoordinator {
     await this.playQueueEntry(entry);
   }
 
-  private toggleShuffle(): void {
+  private async toggleShuffle(): Promise<void> {
     this.queue.setShuffle(!this.queue.snapshot().shuffle);
     this.appState.lastEvent = this.queue.snapshot().shuffle ? "shuffle on" : "shuffle off";
     this.syncQueueState();
+    await this.persistPlaybackPreferences();
   }
 
-  private toggleRepeatAll(): void {
+  private async toggleRepeatAll(): Promise<void> {
     this.queue.setRepeatAll(!this.queue.snapshot().repeatAll);
     this.appState.lastEvent = this.queue.snapshot().repeatAll ? "repeat all on" : "repeat all off";
     this.syncQueueState();
+    await this.persistPlaybackPreferences();
   }
 
   private async setVolume(percent: number, ready: boolean): Promise<void> {
@@ -681,6 +777,7 @@ export class AppCoordinator {
     if (!ready) {
       this.appState.volume = { percent: clamped, ready };
       this.appState.lastEvent = "volume unavailable";
+      await this.persistPlaybackPreferences();
       return;
     }
 
@@ -690,6 +787,7 @@ export class AppCoordinator {
 
     this.appState.volume = { percent: clamped, ready };
     this.appState.lastEvent = `volume ${clamped}%`;
+    await this.persistPlaybackPreferences();
   }
 
   private async seekBy(seconds: number): Promise<void> {
@@ -712,19 +810,41 @@ export class AppCoordinator {
 
   private async restoreLastQueueSnapshot(): Promise<void> {
     const snapshot = await this.snapshotPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
     if (!snapshot) {
       this.appState.lastEvent = "no Last Queue Snapshot";
       return;
     }
 
-    this.queue.restore(snapshot);
-    await this.refreshRestoredLocalAvailability();
-    this.appState.volume = snapshot.volume;
-    this.uiState.selectedQueueIndex = snapshot.currentIndex >= 0
-      ? snapshot.currentIndex
-      : 0;
+    await this.applyLastQueueSnapshot(snapshot);
     this.appState.lastEvent = "restored Last Queue Snapshot";
-    this.syncQueueState();
+  }
+
+  private async refreshRestoredProviderAvailability(): Promise<void> {
+    await this.refreshRestoredLocalAvailability();
+    this.refreshRestoredOfflineYouTubeCacheAvailability();
+  }
+
+  private refreshRestoredOfflineYouTubeCacheAvailability(): void {
+    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isOfflineYouTubeCacheProvider(provider)) return;
+
+    provider.refresh();
+    for (const entry of this.queue.entries) {
+      if (entry.track.identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) continue;
+
+      const cacheEntry = provider.findByIdentity(entry.track.identity);
+      if (!cacheEntry) {
+        this.queue.markAvailability(entry.track.identity, {
+          status: "unavailable",
+          reason: `Offline YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
+        });
+        continue;
+      }
+
+      this.queue.updateTrack(cacheEntry.track);
+      this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
+    }
   }
 
   private async playQueueEntry(entry: QueueEntry): Promise<boolean> {

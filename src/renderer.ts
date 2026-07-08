@@ -39,6 +39,10 @@ export type RenderedShell = {
     title: string;
     lines: string[];
   };
+  diagnostics: {
+    title: string;
+    lines: string[];
+  };
   footer: string;
 };
 
@@ -73,6 +77,10 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     health: {
       title: "Dependency Health",
       lines: dependencyHealthLines(appState.dependencyHealth),
+    },
+    diagnostics: {
+      title: "App Diagnostics",
+      lines: appState.appErrors.slice(-5),
     },
     footer: `last: ${appState.lastEvent}`,
   };
@@ -109,6 +117,12 @@ export function renderShellText(appState: AppState, uiState: UiState): string {
     shell.health.title,
     "-----------------",
     shell.health.lines.map((line) => `  ${line}`).join("\n"),
+    "",
+    shell.diagnostics.title,
+    "---------------",
+    shell.diagnostics.lines.length
+      ? shell.diagnostics.lines.map((line) => `  ${line}`).join("\n")
+      : "  No app diagnostics",
     "",
     shell.footer,
   ].join("\n");

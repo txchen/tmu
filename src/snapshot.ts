@@ -1,10 +1,12 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { LastQueueSnapshot, LastQueueSnapshotEntry, QueueEntry, SnapshotTrack, Track, VolumeState } from "./domain";
+import { JsonRecoveryMessages, loadJsonRecord } from "./json-persistence";
 
 export type LastQueueSnapshotPersistence = {
   load(): Promise<LastQueueSnapshot | null>;
   save(snapshot: LastQueueSnapshot): Promise<void>;
+  drainRecoveryMessages?(): string[];
 };
 
 export class InMemoryLastQueueSnapshotPersistence implements LastQueueSnapshotPersistence {
@@ -20,20 +22,26 @@ export class InMemoryLastQueueSnapshotPersistence implements LastQueueSnapshotPe
 }
 
 export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersistence {
+  private recoveryMessages = new JsonRecoveryMessages();
+
   constructor(private readonly path: string) {}
 
   async load(): Promise<LastQueueSnapshot | null> {
-    try {
-      const raw = await readFile(this.path, "utf8");
-      return parseSnapshot(JSON.parse(raw));
-    } catch {
-      return null;
-    }
+    return loadJsonRecord({
+      path: this.path,
+      label: "Last Queue Snapshot",
+      recoveryMessages: this.recoveryMessages,
+      parse: parseSnapshot,
+    });
   }
 
   async save(snapshot: LastQueueSnapshot): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true });
     await Bun.write(this.path, `${JSON.stringify(snapshot, null, 2)}\n`);
+  }
+
+  drainRecoveryMessages(): string[] {
+    return this.recoveryMessages.drain();
   }
 }
 
