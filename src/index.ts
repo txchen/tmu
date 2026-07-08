@@ -7,6 +7,7 @@ export * from "./json-persistence";
 export * from "./main";
 export * from "./navidrome";
 export * from "./offline-youtube-cache";
+export * from "./packaging";
 export * from "./player";
 export * from "./preferences";
 export * from "./providers";

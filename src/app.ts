@@ -38,6 +38,7 @@ export type TmuAppOptions = {
 export type TmuRuntimeOptions = {
   configPath?: string;
   dependencyRunner?: DependencyCommandRunner;
+  startPlayer?: boolean;
 };
 
 export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoordinator } {
@@ -83,7 +84,8 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
   let dependencyHealth = await checkDependencyHealth(loaded.config, {
     runner: options.dependencyRunner,
   });
-  const player = dependencyHealth.playback.enabled
+  const shouldStartPlayer = options.startPlayer ?? true;
+  const player = dependencyHealth.playback.enabled && shouldStartPlayer
     ? new MpvPlayer({
       command: loaded.config.helpers.mpv,
       ipcPath: join(tmpdir(), `tmu-mpv-${process.pid}-${Date.now()}.sock`),
@@ -93,7 +95,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
     })
     : new NoopPlayer();
 
-  if (dependencyHealth.playback.enabled) {
+  if (dependencyHealth.playback.enabled && shouldStartPlayer) {
     try {
       await player.start();
     } catch (error) {
