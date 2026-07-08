@@ -36,6 +36,11 @@ export class TerminalTui {
     this.input.on("data", async (data) => {
       drewFromStateChange = false;
       for (const key of splitKeys(data)) {
+        if (this.app.coordinator.uiState.activePrompt === "local-open-path") {
+          const handled = await this.handlePromptKey(key);
+          if (handled) continue;
+        }
+
         const intent = intentFromKey(key);
         if (!intent) continue;
         await this.app.coordinator.dispatch(intent);
@@ -50,6 +55,34 @@ export class TerminalTui {
     });
   }
 
+  private async handlePromptKey(key: string): Promise<boolean> {
+    if (key === "\u0003") return false;
+
+    if (key === "\x1b") {
+      await this.app.coordinator.dispatch({ type: "cancelPrompt" });
+      return true;
+    }
+
+    if (key === "\r") {
+      await this.app.coordinator.dispatch({ type: "submitPrompt" });
+      return true;
+    }
+
+    if (key === "\x7f" || key === "\b") {
+      const current = this.app.coordinator.uiState.promptInput;
+      await this.app.coordinator.dispatch({ type: "setPromptInput", value: current.slice(0, -1) });
+      return true;
+    }
+
+    if (isPrintableKey(key)) {
+      const current = this.app.coordinator.uiState.promptInput;
+      await this.app.coordinator.dispatch({ type: "setPromptInput", value: `${current}${key}` });
+      return true;
+    }
+
+    return false;
+  }
+
   private draw(): void {
     this.output.write(`\x1b[2J\x1b[H${renderShellText(this.app.coordinator.appState, this.app.coordinator.uiState)}`);
   }
@@ -57,6 +90,7 @@ export class TerminalTui {
 
 export function intentFromKey(key: string): AppIntent | null {
   if (key === "q" || key === "\u0003") return { type: "quit" };
+  if (key === "\x1b") return { type: "cancelLocalOpen" };
   if (key === "\t") return { type: "cycleFocus" };
   if (key === " ") return { type: "togglePlayPause" };
   if (key === "n") return { type: "nextTrack" };
@@ -70,6 +104,7 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === "r") return { type: "toggleRepeatAll" };
   if (key === "S") return { type: "saveLastQueueSnapshot" };
   if (key === "R") return { type: "restoreLastQueueSnapshot" };
+  if (key === "o") return { type: "openLocalPathPrompt" };
   if (key === "x") return { type: "removeSelectedQueueEntry" };
   if (key === "c") return { type: "clearQueue" };
   if (key === "J") return { type: "moveSelectedQueueEntry", delta: 1 };
@@ -88,4 +123,8 @@ function splitKeys(data: string | Buffer): string[] {
   const raw = data.toString();
   if (raw.startsWith("\x1b[")) return [raw];
   return [...raw];
+}
+
+function isPrintableKey(key: string): boolean {
+  return key.length === 1 && key >= " " && key !== "\x7f";
 }

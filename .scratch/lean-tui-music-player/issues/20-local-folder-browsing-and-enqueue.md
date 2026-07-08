@@ -1,6 +1,6 @@
 # Local Folder Browsing And Enqueue
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 

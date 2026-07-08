@@ -42,6 +42,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
       ffprobeCommand: config.helpers.ffprobe,
       runner: options.dependencyRunner,
       metadataTimeoutMs: config.dependencyPolicy.checkTimeoutMs,
+      directorySoftCap: config.providers.local.directorySoftCap,
     },
   });
   const coordinator = new AppCoordinator({

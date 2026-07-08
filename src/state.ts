@@ -71,6 +71,7 @@ export function createInitialUiState(): UiState {
     selectedContentIndexByTarget,
     selectedQueueIndex: 0,
     activePrompt: null,
+    promptInput: "",
     filterText: "",
     scrollByPane: {
       targets: 0,

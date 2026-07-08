@@ -50,6 +50,7 @@ export class AppCoordinator {
   private readonly unsubscribeFromPlayer: () => void;
   private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<() => void>();
+  private activeLocalOpen: AbortController | null = null;
   private tornDown = false;
 
   constructor(options: AppCoordinatorOptions) {
@@ -113,6 +114,24 @@ export class AppCoordinator {
           return;
         case "enqueueSelectedTrack":
           await this.enqueueSelectedTrack();
+          return;
+        case "openLocalPathPrompt":
+          this.openLocalPathPrompt();
+          return;
+        case "setPromptInput":
+          this.setPromptInput(intent.value);
+          return;
+        case "submitPrompt":
+          await this.submitPrompt();
+          return;
+        case "cancelPrompt":
+          this.cancelPrompt();
+          return;
+        case "cancelLocalOpen":
+          this.cancelLocalOpen();
+          return;
+        case "openLocalPath":
+          await this.openLocalPath(intent.path, intent.signal);
           return;
         case "startSelectedQueueEntry":
           await this.startSelectedQueueEntry();
@@ -178,6 +197,8 @@ export class AppCoordinator {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
+    this.activeLocalOpen?.abort();
+    this.activeLocalOpen = null;
     this.unsubscribeFromPlayer();
     for (const unsubscribe of this.unsubscribeFromProviders) unsubscribe();
     await this.player.teardown();
@@ -197,6 +218,7 @@ export class AppCoordinator {
     this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
       ? "youtube-url"
       : null;
+    if (!this.uiState.activePrompt) this.uiState.promptInput = "";
     this.appState.lastEvent = `switched to ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
   }
 
@@ -261,6 +283,116 @@ export class AppCoordinator {
     this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
     this.appState.lastEvent = `added ${selected.title} to shared Queue`;
     this.syncQueueState();
+  }
+
+  private openLocalPathPrompt(): void {
+    this.uiState.activeTargetId = "local";
+    this.uiState.selectedTargetIndex = navigationTargetIndex("local");
+    this.uiState.focusedPane = "content";
+    this.uiState.activePrompt = "local-open-path";
+    this.uiState.promptInput = "";
+    this.appState.lastEvent = "opened Local path prompt";
+  }
+
+  private setPromptInput(value: string): void {
+    if (!this.uiState.activePrompt) return;
+    this.uiState.promptInput = value;
+  }
+
+  private async submitPrompt(): Promise<void> {
+    if (this.uiState.activePrompt === "local-open-path") {
+      const path = this.uiState.promptInput;
+      this.uiState.activePrompt = null;
+      this.uiState.promptInput = "";
+      this.startLocalOpen(path);
+      return;
+    }
+
+    if (this.uiState.activePrompt === "youtube-url") {
+      this.uiState.activePrompt = null;
+      this.uiState.promptInput = "";
+      this.appState.lastEvent = "YouTube URL Download is not implemented yet";
+    }
+  }
+
+  private cancelPrompt(): void {
+    if (!this.uiState.activePrompt) return;
+
+    this.uiState.activePrompt = null;
+    this.uiState.promptInput = "";
+    this.appState.lastEvent = "cancelled prompt";
+  }
+
+  private startLocalOpen(path: string): void {
+    this.activeLocalOpen?.abort();
+    const controller = new AbortController();
+    this.activeLocalOpen = controller;
+    this.appState.lastEvent = `opening Local path ${path}`;
+
+    void this.openLocalPath(path, controller.signal)
+      .catch((error) => {
+        if (this.tornDown) return;
+        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        if (this.activeLocalOpen === controller) this.activeLocalOpen = null;
+        this.notifyStateChanged();
+      });
+  }
+
+  private cancelLocalOpen(): void {
+    if (!this.activeLocalOpen) {
+      this.appState.lastEvent = "no active Local open";
+      return;
+    }
+
+    this.activeLocalOpen.abort();
+    this.appState.lastEvent = "cancelling Local open";
+  }
+
+  private async openLocalPath(path: string, signal?: AbortSignal): Promise<void> {
+    const localProvider = this.appState.providers.local;
+    if (!isLocalProvider(localProvider)) {
+      this.appState.lastEvent = "Local Provider cannot open paths";
+      return;
+    }
+
+    this.uiState.activeTargetId = "local";
+    this.uiState.selectedTargetIndex = navigationTargetIndex("local");
+    this.uiState.focusedPane = "content";
+    this.uiState.activePrompt = null;
+    this.uiState.promptInput = "";
+
+    const result = await localProvider.createTracksFromOpenPath(path, {
+      signal,
+      softCap: this.appState.config.providers.local.directorySoftCap,
+    });
+    let selectedEntry: QueueEntry | undefined;
+    for (const track of result.tracks) {
+      selectedEntry = this.queue.enqueue(track);
+    }
+
+    if (selectedEntry) {
+      this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(selectedEntry));
+    }
+
+    this.syncQueueState();
+    if (result.cancelled) {
+      this.appState.lastEvent = `cancelled Local open after ${result.tracks.length} Tracks`;
+      return;
+    }
+
+    if (result.capped) {
+      this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue; soft cap reached`;
+      return;
+    }
+
+    if (result.tracks.length === 0) {
+      this.appState.lastEvent = "no Local audio files found";
+      return;
+    }
+
+    this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue`;
   }
 
   private async startSelectedQueueEntry(): Promise<void> {

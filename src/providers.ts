@@ -1,5 +1,6 @@
 import { realpathSync, statSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import {
   createDefaultDependencyHealth,
   nodeDependencyCommandRunner,
@@ -16,6 +17,7 @@ import {
 } from "./domain";
 
 const LOCAL_PROVIDER_ID = "local";
+export const DEFAULT_LOCAL_DIRECTORY_SOFT_CAP = 10_000;
 
 const COMMON_AUDIO_EXTENSIONS = new Set([
   ".aac",
@@ -50,16 +52,29 @@ type FfprobeJson = {
 
 export type LocalTrackMetadataListener = (track: Track) => void;
 
+export type LocalOpenOptions = {
+  signal?: AbortSignal;
+  softCap?: number;
+};
+
+export type LocalOpenResult = {
+  tracks: Track[];
+  capped: boolean;
+  cancelled: boolean;
+};
+
 export type LocalProviderOptions = {
   dependencyHealth?: DependencyHealthState;
   ffprobeCommand?: string;
   runner?: DependencyCommandRunner;
   metadataTimeoutMs?: number;
   metadataConcurrency?: number;
+  directorySoftCap?: number;
 };
 
 export type LocalProvider = Provider & {
   createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
   onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void;
 };
 
@@ -98,6 +113,7 @@ class FileSystemLocalProvider implements LocalProvider {
   private readonly runner: DependencyCommandRunner;
   private readonly metadataTimeoutMs: number;
   private readonly metadataConcurrency: number;
+  private readonly directorySoftCap: number;
   private readonly tracks = new Map<string, Track>();
   private readonly metadataCache = new Map<string, Partial<Track>>();
   private readonly metadataInFlight = new Set<string>();
@@ -111,6 +127,7 @@ class FileSystemLocalProvider implements LocalProvider {
     this.runner = options.runner ?? nodeDependencyCommandRunner;
     this.metadataTimeoutMs = options.metadataTimeoutMs ?? 2000;
     this.metadataConcurrency = Math.max(1, Math.floor(options.metadataConcurrency ?? 2));
+    this.directorySoftCap = normalizeSoftCap(options.directorySoftCap ?? DEFAULT_LOCAL_DIRECTORY_SOFT_CAP);
   }
 
   listVisibleTracks(): readonly Track[] {
@@ -130,6 +147,52 @@ class FileSystemLocalProvider implements LocalProvider {
     return await this.probeAudio(file) ? this.acceptFile(file) : undefined;
   }
 
+  async createTracksFromOpenPath(path: string, options: LocalOpenOptions = {}): Promise<LocalOpenResult> {
+    const result: LocalOpenResult = {
+      tracks: [],
+      capped: false,
+      cancelled: false,
+    };
+    const selectedPath = path.trim();
+    if (!selectedPath) return result;
+
+    const softCap = normalizeSoftCap(options.softCap ?? this.directorySoftCap);
+    const addTrack = (track: Track | undefined) => {
+      if (result.tracks.length >= softCap) {
+        result.capped = true;
+        return;
+      }
+      if (!track) return;
+      result.tracks.push(track);
+      if (result.tracks.length >= softCap) result.capped = true;
+    };
+
+    const checkCancelled = () => {
+      if (!options.signal?.aborted) return false;
+      result.cancelled = true;
+      return true;
+    };
+
+    if (checkCancelled()) return result;
+
+    const selectedKind = await selectedLocalPathKind(selectedPath);
+    if (checkCancelled() || !selectedKind) return result;
+
+    if (selectedKind.kind === "file") {
+      addTrack(await this.createTrackFromCliArg(selectedPath));
+      return result;
+    }
+
+    if (selectedKind.kind === "directory-symlink") return result;
+
+    await this.walkDirectoryForOpenPath(selectedPath, {
+      result,
+      checkCancelled,
+      addTrack,
+    });
+    return result;
+  }
+
   async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
     if (identity.providerId !== LOCAL_PROVIDER_ID) {
       throw new Error(`Local Provider cannot resolve ${identity.providerId}`);
@@ -141,6 +204,50 @@ class FileSystemLocalProvider implements LocalProvider {
   onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void {
     this.metadataListeners.add(listener);
     return () => this.metadataListeners.delete(listener);
+  }
+
+  private async walkDirectoryForOpenPath(
+    directoryPath: string,
+    context: {
+      result: LocalOpenResult;
+      checkCancelled: () => boolean;
+      addTrack: (track: Track | undefined) => void;
+    },
+  ): Promise<void> {
+    if (context.checkCancelled() || context.result.capped) return;
+
+    let entries;
+    try {
+      entries = await readdir(directoryPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    if (context.checkCancelled()) return;
+
+    entries.sort((left, right) => comparePathNames(left.name, right.name));
+    for (const entry of entries) {
+      if (context.checkCancelled() || context.result.capped) return;
+
+      const entryPath = join(directoryPath, entry.name);
+      if (entry.isDirectory()) {
+        if (isHiddenPathSegment(entry.name)) continue;
+        await this.walkDirectoryForOpenPath(entryPath, context);
+        continue;
+      }
+
+      if (entry.isSymbolicLink()) {
+        if (!isCommonAudioExtension(entryPath)) continue;
+        const file = await canonicalLocalFileFromDirectoryEntry(entryPath);
+        if (context.checkCancelled()) return;
+        context.addTrack(file ? this.acceptFile(file) : undefined);
+        continue;
+      }
+
+      if (!entry.isFile() || !isCommonAudioExtension(entryPath)) continue;
+      const file = await canonicalLocalFileFromDirectoryEntry(entryPath);
+      if (context.checkCancelled()) return;
+      context.addTrack(file ? this.acceptFile(file) : undefined);
+    }
   }
 
   private acceptFile(file: CanonicalLocalFile): Track {
@@ -269,6 +376,7 @@ export function createLocalProvider(options: LocalProviderOptions = {}): LocalPr
 export function isLocalProvider(provider: Provider | undefined): provider is LocalProvider {
   return Boolean(provider)
     && typeof (provider as Partial<LocalProvider>).createTrackFromCliArg === "function"
+    && typeof (provider as Partial<LocalProvider>).createTracksFromOpenPath === "function"
     && typeof (provider as Partial<LocalProvider>).onTrackMetadataChange === "function";
 }
 
@@ -329,8 +437,61 @@ function canonicalLocalFileFromArg(path: string): CanonicalLocalFile | undefined
   }
 }
 
+async function selectedLocalPathKind(path: string): Promise<
+  | { kind: "file" }
+  | { kind: "directory" }
+  | { kind: "directory-symlink" }
+  | undefined
+> {
+  try {
+    const linkStat = await lstat(path);
+    if (linkStat.isSymbolicLink()) {
+      const targetStat = await stat(path);
+      if (targetStat.isDirectory()) return { kind: "directory-symlink" };
+      return targetStat.isFile() ? { kind: "file" } : undefined;
+    }
+
+    if (linkStat.isFile()) return { kind: "file" };
+    if (linkStat.isDirectory()) return { kind: "directory" };
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function canonicalLocalFileFromDirectoryEntry(path: string): Promise<CanonicalLocalFile | undefined> {
+  try {
+    const canonicalPath = await realpath(path);
+    const fileStat = await stat(canonicalPath);
+    if (!fileStat.isFile()) return undefined;
+
+    return {
+      path: canonicalPath,
+      title: basename(canonicalPath) || canonicalPath,
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function isCommonAudioExtension(path: string): boolean {
   return COMMON_AUDIO_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function isHiddenPathSegment(name: string): boolean {
+  return name.length > 1 && name.startsWith(".");
+}
+
+function comparePathNames(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+function normalizeSoftCap(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_LOCAL_DIRECTORY_SOFT_CAP;
+  return Math.max(0, Math.floor(value));
 }
 
 function parseFfprobeJson(stdout: string): FfprobeJson | null {

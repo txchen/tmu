@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,8 @@ import {
   createDefaultProviders,
   renderShellText,
   type DependencyCommandRunner,
+  type LocalOpenOptions,
+  type LocalOpenResult,
   type Player,
   type PlayerPlaybackState,
   type PlaybackLocator,
@@ -41,6 +43,41 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
     },
     async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
       return { kind: "file", path: `/resolved/${identity.providerId}/${identity.stableId}` };
+    },
+  };
+}
+
+function cancellableLocalProvider(): Provider & {
+  observedSignal: AbortSignal | null;
+  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
+  onTrackMetadataChange(listener: (track: Track) => void): () => void;
+} {
+  return {
+    id: "local",
+    label: "Local",
+    hint: "files and folders",
+    observedSignal: null,
+    listVisibleTracks() {
+      return [];
+    },
+    async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
+      return { kind: "file", path: identity.stableId };
+    },
+    async createTrackFromCliArg(_path: string): Promise<Track | undefined> {
+      return undefined;
+    },
+    async createTracksFromOpenPath(_path: string, options: LocalOpenOptions = {}): Promise<LocalOpenResult> {
+      this.observedSignal = options.signal ?? null;
+      if (!options.signal) return { tracks: [], capped: false, cancelled: false };
+      return await new Promise((resolve) => {
+        options.signal?.addEventListener("abort", () => {
+          resolve({ tracks: [], capped: false, cancelled: true });
+        }, { once: true });
+      });
+    },
+    onTrackMetadataChange(_listener: (track: Track) => void): () => void {
+      return () => undefined;
     },
   };
 }
@@ -282,6 +319,103 @@ describe("AppCoordinator", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("opens a local directory from the Provider Browsing Surface and enqueues into the shared Queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-local-open-"));
+    const album = join(dir, "album");
+    const first = join(album, "01-first.flac");
+    const second = join(album, "02-second.mp3");
+
+    try {
+      await mkdir(album, { recursive: true });
+      await writeFile(first, "not real audio");
+      await writeFile(second, "not real audio");
+      const { coordinator } = createTmuApp({
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            ffprobe: { name: "ffprobe", command: "ffprobe", status: "missing" },
+          },
+          metadata: {
+            degraded: true,
+            message: "Metadata degraded: ffprobe missing at ffprobe",
+          },
+        }),
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "openLocalPath", path: album });
+
+      expect(coordinator.uiState.activeTargetId).toBe("local");
+      expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual([
+        await realpath(first),
+        await realpath(second),
+      ]);
+      expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+        "01-first.flac",
+        "02-second.mp3",
+      ]);
+      expect(coordinator.appState.lastEvent).toBe("added 2 Local Tracks to shared Queue");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reports cancelled local open without enqueueing", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-local-open-"));
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      await writeFile(join(dir, "song.mp3"), "not real audio");
+      const { coordinator } = createTmuApp();
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "openLocalPath", path: dir, signal: controller.signal });
+
+      expect(coordinator.appState.queue.entries).toEqual([]);
+      expect(coordinator.appState.lastEvent).toBe("cancelled Local open after 0 Tracks");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("opens the Local path prompt from the TUI intent surface", async () => {
+    const { coordinator } = createTmuApp();
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "openLocalPathPrompt" });
+    await coordinator.dispatch({ type: "setPromptInput", value: "/music/album" });
+
+    expect(coordinator.uiState.activeTargetId).toBe("local");
+    expect(coordinator.uiState.focusedPane).toBe("content");
+    expect(coordinator.uiState.activePrompt).toBe("local-open-path");
+    expect(coordinator.uiState.promptInput).toBe("/music/album");
+  });
+
+  test("cancels an active Local open submitted from the prompt", async () => {
+    const local = cancellableLocalProvider();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "openLocalPathPrompt" });
+    await coordinator.dispatch({ type: "setPromptInput", value: "/music/huge" });
+    await coordinator.dispatch({ type: "submitPrompt" });
+
+    await waitFor(() => {
+      expect(local.observedSignal).not.toBeNull();
+    });
+    await coordinator.dispatch({ type: "cancelLocalOpen" });
+
+    await waitFor(() => {
+      expect(coordinator.appState.lastEvent).toBe("cancelled Local open after 0 Tracks");
+    });
+    expect(coordinator.appState.queue.entries).toEqual([]);
   });
 
   test("routes navigation intents through the coordinator into UI State", () => {

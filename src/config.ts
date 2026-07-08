@@ -11,6 +11,7 @@ export type TmuConfig = {
   providers: {
     local: {
       enabled: boolean;
+      directorySoftCap: number;
     };
     navidrome: {
       enabled: boolean;
@@ -88,6 +89,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     providers: {
       local: {
         enabled: true,
+        directorySoftCap: 10000,
       },
       navidrome: {
         enabled: false,

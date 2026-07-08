@@ -28,6 +28,7 @@ describe("TMU config", () => {
       clientName: "tmu",
       scrobble: true,
     });
+    expect(loaded.config.providers.local.directorySoftCap).toBe(10000);
     expect(loaded.config.offlineYouTubeCache.cacheDir).toContain("offline-youtube-cache");
     expect(loaded.config.persistence.lastQueueSnapshotPath).toContain("last-queue.json");
     expect(loaded.config.lowPower).toEqual({
@@ -46,6 +47,9 @@ describe("TMU config", () => {
         ytDlp: "/opt/bin/yt-dlp",
       },
       providers: {
+        local: {
+          directorySoftCap: 25,
+        },
         navidrome: {
           enabled: true,
           serverUrl: "https://music.example.test",
@@ -92,6 +96,7 @@ describe("TMU config", () => {
       password: "nav-password",
       scrobble: false,
     });
+    expect(loaded.config.providers.local.directorySoftCap).toBe(25);
     expect(loaded.config.providers.youtubeUrlDownload.enabled).toBe(false);
     expect(loaded.config.lowPower.playbackTickMs).toBe(1000);
     expect(loaded.config.lowPower.downloadProgressThrottleMs).toBe(500);

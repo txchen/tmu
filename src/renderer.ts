@@ -45,6 +45,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     return row(`${track.title}  ${track.providerLabel}`, selected, uiState.focusedPane === "content");
   });
   const providerSurfaceHealthLines = providerSurfaceHealthLinesFor(appState, uiState.activeTargetId);
+  const promptLines = providerSurfacePromptLines(uiState);
 
   return {
     title: "TMU",
@@ -55,7 +56,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     })),
     providerSurface: {
       title: activeTarget.label,
-      lines: [...providerSurfaceHealthLines, ...providerLines],
+      lines: [...providerSurfaceHealthLines, ...promptLines, ...providerLines],
       emptyMessage: emptyMessageFor(activeTarget.id),
     },
     queuePlayer: {
@@ -119,6 +120,7 @@ function emptyMessageFor(targetId: NavigationTarget["id"]): string {
   if (targetId === "youtube-url-download") {
     return "Provider Browsing Surface placeholder for the YouTube URL Download Flow";
   }
+  if (targetId === "local") return "Provider Browsing Surface has no Local Tracks opened";
   return "Provider Browsing Surface placeholder; provider behavior lands in later slices";
 }
 
@@ -127,6 +129,12 @@ function providerSurfaceHealthLinesFor(appState: AppState, targetId: NavigationT
 
   const message = youtubeDownloadHealthMessage(appState.dependencyHealth);
   return message ? [`! ${message}`] : [];
+}
+
+function providerSurfacePromptLines(uiState: UiState): string[] {
+  if (uiState.activePrompt === "local-open-path") return [`Open local path: ${uiState.promptInput}`];
+  if (uiState.activePrompt === "youtube-url") return [`YouTube URL: ${uiState.promptInput}`];
+  return [];
 }
 
 function dependencyHealthLines(health: DependencyHealthState): string[] {

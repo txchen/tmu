@@ -46,6 +46,11 @@ describe("intentFromKey", () => {
     expect(intentFromKey("-")).toEqual({ type: "adjustVolume", delta: -5 });
     expect(intentFromKey("+")).toEqual({ type: "adjustVolume", delta: 5 });
   });
+
+  test("maps local open key to the Local Provider Browsing Surface prompt", () => {
+    expect(intentFromKey("o")).toEqual({ type: "openLocalPathPrompt" });
+    expect(intentFromKey("\x1b")).toEqual({ type: "cancelLocalOpen" });
+  });
 });
 
 describe("TerminalTui", () => {

@@ -166,7 +166,8 @@ export type UiState = {
   selectedTargetIndex: number;
   selectedContentIndexByTarget: Record<NavigationTargetId, number>;
   selectedQueueIndex: number;
-  activePrompt: null | "youtube-url";
+  activePrompt: null | "youtube-url" | "local-open-path";
+  promptInput: string;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
 };
@@ -176,6 +177,12 @@ export type AppIntent =
   | { type: "moveSelection"; delta: number }
   | { type: "cycleFocus" }
   | { type: "enqueueSelectedTrack" }
+  | { type: "openLocalPathPrompt" }
+  | { type: "setPromptInput"; value: string }
+  | { type: "submitPrompt" }
+  | { type: "cancelPrompt" }
+  | { type: "cancelLocalOpen" }
+  | { type: "openLocalPath"; path: string; signal?: AbortSignal }
   | { type: "startSelectedQueueEntry" }
   | { type: "removeSelectedQueueEntry" }
   | { type: "moveSelectedQueueEntry"; delta: number }
