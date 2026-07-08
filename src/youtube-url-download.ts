@@ -1,4 +1,11 @@
+import { spawn } from "node:child_process";
+import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { OFFLINE_YOUTUBE_CACHE_PROVIDER_ID } from "./offline-youtube-cache";
+import {
+  writeOfflineYouTubeCacheMetadata,
+  type OfflineYouTubeCacheProviderOptions,
+} from "./offline-youtube-cache";
 import type {
   DependencyCommandRequest,
   DependencyCommandResult,
@@ -33,7 +40,68 @@ export type YouTubeIdentifyOptions = {
   timeoutMs: number;
   runner?: DependencyCommandRunner;
   cookiesFromBrowser?: string;
+  signal?: AbortSignal;
 };
+
+export type YouTubeDownloadProcessRequest = {
+  helper: "yt-dlp";
+  command: string;
+  args: string[];
+  graceKillMs: number;
+  signal?: AbortSignal;
+  onLine(line: string): void;
+};
+
+export type YouTubeDownloadProcessResult = DependencyCommandResult & {
+  cancelled?: boolean;
+  killed?: boolean;
+};
+
+export type YouTubeDownloadProcessRunner = (
+  request: YouTubeDownloadProcessRequest,
+) => Promise<YouTubeDownloadProcessResult>;
+
+export type YouTubeMediaValidationResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+export type YouTubeMediaValidator = (path: string) => Promise<YouTubeMediaValidationResult>;
+
+export type FfprobeYouTubeMediaValidatorOptions = {
+  command: string;
+  timeoutMs: number;
+  runner?: DependencyCommandRunner;
+};
+
+export type YouTubeDownloadOptions = {
+  url: string;
+  command: string;
+  cache: OfflineYouTubeCacheProviderOptions;
+  metadata: IdentifiedYouTubeMetadata;
+  cookiesFromBrowser?: string;
+  progressThrottleMs: number;
+  graceKillMs?: number;
+  signal?: AbortSignal;
+  runner?: YouTubeDownloadProcessRunner;
+  validateMedia: YouTubeMediaValidator;
+  onProgress?: (line: string) => void;
+  now?: () => number;
+};
+
+export type YouTubeDownloadResult =
+  | {
+    ok: true;
+    mediaPath: string;
+    metadataPath: string;
+    sourceMetadataPath: string;
+  }
+  | {
+    ok: false;
+    message: string;
+    cancelled?: boolean;
+  };
+
+export type YouTubeDownloader = (options: YouTubeDownloadOptions) => Promise<YouTubeDownloadResult>;
 
 type YtDlpInfoJson = {
   extractor_key?: unknown;
@@ -49,6 +117,23 @@ type YtDlpInfoJson = {
   live_status?: unknown;
   _type?: unknown;
 };
+
+type FfprobeAudioJson = {
+  streams?: Array<{ codec_type?: unknown }>;
+};
+
+type YouTubeSourceMetadata = {
+  version: 1;
+  url: string;
+  extractor: string;
+  id: string;
+  title: string;
+  artist?: string;
+  album?: string;
+  durationSeconds?: number;
+};
+
+const YOUTUBE_SOURCE_METADATA_FILE_NAME = "source.json";
 
 export function validateYouTubeUrlDownloadInput(input: string): YouTubeUrlValidationResult {
   const trimmed = input.trim();
@@ -121,9 +206,11 @@ export async function identifyYouTubeUrl(
   try {
     result = await runner(request);
   } catch (error) {
+    if (options.signal?.aborted) return { ok: false, message: "YouTube download cancelled" };
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
 
+  if (options.signal?.aborted) return { ok: false, message: "YouTube download cancelled" };
   if (result.exitCode !== 0) return { ok: false, message: identifyFailureMessage(result) };
 
   const parsed = parseYtDlpInfoJson(result.stdout);
@@ -146,6 +233,134 @@ export async function identifyYouTubeUrl(
   };
 }
 
+export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promise<YouTubeDownloadResult> {
+  const runner = options.runner ?? nodeYouTubeDownloadProcessRunner;
+  const paths = youtubeDownloadPaths(options.cache, options.metadata);
+  const progress = createDownloadProgressReporter(options);
+
+  await mkdir(paths.mediaDir, { recursive: true });
+  if (!await findDownloadedMediaFile(paths.mediaDir, paths.outputPrefix)) {
+    await rm(paths.archivePath, { force: true });
+  }
+  const result = await runner({
+    helper: "yt-dlp",
+    command: options.command,
+    args: createYouTubeDownloadArgs(options.url, options, paths),
+    graceKillMs: normalizeGraceKillMs(options.graceKillMs),
+    signal: options.signal,
+    onLine: progress.onLine,
+  });
+  progress.flush();
+
+  if (result.cancelled || options.signal?.aborted) {
+    return cancelledYouTubeDownload();
+  }
+
+  if (result.exitCode !== 0) return { ok: false, message: downloadFailureMessage(result) };
+
+  const mediaPath = await findDownloadedMediaFile(paths.mediaDir, paths.outputPrefix);
+  if (!mediaPath) {
+    return { ok: false, message: "yt-dlp download failed: downloaded media file was not found" };
+  }
+
+  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  const validation = await options.validateMedia(mediaPath);
+  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (!validation.ok) return { ok: false, message: validation.message };
+
+  const metadata = normalizedMetadataFields(options.metadata);
+  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  let sourceMetadataPath: string;
+  try {
+    sourceMetadataPath = await writeYouTubeSourceMetadata(paths.sourceMetadataPath, {
+      version: 1,
+      url: options.url,
+      ...metadata,
+    }, { signal: options.signal });
+  } catch (error) {
+    if (options.signal?.aborted) return cancelledYouTubeDownload();
+    throw error;
+  }
+  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  let metadataPath: string;
+  try {
+    metadataPath = await writeOfflineYouTubeCacheMetadata(options.cache, {
+      version: 1,
+      ...metadata,
+      mediaFileName: basename(mediaPath),
+    }, { signal: options.signal });
+  } catch (error) {
+    if (options.signal?.aborted) return cancelledYouTubeDownload();
+    throw error;
+  }
+  if (options.signal?.aborted) return cancelledYouTubeDownload();
+
+  return { ok: true, mediaPath, metadataPath, sourceMetadataPath };
+}
+
+export function createFfprobeYouTubeMediaValidator(
+  options: FfprobeYouTubeMediaValidatorOptions,
+): YouTubeMediaValidator {
+  const runner = options.runner ?? nodeDependencyCommandRunner;
+  return async (path: string): Promise<YouTubeMediaValidationResult> => {
+    let result: DependencyCommandResult;
+    try {
+      result = await runner({
+        helper: "ffprobe",
+        command: options.command,
+        args: [
+          "-v",
+          "error",
+          "-select_streams",
+          "a:0",
+          "-show_entries",
+          "stream=codec_type",
+          "-of",
+          "json",
+          path,
+        ],
+        timeoutMs: normalizeTimeoutMs(options.timeoutMs),
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Downloaded media validation failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+
+    if (result.exitCode !== 0) {
+      const details = cleanProcessText(result.stderr) || result.errorMessage || "ffprobe could not read the downloaded media";
+      return { ok: false, message: `Downloaded media validation failed: ${details}` };
+    }
+
+    const parsed = parseFfprobeAudioJson(result.stdout);
+    if (!parsed?.streams?.some((stream) => stream.codec_type === "audio")) {
+      return { ok: false, message: "Downloaded media validation failed: no audio stream found" };
+    }
+
+    return { ok: true };
+  };
+}
+
+export function parseYtDlpDownloadProgressLine(line: string): string | undefined {
+  const cleaned = line.trim().replace(/\s+/g, " ");
+  if (!cleaned) return undefined;
+
+  const destination = cleaned.match(/^\[download\] Destination: (.+)$/i);
+  if (destination?.[1]) return `download destination: ${basename(destination[1])}`;
+
+  const percent = cleaned.match(/^\[download\].*?\b(\d+(?:\.\d+)?)%/i);
+  if (!percent?.[1]) return undefined;
+
+  const speed = cleaned.match(/\bat\s+([^\s]+\/s)\b/i)?.[1];
+  const eta = cleaned.match(/\bETA\s+([^\s]+)/i)?.[1];
+  return [
+    `download ${percent[1]}%`,
+    speed ? `at ${speed}` : undefined,
+    eta ? `ETA ${eta}` : undefined,
+  ].filter(Boolean).join(" ");
+}
+
 function createYouTubeIdentifyRequest(
   url: string,
   options: YouTubeIdentifyOptions,
@@ -162,7 +377,91 @@ function createYouTubeIdentifyRequest(
       url,
     ],
     timeoutMs: normalizeTimeoutMs(options.timeoutMs),
+    ...(options.signal ? { signal: options.signal } : {}),
   };
+}
+
+function createYouTubeDownloadArgs(
+  url: string,
+  options: YouTubeDownloadOptions,
+  paths: ReturnType<typeof youtubeDownloadPaths>,
+): string[] {
+  return [
+    "--no-playlist",
+    "--format",
+    "bestaudio/best",
+    "--continue",
+    "--part",
+    "--newline",
+    "--progress",
+    "--download-archive",
+    paths.archivePath,
+    "--output",
+    paths.outputTemplate,
+    ...cookiesFromBrowserArgs(options.cookiesFromBrowser),
+    "--",
+    url,
+  ];
+}
+
+function youtubeDownloadPaths(cache: OfflineYouTubeCacheProviderOptions, metadata: IdentifiedYouTubeMetadata) {
+  const entryDir = join(cache.cacheDir, metadata.extractor, metadata.id);
+  const mediaDir = join(entryDir, cache.mediaDirName);
+  const outputPrefix = `${metadata.extractor}-${metadata.id}`;
+  return {
+    entryDir,
+    mediaDir,
+    archivePath: join(entryDir, "download-archive.txt"),
+    sourceMetadataPath: join(entryDir, YOUTUBE_SOURCE_METADATA_FILE_NAME),
+    outputPrefix,
+    outputTemplate: join(mediaDir, `${outputPrefix}.%(ext)s`),
+  };
+}
+
+function normalizedMetadataFields(metadata: IdentifiedYouTubeMetadata): Omit<YouTubeSourceMetadata, "version" | "url"> {
+  return {
+    extractor: metadata.extractor,
+    id: metadata.id,
+    title: metadata.title,
+    ...(metadata.artist ? { artist: metadata.artist } : {}),
+    ...(metadata.album ? { album: metadata.album } : {}),
+    ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
+  };
+}
+
+function cancelledYouTubeDownload(): YouTubeDownloadResult {
+  return { ok: false, message: "YouTube download cancelled", cancelled: true };
+}
+
+async function writeYouTubeSourceMetadata(
+  path: string,
+  metadata: YouTubeSourceMetadata,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  throwIfAborted(options.signal);
+  await mkdir(dirname(path), { recursive: true });
+  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+
+  try {
+    throwIfAborted(options.signal);
+    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: "utf8", signal: options.signal });
+    throwIfAborted(options.signal);
+    await rename(tempPath, path);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  return path;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw cancelledError();
+}
+
+function cancelledError(): Error {
+  return new Error("YouTube download cancelled");
 }
 
 function normalizeIdentifiedMetadata(info: YtDlpInfoJson): IdentifiedYouTubeMetadata | undefined {
@@ -187,6 +486,61 @@ function normalizeIdentifiedMetadata(info: YtDlpInfoJson): IdentifiedYouTubeMeta
   return metadata;
 }
 
+function createDownloadProgressReporter(options: YouTubeDownloadOptions) {
+  const onProgress = options.onProgress;
+  const now = options.now ?? Date.now;
+  const throttleMs = normalizeProgressThrottleMs(options.progressThrottleMs);
+  let lastEmittedAt: number | null = null;
+  let pending: string | null = null;
+
+  return {
+    onLine(line: string): void {
+      const parsed = parseYtDlpDownloadProgressLine(line);
+      if (!parsed || !onProgress) return;
+
+      const currentTime = now();
+      if (lastEmittedAt === null || currentTime - lastEmittedAt >= throttleMs) {
+        lastEmittedAt = currentTime;
+        pending = null;
+        onProgress(parsed);
+        return;
+      }
+
+      pending = parsed;
+    },
+    flush(): void {
+      if (!pending || !onProgress) return;
+      const flushed = pending;
+      pending = null;
+      lastEmittedAt = now();
+      onProgress(flushed);
+    },
+  };
+}
+
+async function findDownloadedMediaFile(mediaDir: string, outputPrefix: string): Promise<string | undefined> {
+  let entries;
+  try {
+    entries = await readdir(mediaDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+
+  const candidates = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) =>
+      name.startsWith(`${outputPrefix}.`)
+      && !name.endsWith(".part")
+      && !name.endsWith(".ytdl")
+      && !name.endsWith(".tmp")
+    )
+    .sort();
+
+  const fileName = candidates[0];
+  return fileName ? join(mediaDir, fileName) : undefined;
+}
+
 function identifyFailureMessage(result: DependencyCommandResult): string {
   const errorText = cleanProcessText(result.stderr);
   if (errorText && isExplanatoryYtDlpFailure(errorText)) return `yt-dlp identify failed: ${errorText}`;
@@ -196,6 +550,13 @@ function identifyFailureMessage(result: DependencyCommandResult): string {
   if (result.errorMessage) return `yt-dlp identify failed: ${result.errorMessage}`;
   if (errorText) return `yt-dlp identify failed: ${errorText}`;
   return "yt-dlp identify failed";
+}
+
+function downloadFailureMessage(result: YouTubeDownloadProcessResult): string {
+  const errorText = cleanProcessText(result.stderr);
+  if (errorText) return `yt-dlp download failed: ${errorText}`;
+  if (result.errorMessage) return `yt-dlp download failed: ${result.errorMessage}`;
+  return "yt-dlp download failed";
 }
 
 function isExplanatoryYtDlpFailure(text: string): boolean {
@@ -211,6 +572,15 @@ function parseYtDlpInfoJson(stdout: string): YtDlpInfoJson | null {
   try {
     const parsed = JSON.parse(stdout) as unknown;
     return typeof parsed === "object" && parsed !== null ? parsed as YtDlpInfoJson : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseFfprobeAudioJson(stdout: string): FfprobeAudioJson | null {
+  try {
+    const parsed = JSON.parse(stdout) as unknown;
+    return typeof parsed === "object" && parsed !== null ? parsed as FfprobeAudioJson : null;
   } catch {
     return null;
   }
@@ -266,6 +636,14 @@ function normalizeTimeoutMs(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 2000;
 }
 
+function normalizeProgressThrottleMs(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 500;
+}
+
+function normalizeGraceKillMs(value: number | undefined): number {
+  return Number.isFinite(value) && value !== undefined && value > 0 ? Math.floor(value) : 1500;
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -288,4 +666,92 @@ function cleanProcessText(value: string): string {
     .map((line) => line.trim())
     .filter(Boolean)
     .join(" ");
+}
+
+export const nodeYouTubeDownloadProcessRunner: YouTubeDownloadProcessRunner = (request) => {
+  return new Promise((resolve) => {
+    const child = spawn(request.command, request.args, {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdoutLines = new LineReader(request.onLine);
+    const stderrLines = new LineReader(request.onLine);
+    let stdout = "";
+    let stderr = "";
+    let errorMessage: string | undefined;
+    let cancelled = false;
+    let killed = false;
+    let forceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearForceTimer = () => {
+      if (!forceTimer) return;
+      clearTimeout(forceTimer);
+      forceTimer = null;
+    };
+    const abort = () => {
+      cancelled = true;
+      if (child.exitCode !== null) return;
+
+      child.kill("SIGTERM");
+      forceTimer = setTimeout(() => {
+        if (child.exitCode !== null) return;
+        killed = child.kill("SIGKILL") || killed;
+      }, request.graceKillMs);
+    };
+    const cleanup = () => {
+      clearForceTimer();
+      request.signal?.removeEventListener("abort", abort);
+    };
+
+    child.stdout?.on("data", (chunk) => {
+      const text = String(chunk);
+      stdout += text;
+      stdoutLines.push(text);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const text = String(chunk);
+      stderr += text;
+      stderrLines.push(text);
+    });
+    child.on("error", (error) => {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    });
+    child.on("close", (code) => {
+      stdoutLines.flush();
+      stderrLines.flush();
+      cleanup();
+      resolve({
+        exitCode: typeof code === "number" ? code : null,
+        stdout,
+        stderr,
+        errorMessage,
+        cancelled,
+        killed,
+      });
+    });
+
+    if (request.signal?.aborted) {
+      abort();
+    } else {
+      request.signal?.addEventListener("abort", abort, { once: true });
+    }
+  });
+};
+
+class LineReader {
+  private buffered = "";
+
+  constructor(private readonly onLine: (line: string) => void) {}
+
+  push(text: string): void {
+    this.buffered += text;
+    const lines = this.buffered.split(/\r?\n/);
+    this.buffered = lines.pop() ?? "";
+    for (const line of lines) this.onLine(line);
+  }
+
+  flush(): void {
+    if (!this.buffered) return;
+    this.onLine(this.buffered);
+    this.buffered = "";
+  }
 }

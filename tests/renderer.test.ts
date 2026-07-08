@@ -234,6 +234,25 @@ describe("renderShell", () => {
     expect(text).not.toContain("secret-salt");
   });
 
+  test("renders YouTube download progress lines on the YouTube URL Download surface", async () => {
+    const { coordinator } = createTmuApp();
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    coordinator.appState.downloads = {
+      active: true,
+      lines: [
+        "download 12.5% at 1.00MiB/s ETA 00:07",
+        "download destination: youtube-AbC123.webm",
+      ],
+    };
+
+    const shell = renderShell(coordinator.appState, coordinator.uiState);
+
+    expect(shell.providerSurface.lines).toContain("download 12.5% at 1.00MiB/s ETA 00:07");
+    expect(shell.providerSurface.lines).toContain("download destination: youtube-AbC123.webm");
+  });
+
   test("renders Navidrome missing-config Provider state", async () => {
     const { coordinator } = createTmuApp();
 

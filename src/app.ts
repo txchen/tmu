@@ -17,6 +17,7 @@ import type { DependencyHealthRefresh } from "./coordinator";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
 import type { NavidromeFetcher } from "./navidrome";
+import type { YouTubeDownloader } from "./youtube-url-download";
 
 export type TmuAppOptions = {
   config?: TmuConfigInput;
@@ -27,6 +28,7 @@ export type TmuAppOptions = {
   snapshotPersistence?: LastQueueSnapshotPersistence;
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
+  youtubeDownloader?: YouTubeDownloader;
   navidromeFetcher?: NavidromeFetcher;
   navidromeSaltFactory?: () => string;
 };
@@ -67,6 +69,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     refreshDependencyHealth: options.refreshDependencyHealth,
     snapshotPersistence: options.snapshotPersistence,
     dependencyRunner: options.dependencyRunner,
+    youtubeDownloader: options.youtubeDownloader,
   });
 
   return { coordinator };

@@ -29,6 +29,9 @@ import {
   type TmuConfigInput,
   type Track,
   type TrackIdentity,
+  type YouTubeDownloader,
+  type YouTubeDownloadOptions,
+  type YouTubeDownloadResult,
 } from "../src/index";
 
 function track(providerId: string, stableId: string, title: string): Track {
@@ -1654,6 +1657,9 @@ describe("AppCoordinator", () => {
       await coordinator.dispatch({ type: "setPromptInput", value: "https://music.youtube.com/watch?v=AbC123" });
       await coordinator.dispatch({ type: "submitPrompt" });
 
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries).toHaveLength(1);
+      });
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
         helper: "yt-dlp",
@@ -1667,7 +1673,6 @@ describe("AppCoordinator", () => {
         "--",
         "https://music.youtube.com/watch?v=AbC123",
       ]);
-      expect(coordinator.appState.queue.entries).toHaveLength(1);
       expect(coordinator.appState.queue.entries[0]).toMatchObject({
         availability: { status: "available" },
         track: {
@@ -1686,7 +1691,7 @@ describe("AppCoordinator", () => {
     }
   });
 
-  test("does not enqueue or redownload when identified cache metadata has no media file", async () => {
+  test("downloads an identified cache miss, refreshes the Offline YouTube Cache, and enqueues the cached Track", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-url-cache-miss-"));
     const requests: DependencyCommandRequest[] = [];
     const runner: DependencyCommandRunner = async (request) => {
@@ -1696,9 +1701,33 @@ describe("AppCoordinator", () => {
         stdout: JSON.stringify({
           extractor_key: "YouTube",
           id: "Missing123",
-          title: "Missing Cached Media",
+          title: "Downloaded Prompt Track",
+          uploader: "Prompt Artist",
+          duration: 205,
         }),
         stderr: "",
+      };
+    };
+    const downloaderCalls: YouTubeDownloadOptions[] = [];
+    const downloader: YouTubeDownloader = async (options) => {
+      downloaderCalls.push(options);
+      options.onProgress?.("download 50.0% at 1.00MiB/s ETA 00:01");
+      await mkdir(join(dir, "youtube", "Missing123", "media"), { recursive: true });
+      await writeFile(join(dir, "youtube", "Missing123", "media", "youtube-Missing123.webm"), "audio bytes");
+      await writeOfflineYouTubeCacheMetadata(options.cache, {
+        version: 1,
+        extractor: options.metadata.extractor,
+        id: options.metadata.id,
+        title: options.metadata.title,
+        artist: options.metadata.artist,
+        durationSeconds: options.metadata.durationSeconds,
+        mediaFileName: "youtube-Missing123.webm",
+      });
+      return {
+        ok: true,
+        mediaPath: join(dir, "youtube", "Missing123", "media", "youtube-Missing123.webm"),
+        metadataPath: join(dir, "youtube", "Missing123", "metadata.json"),
+        sourceMetadataPath: join(dir, "youtube", "Missing123", "source.json"),
       };
     };
 
@@ -1711,7 +1740,7 @@ describe("AppCoordinator", () => {
         version: 1,
         extractor: "youtube",
         id: "Missing123",
-        title: "Missing Cached Media",
+        title: "Old Missing Cached Media",
         mediaFileName: "missing.opus",
       });
       const { coordinator } = createTmuApp({
@@ -1723,6 +1752,7 @@ describe("AppCoordinator", () => {
           },
         },
         dependencyRunner: runner,
+        youtubeDownloader: downloader,
       });
 
       await coordinator.start([]);
@@ -1730,15 +1760,292 @@ describe("AppCoordinator", () => {
       await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Missing123" });
       await coordinator.dispatch({ type: "submitPrompt" });
 
+      await waitFor(() => {
+        expect(coordinator.appState.queue.entries).toHaveLength(1);
+      });
       expect(requests).toHaveLength(1);
-      expect(coordinator.appState.queue.entries).toEqual([]);
-      expect(coordinator.appState.downloads).toEqual({ active: false, lines: [] });
-      expect(coordinator.appState.lastEvent).toBe(
-        "Offline YouTube Cache entry is incomplete: Cached media file is missing",
-      );
+      expect(downloaderCalls).toHaveLength(1);
+      expect(downloaderCalls[0]).toMatchObject({
+        url: "https://www.youtube.com/watch?v=Missing123",
+        command: "yt-dlp",
+        cache: {
+          cacheDir: dir,
+          mediaDirName: "media",
+          metadataFileName: "metadata.json",
+        },
+        metadata: {
+          extractor: "youtube",
+          id: "Missing123",
+          title: "Downloaded Prompt Track",
+          artist: "Prompt Artist",
+          durationSeconds: 205,
+        },
+        progressThrottleMs: 500,
+      });
+      expect(coordinator.appState.queue.entries[0]).toMatchObject({
+        availability: { status: "available" },
+        track: {
+          identity: { providerId: "offline-youtube-cache", stableId: "youtube:Missing123" },
+          title: "Downloaded Prompt Track",
+          artist: "Prompt Artist",
+          durationSeconds: 205,
+        },
+      });
+      expect(coordinator.appState.downloads.active).toBe(false);
+      expect(coordinator.appState.lastEvent).toBe("added Downloaded Prompt Track to shared Queue");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("runs one YouTube download at a time by default and keeps progress in App State", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-one-at-a-time-"));
+    const runner: DependencyCommandRunner = async (request) => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        extractor_key: "YouTube",
+        id: request.args.at(-1)?.toString().includes("Second") ? "Second" : "First",
+        title: request.args.at(-1)?.toString().includes("Second") ? "Second Track" : "First Track",
+      }),
+      stderr: "",
+    });
+    let finishFirst: ((result: YouTubeDownloadResult) => void) | undefined;
+    const downloaderCalls: YouTubeDownloadOptions[] = [];
+    const downloader: YouTubeDownloader = async (options) => {
+      downloaderCalls.push(options);
+      options.onProgress?.("download 10.0% at 1.00MiB/s ETA 00:09");
+      return await new Promise<YouTubeDownloadResult>((resolve) => {
+        finishFirst = resolve;
+      });
+    };
+
+    try {
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        dependencyRunner: runner,
+        youtubeDownloader: downloader,
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=First" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+      await waitFor(() => {
+        expect(coordinator.appState.downloads).toEqual({
+          active: true,
+          lines: ["download 10.0% at 1.00MiB/s ETA 00:09"],
+        });
+      });
+
+      await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Second" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+
+      expect(downloaderCalls).toHaveLength(1);
+      expect(coordinator.appState.lastEvent).toBe("YouTube download already in progress");
+
+      await mkdir(join(dir, "youtube", "First", "media"), { recursive: true });
+      await writeFile(join(dir, "youtube", "First", "media", "youtube-First.webm"), "audio bytes");
+      await writeOfflineYouTubeCacheMetadata({
+        cacheDir: dir,
+        mediaDirName: "media",
+        metadataFileName: "metadata.json",
+      }, {
+        version: 1,
+        extractor: "youtube",
+        id: "First",
+        title: "First Track",
+        mediaFileName: "youtube-First.webm",
+      });
+      finishFirst?.({
+        ok: true,
+        mediaPath: join(dir, "youtube", "First", "media", "youtube-First.webm"),
+        metadataPath: join(dir, "youtube", "First", "metadata.json"),
+        sourceMetadataPath: join(dir, "youtube", "First", "source.json"),
+      });
+
+      await waitFor(() => {
+        expect(coordinator.appState.lastEvent).toBe("added First Track to shared Queue");
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels an active YouTube download through a narrow App intent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cancel-"));
+    const runner: DependencyCommandRunner = async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        extractor_key: "YouTube",
+        id: "CancelMe",
+        title: "Cancel Track",
+      }),
+      stderr: "",
+    });
+    let observedSignal: AbortSignal | undefined;
+    const downloader: YouTubeDownloader = async (options) => {
+      observedSignal = options.signal;
+      options.onProgress?.("download 1.0% at 10.00KiB/s ETA 10:00");
+      return await new Promise<YouTubeDownloadResult>((resolve) => {
+        options.signal?.addEventListener("abort", () => {
+          resolve({ ok: false, message: "YouTube download cancelled", cancelled: true });
+        }, { once: true });
+      });
+    };
+
+    try {
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        dependencyRunner: runner,
+        youtubeDownloader: downloader,
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelMe" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+      await waitFor(() => {
+        expect(observedSignal).not.toBeUndefined();
+      });
+
+      await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+
+      await waitFor(() => {
+        expect(observedSignal?.aborted).toBe(true);
+        expect(coordinator.appState.downloads.active).toBe(false);
+        expect(coordinator.appState.lastEvent).toBe("YouTube download cancelled");
+      });
+      expect(coordinator.appState.queue.entries).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not enqueue when a YouTube downloader resolves success after cancellation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cancel-success-"));
+    const runner: DependencyCommandRunner = async () => ({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        extractor_key: "YouTube",
+        id: "CancelSuccess",
+        title: "Cancel Success Track",
+      }),
+      stderr: "",
+    });
+    let observedSignal: AbortSignal | undefined;
+    const downloader: YouTubeDownloader = async (options) => {
+      observedSignal = options.signal;
+      return await new Promise<YouTubeDownloadResult>((resolve) => {
+        options.signal?.addEventListener("abort", () => {
+          void (async () => {
+            await mkdir(join(dir, "youtube", "CancelSuccess", "media"), { recursive: true });
+            await writeFile(join(dir, "youtube", "CancelSuccess", "media", "youtube-CancelSuccess.webm"), "audio bytes");
+            const metadataPath = await writeOfflineYouTubeCacheMetadata(options.cache, {
+              version: 1,
+              extractor: options.metadata.extractor,
+              id: options.metadata.id,
+              title: options.metadata.title,
+              mediaFileName: "youtube-CancelSuccess.webm",
+            });
+            resolve({
+              ok: true,
+              mediaPath: join(dir, "youtube", "CancelSuccess", "media", "youtube-CancelSuccess.webm"),
+              metadataPath,
+              sourceMetadataPath: join(dir, "youtube", "CancelSuccess", "source.json"),
+            });
+          })();
+        }, { once: true });
+      });
+    };
+
+    try {
+      const { coordinator } = createTmuApp({
+        config: {
+          offlineYouTubeCache: {
+            cacheDir: dir,
+            mediaDirName: "media",
+            metadataFileName: "metadata.json",
+          },
+        },
+        dependencyRunner: runner,
+        youtubeDownloader: downloader,
+      });
+
+      await coordinator.start([]);
+      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelSuccess" });
+      await coordinator.dispatch({ type: "submitPrompt" });
+      await waitFor(() => {
+        expect(observedSignal).not.toBeUndefined();
+      });
+
+      await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+
+      await waitFor(() => {
+        expect(coordinator.appState.downloads.active).toBe(false);
+        expect(coordinator.appState.lastEvent).toBe("YouTube download cancelled");
+      });
+      expect(observedSignal?.aborted).toBe(true);
+      expect(coordinator.appState.queue.entries).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancels active YouTube identify before a download starts", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const runner: DependencyCommandRunner = async (request) => {
+      observedSignal = request.signal;
+      return await new Promise((resolve) => {
+        request.signal?.addEventListener("abort", () => {
+          resolve({
+            exitCode: null,
+            stdout: "",
+            stderr: "",
+            errorMessage: "identify aborted",
+          });
+        }, { once: true });
+      });
+    };
+    const downloaderCalls: YouTubeDownloadOptions[] = [];
+    const downloader: YouTubeDownloader = async (options) => {
+      downloaderCalls.push(options);
+      return { ok: false, message: "download should not start" };
+    };
+    const { coordinator } = createTmuApp({
+      dependencyRunner: runner,
+      youtubeDownloader: downloader,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelIdentify" });
+    await coordinator.dispatch({ type: "submitPrompt" });
+    await waitFor(() => {
+      expect(observedSignal).not.toBeUndefined();
+    });
+
+    await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+
+    await waitFor(() => {
+      expect(observedSignal?.aborted).toBe(true);
+      expect(coordinator.appState.downloads.active).toBe(false);
+      expect(coordinator.appState.lastEvent).toBe("YouTube download cancelled");
+    });
+    expect(downloaderCalls).toEqual([]);
   });
 
   test("surfaces yt-dlp identify stderr from the YouTube URL prompt without starting a download", async () => {
@@ -1758,12 +2065,14 @@ describe("AppCoordinator", () => {
     await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=BotCheck" });
     await coordinator.dispatch({ type: "submitPrompt" });
 
+    await waitFor(() => {
+      expect(coordinator.appState.lastEvent).toBe(
+        "yt-dlp identify failed: ERROR: [youtube] BotCheck: Sign in to confirm you are not a bot.",
+      );
+    });
     expect(requests).toHaveLength(1);
     expect(coordinator.appState.queue.entries).toEqual([]);
     expect(coordinator.appState.downloads).toEqual({ active: false, lines: [] });
-    expect(coordinator.appState.lastEvent).toBe(
-      "yt-dlp identify failed: ERROR: [youtube] BotCheck: Sign in to confirm you are not a bot.",
-    );
   });
 
   test("keeps all issue-15 navigation targets as siblings", () => {

@@ -443,6 +443,7 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === "f") return { type: "refreshNavidromeLibrary" };
   if (key === "/") return { type: "openNavidromeSearchPrompt" };
   if (key === "o") return { type: "openLocalPathPrompt" };
+  if (key === "d") return { type: "cancelYouTubeDownload" };
   if (key === "x") return { type: "removeSelectedQueueEntry" };
   if (key === "c") return { type: "clearQueue" };
   if (key === "J") return { type: "moveSelectedQueueEntry", delta: 1 };

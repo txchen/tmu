@@ -189,7 +189,10 @@ function providerSurfaceStatusLinesFor(appState: AppState, uiState: UiState): st
   if (targetId !== "youtube-url-download") return [];
 
   const message = youtubeDownloadHealthMessage(appState.dependencyHealth);
-  return message ? [`! ${message}`] : [];
+  return [
+    ...(message ? [`! ${message}`] : []),
+    ...appState.downloads.lines,
+  ];
 }
 
 function navidromeLibraryBrowserEntryLine(

@@ -94,6 +94,10 @@ describe("intentFromKey", () => {
     expect(intentFromKey("\x1b")).toEqual({ type: "cancelLocalOpen" });
   });
 
+  test("maps YouTube URL Download cancellation key", () => {
+    expect(intentFromKey("d")).toEqual({ type: "cancelYouTubeDownload" });
+  });
+
   test("maps Provider Browsing Surface action keys", () => {
     expect(intentFromKey("\r")).toEqual({ type: "activateSelectedContent" });
     expect(intentFromKey("a")).toEqual({ type: "enqueueSelectedTrack" });

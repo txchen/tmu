@@ -1,6 +1,6 @@
 # YouTube Download Progress, Cancellation, And Cookies
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -12,16 +12,16 @@ Complete the YouTube URL Download Flow by running yt-dlp downloads for cache mis
 
 ## Acceptance criteria
 
-- [ ] Cache misses download with no-playlist behavior, best audio, stable output naming, resume-capable partial files, and a download archive as a secondary guard.
-- [ ] Only one YouTube download runs at a time by default.
-- [ ] Download progress is parsed from line-oriented yt-dlp output and throttled for TUI display.
-- [ ] Cancellation terminates the yt-dlp child process and force-kills after a short grace period if needed.
-- [ ] Successful downloads validate the media file before writing normalized TMU metadata.
-- [ ] Normalized cache metadata is written atomically.
-- [ ] Successful downloads enqueue the resulting cached Track.
-- [ ] Optional cookies-from-browser config is passed as a single yt-dlp argument.
-- [ ] Browser cookies are not copied into TMU storage.
-- [ ] Tests cover download command shape, one-download default, progress parsing and throttling, cancellation, media validation, atomic metadata write, enqueue, cookies argument handling, and failure stderr surfacing.
+- [x] Cache misses download with no-playlist behavior, best audio, stable output naming, resume-capable partial files, and a download archive as a secondary guard.
+- [x] Only one YouTube download runs at a time by default.
+- [x] Download progress is parsed from line-oriented yt-dlp output and throttled for TUI display.
+- [x] Cancellation terminates the yt-dlp child process and force-kills after a short grace period if needed.
+- [x] Successful downloads validate the media file before writing normalized TMU metadata.
+- [x] Normalized cache metadata is written atomically.
+- [x] Successful downloads enqueue the resulting cached Track.
+- [x] Optional cookies-from-browser config is passed as a single yt-dlp argument.
+- [x] Browser cookies are not copied into TMU storage.
+- [x] Tests cover download command shape, one-download default, progress parsing and throttling, cancellation, media validation, atomic metadata write, enqueue, cookies argument handling, and failure stderr surfacing.
 
 ## Blocked by
 

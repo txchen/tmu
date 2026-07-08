@@ -69,19 +69,27 @@ export function isOfflineYouTubeCacheProvider(
 export async function writeOfflineYouTubeCacheMetadata(
   options: OfflineYouTubeCacheProviderOptions,
   metadata: OfflineYouTubeCacheMetadata,
+  writeOptions: { signal?: AbortSignal } = {},
 ): Promise<string> {
   const normalized = normalizeMetadata(metadata);
   if (!normalized) {
     throw new Error("Offline YouTube Cache metadata is invalid");
   }
 
+  throwIfAborted(writeOptions.signal);
   const entryDir = join(options.cacheDir, normalized.extractor, normalized.id);
   await mkdir(join(entryDir, options.mediaDirName), { recursive: true });
   const metadataPath = join(entryDir, options.metadataFileName);
   const tempPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(serializableMetadata(normalized), null, 2)}\n`, "utf8");
 
   try {
+    throwIfAborted(writeOptions.signal);
+    await writeFile(
+      tempPath,
+      `${JSON.stringify(serializableMetadata(normalized), null, 2)}\n`,
+      { encoding: "utf8", signal: writeOptions.signal },
+    );
+    throwIfAborted(writeOptions.signal);
     await rename(tempPath, metadataPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
@@ -89,6 +97,11 @@ export async function writeOfflineYouTubeCacheMetadata(
   }
 
   return metadataPath;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  throw new Error("YouTube download cancelled");
 }
 
 class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvider {

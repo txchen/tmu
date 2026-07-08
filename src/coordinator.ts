@@ -24,14 +24,23 @@ import {
   type HelperName,
 } from "./dependencies";
 import { isNavidromeProvider } from "./navidrome";
-import { OFFLINE_YOUTUBE_CACHE_PROVIDER_ID, isOfflineYouTubeCacheProvider } from "./offline-youtube-cache";
+import {
+  OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
+  isOfflineYouTubeCacheProvider,
+  type OfflineYouTubeCacheEntry,
+} from "./offline-youtube-cache";
 import { isLocalProvider } from "./providers";
 import {
   InMemoryLastQueueSnapshotPersistence,
   createLastQueueSnapshot,
   type LastQueueSnapshotPersistence,
 } from "./snapshot";
-import { identifyYouTubeUrl } from "./youtube-url-download";
+import {
+  createFfprobeYouTubeMediaValidator,
+  downloadYouTubeUrl,
+  identifyYouTubeUrl,
+  type YouTubeDownloader,
+} from "./youtube-url-download";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -46,6 +55,7 @@ export type AppCoordinatorOptions = {
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
   dependencyRunner?: DependencyCommandRunner;
+  youtubeDownloader?: YouTubeDownloader;
 };
 
 export class AppCoordinator {
@@ -56,10 +66,12 @@ export class AppCoordinator {
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
   private readonly dependencyRunner: DependencyCommandRunner;
+  private readonly youtubeDownloader: YouTubeDownloader;
   private readonly unsubscribeFromPlayer: () => void;
   private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<() => void>();
   private activeLocalOpen: AbortController | null = null;
+  private activeYouTubeDownload: AbortController | null = null;
   private reportingSessionKey: string | null = null;
   private completedPlayReported = false;
   private tornDown = false;
@@ -72,6 +84,7 @@ export class AppCoordinator {
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
     this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
+    this.youtubeDownloader = options.youtubeDownloader ?? downloadYouTubeUrl;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       this.mergePlayerPlayback(playback);
       this.maybeReportCompletedPlay(playback);
@@ -156,6 +169,9 @@ export class AppCoordinator {
         case "cancelLocalOpen":
           this.cancelLocalOpen();
           return;
+        case "cancelYouTubeDownload":
+          this.cancelYouTubeDownload();
+          return;
         case "openLocalPath":
           await this.openLocalPath(intent.path, intent.signal);
           return;
@@ -225,6 +241,8 @@ export class AppCoordinator {
     this.tornDown = true;
     this.activeLocalOpen?.abort();
     this.activeLocalOpen = null;
+    this.activeYouTubeDownload?.abort();
+    this.activeYouTubeDownload = null;
     this.unsubscribeFromPlayer();
     for (const unsubscribe of this.unsubscribeFromProviders) unsubscribe();
     await this.player.teardown();
@@ -403,7 +421,7 @@ export class AppCoordinator {
       const url = this.uiState.promptInput;
       this.uiState.activePrompt = null;
       this.uiState.promptInput = "";
-      await this.submitYouTubeUrl(url);
+      this.startYouTubeUrlDownload(url);
       return;
     }
 
@@ -448,6 +466,41 @@ export class AppCoordinator {
 
     this.activeLocalOpen.abort();
     this.appState.lastEvent = "cancelling Local open";
+  }
+
+  private startYouTubeUrlDownload(url: string): void {
+    if (this.activeYouTubeDownload) {
+      this.appState.lastEvent = "YouTube download already in progress";
+      return;
+    }
+
+    const controller = new AbortController();
+    this.activeYouTubeDownload = controller;
+    this.appState.downloads = {
+      active: true,
+      lines: [],
+    };
+    this.appState.lastEvent = "starting YouTube URL Download";
+
+    void this.submitYouTubeUrl(url, controller.signal)
+      .catch((error) => {
+        if (this.tornDown) return;
+        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        if (this.activeYouTubeDownload === controller) this.activeYouTubeDownload = null;
+        this.notifyStateChanged();
+      });
+  }
+
+  private cancelYouTubeDownload(): void {
+    if (!this.activeYouTubeDownload) {
+      this.appState.lastEvent = "no active YouTube download";
+      return;
+    }
+
+    this.activeYouTubeDownload.abort();
+    this.appState.lastEvent = "cancelling YouTube download";
   }
 
   private async openLocalPath(path: string, signal?: AbortSignal): Promise<void> {
@@ -744,11 +797,12 @@ export class AppCoordinator {
     provider.refresh();
   }
 
-  private async submitYouTubeUrl(url: string): Promise<void> {
+  private async submitYouTubeUrl(url: string, signal: AbortSignal): Promise<void> {
     await this.refreshHelperDependency("yt-dlp");
     const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
     if (healthMessage) {
       this.appState.lastEvent = healthMessage;
+      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
 
@@ -756,39 +810,98 @@ export class AppCoordinator {
       command: this.appState.config.helpers.ytDlp,
       timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
+      signal,
       runner: this.dependencyRunner,
     });
     if (!identified.ok) {
       this.appState.lastEvent = identified.message;
+      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
 
     const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
     if (!isOfflineYouTubeCacheProvider(provider)) {
       this.appState.lastEvent = "Offline YouTube Cache Provider is unavailable";
+      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
 
     provider.refresh();
     const cacheEntry = provider.findByIdentity(identified.identity);
-    if (!cacheEntry) {
-      this.appState.lastEvent = `No complete Offline YouTube Cache entry for ${identified.metadata.title}`;
-      return;
-    }
-    if (cacheEntry.availability.status === "unavailable") {
-      this.appState.lastEvent = `Offline YouTube Cache entry is incomplete: ${cacheEntry.availability.reason}`;
-      return;
-    }
-    if (cacheEntry.availability.status !== "available") {
-      this.appState.lastEvent = "Offline YouTube Cache entry is incomplete";
+    if (cacheEntry?.availability.status === "available") {
+      this.enqueueOfflineYouTubeCacheEntry(cacheEntry);
+      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
 
+    const download = await this.youtubeDownloader({
+      url,
+      command: this.appState.config.helpers.ytDlp,
+      cache: this.appState.config.offlineYouTubeCache,
+      metadata: identified.metadata,
+      cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
+      progressThrottleMs: this.appState.config.lowPower.downloadProgressThrottleMs,
+      signal,
+      validateMedia: createFfprobeYouTubeMediaValidator({
+        command: this.appState.config.helpers.ffprobe,
+        timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
+        runner: this.dependencyRunner,
+      }),
+      onProgress: (line) => this.recordYouTubeDownloadProgress(line),
+    });
+
+    if (!download.ok) {
+      this.finishYouTubeDownload({ clearLines: Boolean(download.cancelled) });
+      this.appState.lastEvent = download.message;
+      return;
+    }
+    if (signal.aborted) {
+      this.finishYouTubeDownload({ clearLines: true });
+      this.appState.lastEvent = "YouTube download cancelled";
+      return;
+    }
+
+    provider.refresh();
+    const downloadedEntry = provider.findByIdentity(identified.identity);
+    if (!downloadedEntry) {
+      this.finishYouTubeDownload({ clearLines: false });
+      this.appState.lastEvent = `Offline YouTube Cache entry is missing after download: ${identified.identity.stableId}`;
+      return;
+    }
+    if (downloadedEntry.availability.status !== "available") {
+      this.finishYouTubeDownload({ clearLines: false });
+      this.appState.lastEvent = downloadedEntry.availability.status === "unavailable"
+        ? `Offline YouTube Cache entry is incomplete: ${downloadedEntry.availability.reason}`
+        : "Offline YouTube Cache entry is incomplete";
+      return;
+    }
+
+    this.enqueueOfflineYouTubeCacheEntry(downloadedEntry);
+    this.finishYouTubeDownload({ clearLines: false });
+  }
+
+  private enqueueOfflineYouTubeCacheEntry(cacheEntry: OfflineYouTubeCacheEntry): void {
     const entry = this.queue.enqueue(cacheEntry.track);
     this.queue.markAvailability(cacheEntry.track.identity, cacheEntry.availability);
     this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
     this.appState.lastEvent = `added ${cacheEntry.track.title} to shared Queue`;
     this.syncQueueState();
+  }
+
+  private recordYouTubeDownloadProgress(line: string): void {
+    const lines = [...this.appState.downloads.lines, line].slice(-4);
+    this.appState.downloads = {
+      active: true,
+      lines,
+    };
+    this.notifyStateChanged();
+  }
+
+  private finishYouTubeDownload(options: { clearLines: boolean }): void {
+    this.appState.downloads = {
+      active: false,
+      lines: options.clearLines ? [] : this.appState.downloads.lines,
+    };
   }
 
   private markSelectedOfflineYouTubeCacheAvailability(entry: QueueEntry): void {

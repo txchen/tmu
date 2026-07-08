@@ -188,6 +188,7 @@ export type AppIntent =
   | { type: "submitPrompt" }
   | { type: "cancelPrompt" }
   | { type: "cancelLocalOpen" }
+  | { type: "cancelYouTubeDownload" }
   | { type: "openLocalPath"; path: string; signal?: AbortSignal }
   | { type: "startSelectedQueueEntry" }
   | { type: "removeSelectedQueueEntry" }

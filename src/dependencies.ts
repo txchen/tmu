@@ -8,6 +8,7 @@ export type DependencyCommandRequest = {
   command: string;
   args: string[];
   timeoutMs: number;
+  signal?: AbortSignal;
 };
 
 export type DependencyCommandResult = {
@@ -226,9 +227,9 @@ function helperVersionArgs(helper: HelperName): string[] {
   return helper === "ffprobe" ? ["-version"] : ["--version"];
 }
 
-export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, args, timeoutMs }) => {
+export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, args, timeoutMs, signal }) => {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: timeoutMs }, (error, stdout, stderr) => {
+    execFile(command, args, { timeout: timeoutMs, signal }, (error, stdout, stderr) => {
       const errorCode = (error as (Error & { code?: string | number }) | null)?.code;
       const exitCode = typeof errorCode === "number"
         ? errorCode
