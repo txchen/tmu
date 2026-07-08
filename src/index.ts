@@ -1,5 +1,7 @@
 export * from "./app";
+export * from "./config";
 export * from "./coordinator";
+export * from "./dependencies";
 export * from "./domain";
 export * from "./main";
 export * from "./player";

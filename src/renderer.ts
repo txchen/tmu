@@ -9,6 +9,7 @@ import {
   type Track,
   type UiState,
 } from "./domain";
+import { youtubeDownloadHealthMessage, type DependencyHealthState, type HelperDependencyHealth } from "./dependencies";
 
 export type RenderedNavigationTarget = NavigationTarget & {
   selected: boolean;
@@ -28,6 +29,10 @@ export type RenderedShell = {
     nowPlaying: string;
     lines: string[];
   };
+  health: {
+    title: string;
+    lines: string[];
+  };
   footer: string;
 };
 
@@ -38,6 +43,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     const selected = index === selectedContentIndex(uiState);
     return row(`${track.title}  ${track.providerLabel}`, selected, uiState.focusedPane === "content");
   });
+  const providerSurfaceHealthLines = providerSurfaceHealthLinesFor(appState, uiState.activeTargetId);
 
   return {
     title: "TMU",
@@ -48,13 +54,17 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     })),
     providerSurface: {
       title: activeTarget.label,
-      lines: providerLines,
+      lines: [...providerSurfaceHealthLines, ...providerLines],
       emptyMessage: emptyMessageFor(activeTarget.id),
     },
     queuePlayer: {
       title: "Queue / Player",
       nowPlaying: nowPlaying(appState),
       lines: appState.queue.entries.map((entry, index) => queueLine(appState, uiState, entry, index)),
+    },
+    health: {
+      title: "Dependency Health",
+      lines: dependencyHealthLines(appState.dependencyHealth),
     },
     footer: `last: ${appState.lastEvent}`,
   };
@@ -84,6 +94,10 @@ export function renderShellText(appState: AppState, uiState: UiState): string {
     shell.queuePlayer.nowPlaying,
     queueLines,
     "",
+    shell.health.title,
+    "-----------------",
+    shell.health.lines.map((line) => `  ${line}`).join("\n"),
+    "",
     shell.footer,
   ].join("\n");
 }
@@ -103,6 +117,27 @@ function emptyMessageFor(targetId: NavigationTarget["id"]): string {
     return "Provider Browsing Surface placeholder for the YouTube URL Download Flow";
   }
   return "Provider Browsing Surface placeholder; provider behavior lands in later slices";
+}
+
+function providerSurfaceHealthLinesFor(appState: AppState, targetId: NavigationTarget["id"]): string[] {
+  if (targetId !== "youtube-url-download") return [];
+
+  const message = youtubeDownloadHealthMessage(appState.dependencyHealth);
+  return message ? [`! ${message}`] : [];
+}
+
+function dependencyHealthLines(health: DependencyHealthState): string[] {
+  return [
+    formatHelperLine(health.helpers.mpv, health.playback.enabled ? undefined : "playback disabled"),
+    formatHelperLine(health.helpers.ffprobe, health.metadata.degraded ? "metadata degraded" : undefined),
+    formatHelperLine(health.helpers["yt-dlp"], health.youtubeUrlDownload.enabled ? undefined : "YouTube URL Download disabled"),
+  ];
+}
+
+function formatHelperLine(helper: HelperDependencyHealth, consequence: string | undefined): string {
+  const version = helper.version ? ` (${helper.version})` : "";
+  const suffix = consequence ? ` - ${consequence}` : "";
+  return `${helper.name}: ${helper.status} at ${helper.command}${version}${suffix}`;
 }
 
 function nowPlaying(appState: AppState): string {

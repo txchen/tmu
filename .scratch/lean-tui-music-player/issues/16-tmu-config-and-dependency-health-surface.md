@@ -1,6 +1,6 @@
 # TMU Config And Dependency Health Surface
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 

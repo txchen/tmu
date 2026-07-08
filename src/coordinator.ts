@@ -11,13 +11,25 @@ import {
   type NavigationTargetId,
   type UiState,
 } from "./domain";
+import {
+  playbackHealthMessage,
+  youtubeDownloadHealthMessage,
+  type DependencyHealthState,
+  type HelperName,
+} from "./dependencies";
 import { createLocalTrackFromCliArg } from "./providers";
+
+export type DependencyHealthRefresh = (
+  helper: HelperName,
+  currentHealth: DependencyHealthState,
+) => Promise<DependencyHealthState>;
 
 export type AppCoordinatorOptions = {
   appState: AppState;
   uiState: UiState;
   queue: Queue;
   player: Player;
+  refreshDependencyHealth?: DependencyHealthRefresh;
 };
 
 export class AppCoordinator {
@@ -25,12 +37,14 @@ export class AppCoordinator {
   readonly uiState: UiState;
   private readonly queue: Queue;
   private readonly player: Player;
+  private readonly refreshDependencyHealth: DependencyHealthRefresh;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
     this.uiState = options.uiState;
     this.queue = options.queue;
     this.player = options.player;
+    this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.syncQueueState();
   }
 
@@ -59,10 +73,10 @@ export class AppCoordinator {
   async dispatch(intent: AppIntent): Promise<void> {
     switch (intent.type) {
       case "selectNavigationTarget":
-        this.selectNavigationTarget(intent.targetId);
+        await this.selectNavigationTarget(intent.targetId);
         return;
       case "moveSelection":
-        this.moveSelection(intent.delta);
+        await this.moveSelection(intent.delta);
         return;
       case "cycleFocus":
         this.cycleFocus();
@@ -77,6 +91,8 @@ export class AppCoordinator {
         await this.togglePlayPause();
         return;
       case "stop":
+        if (this.blockPlaybackActionIfUnavailable()) return;
+
         this.appState.playback = await this.player.stop();
         this.appState.lastEvent = "stopped";
         return;
@@ -86,18 +102,23 @@ export class AppCoordinator {
     }
   }
 
-  private selectNavigationTarget(targetId: NavigationTargetId): void {
+  private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
+    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
+
     this.uiState.activeTargetId = targetId;
     this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
     this.uiState.focusedPane = targetId === "queue" ? "queue" : "content";
-    this.uiState.activePrompt = targetId === "youtube-url-download" ? "youtube-url" : null;
+    this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
+      ? "youtube-url"
+      : null;
     this.appState.lastEvent = `switched to ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
   }
 
-  private moveSelection(delta: number): void {
+  private async moveSelection(delta: number): Promise<void> {
     if (this.uiState.focusedPane === "targets") {
       this.uiState.selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
       this.uiState.activeTargetId = NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.id ?? "local";
+      if (this.uiState.activeTargetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
       return;
     }
@@ -131,6 +152,14 @@ export class AppCoordinator {
     }
 
     if (this.uiState.activeTargetId === "youtube-url-download") {
+      await this.refreshHelperDependency("yt-dlp");
+      const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
+      if (healthMessage) {
+        this.uiState.activePrompt = null;
+        this.appState.lastEvent = healthMessage;
+        return;
+      }
+
       this.appState.lastEvent = "would open YouTube URL prompt, download into Offline YouTube Cache, then enqueue";
       this.uiState.activePrompt = "youtube-url";
       return;
@@ -149,6 +178,8 @@ export class AppCoordinator {
   }
 
   private async startSelectedQueueEntry(): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+
     const entry = this.queue.startAt(this.uiState.selectedQueueIndex);
     if (!entry) {
       this.appState.lastEvent = "Queue is empty";
@@ -179,6 +210,8 @@ export class AppCoordinator {
   }
 
   private async togglePlayPause(): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+
     if (!this.appState.playback.currentTrackIdentity) {
       this.appState.lastEvent = "nothing is playing";
       return;
@@ -202,6 +235,23 @@ export class AppCoordinator {
     this.appState.appErrors.push(reason);
     this.appState.lastEvent = reason;
     this.syncQueueState();
+  }
+
+  private blockPlaybackActionIfUnavailable(): boolean {
+    const playbackMessage = playbackHealthMessage(this.appState.dependencyHealth);
+    if (!playbackMessage) return false;
+
+    this.appState.playback = {
+      status: "error",
+      currentTrackIdentity: this.appState.playback.currentTrackIdentity,
+      message: playbackMessage,
+    };
+    this.appState.lastEvent = playbackMessage;
+    return true;
+  }
+
+  private async refreshHelperDependency(helper: HelperName): Promise<void> {
+    this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
   private selectedVisibleTrack() {

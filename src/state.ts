@@ -5,9 +5,35 @@ import {
   type NavigationTargetId,
   type UiState,
 } from "./domain";
+import {
+  createDefaultTmuConfig,
+  defaultConfigPath,
+  redactTmuConfig,
+  type TmuConfigInput,
+} from "./config";
+import {
+  createDefaultDependencyHealth,
+  type DependencyHealthState,
+} from "./dependencies";
 
-export function createInitialAppState(providers: Record<string, Provider>): AppState {
+export type InitialAppStateOptions = {
+  config?: TmuConfigInput;
+  configPath?: string;
+  configSource?: "defaults" | "file";
+  dependencyHealth?: DependencyHealthState;
+};
+
+export function createInitialAppState(
+  providers: Record<string, Provider>,
+  options: InitialAppStateOptions = {},
+): AppState {
+  const config = createDefaultTmuConfig(options.config);
+
   return {
+    config: redactTmuConfig(config),
+    configPath: options.configPath ?? defaultConfigPath(),
+    configSource: options.configSource ?? "defaults",
+    dependencyHealth: options.dependencyHealth ?? createDefaultDependencyHealth(),
     providers,
     queue: {
       entries: [],

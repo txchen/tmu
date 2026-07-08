@@ -1,3 +1,6 @@
+import type { RedactedTmuConfig } from "./config";
+import type { DependencyHealthState } from "./dependencies";
+
 export type NavigationTargetId =
   | "local"
   | "navidrome"
@@ -79,6 +82,10 @@ export type NavigationTarget = {
 };
 
 export type AppState = {
+  config: RedactedTmuConfig;
+  configPath: string;
+  configSource: "defaults" | "file";
+  dependencyHealth: DependencyHealthState;
   providers: Record<string, Provider>;
   queue: QueueState;
   playback: PlaybackState;

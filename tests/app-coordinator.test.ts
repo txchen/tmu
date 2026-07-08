@@ -5,6 +5,7 @@ import {
   MemoryQueue,
   NoopPlayer,
   NAVIGATION_TARGETS,
+  createDefaultDependencyHealth,
   createInitialAppState,
   createInitialUiState,
   createSkeletonProviders,
@@ -39,10 +40,22 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
 
 class RecordingPlayer extends NoopPlayer implements Player {
   readonly loaded: PlaybackLocator[] = [];
+  toggles = 0;
+  stops = 0;
 
   async load(locator: PlaybackLocator): Promise<void> {
     this.loaded.push(locator);
     await super.load(locator);
+  }
+
+  async togglePause() {
+    this.toggles += 1;
+    return super.togglePause();
+  }
+
+  async stop() {
+    this.stops += 1;
+    return super.stop();
   }
 }
 
@@ -127,6 +140,183 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
+  });
+
+  test("blocks playback actions when mpv dependency health is missing", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }, {
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            mpv: { name: "mpv", command: "/missing/mpv", status: "missing" },
+          },
+          playback: {
+            enabled: false,
+            message: "Playback disabled: mpv missing at /missing/mpv",
+          },
+        }),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    await coordinator.dispatch({ type: "stop" });
+
+    expect(player.loaded).toEqual([]);
+    expect(player.toggles).toBe(0);
+    expect(player.stops).toBe(0);
+    expect(coordinator.appState.playback).toEqual({
+      status: "error",
+      currentTrackIdentity: null,
+      message: "Playback disabled: mpv missing at /missing/mpv",
+    });
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({ status: "unknown" });
+    expect(coordinator.appState.lastEvent).toBe("Playback disabled: mpv missing at /missing/mpv");
+  });
+
+  test("allows playback when only ffprobe dependency health is missing", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+      }, {
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            ffprobe: { name: "ffprobe", command: "/missing/ffprobe", status: "missing" },
+          },
+          metadata: {
+            degraded: true,
+            message: "Metadata degraded: ffprobe missing at /missing/ffprobe",
+          },
+        }),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
+    expect(coordinator.appState.playback.status).toBe("playing");
+    expect(coordinator.appState.dependencyHealth.metadata.degraded).toBe(true);
+  });
+
+  test("rechecks yt-dlp when entering YouTube URL Download and before its action", async () => {
+    const refreshedHealth = createDefaultDependencyHealth({
+      helpers: {
+        "yt-dlp": { name: "yt-dlp", command: "/missing/yt-dlp", status: "missing" },
+      },
+      youtubeUrlDownload: {
+        enabled: false,
+        message: "YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp",
+      },
+    });
+    const refreshes: string[] = [];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      refreshDependencyHealth: async (helper) => {
+        refreshes.push(helper);
+        return refreshedHealth;
+      },
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    expect(refreshes).toEqual(["yt-dlp"]);
+    expect(coordinator.uiState.activePrompt).toBeNull();
+
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    expect(refreshes).toEqual(["yt-dlp", "yt-dlp"]);
+    expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
+    expect(coordinator.uiState.activePrompt).toBeNull();
+    expect(coordinator.appState.lastEvent).toBe("YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp");
+    expect(coordinator.appState.queue.entries).toEqual([]);
+  });
+
+  test("rechecks yt-dlp when target-rail movement enters YouTube URL Download", async () => {
+    const refreshedHealth = createDefaultDependencyHealth();
+    const refreshes: string[] = [];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createSkeletonProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      refreshDependencyHealth: async (helper) => {
+        refreshes.push(helper);
+        return refreshedHealth;
+      },
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "moveSelection", delta: 3 });
+
+    expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
+    expect(refreshes).toEqual(["yt-dlp"]);
+  });
+
+  test("keeps Local, Navidrome, and Offline YouTube Cache usable when only yt-dlp is missing", async () => {
+    const localTrack = track("local", "/music/amber.flac", "Amber Path");
+    const navidromeTrack = track("navidrome", "song-1", "Remote Track");
+    const cachedTrack = track("offline-youtube-cache", "youtube:abc123", "Cached Track");
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: fakeProvider("local", [localTrack]),
+        navidrome: fakeProvider("navidrome", [navidromeTrack]),
+        "offline-youtube-cache": fakeProvider("offline-youtube-cache", [cachedTrack]),
+      }, {
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            "yt-dlp": { name: "yt-dlp", command: "/missing/yt-dlp", status: "missing" },
+          },
+          youtubeUrlDownload: {
+            enabled: false,
+            message: "YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp",
+          },
+        }),
+      }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.providerId)).toEqual([
+      "local",
+      "navidrome",
+      "offline-youtube-cache",
+    ]);
+
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/offline-youtube-cache/youtube:abc123" }]);
+    expect(coordinator.appState.playback.status).toBe("playing");
   });
 
   test("keeps all issue-15 navigation targets as siblings", () => {

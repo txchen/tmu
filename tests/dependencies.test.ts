@@ -1,0 +1,120 @@
+import { describe, expect, test } from "bun:test";
+import {
+  checkDependencyHealth,
+  checkHelperDependencyHealth,
+  createDefaultTmuConfig,
+  createDefaultDependencyHealth,
+  type DependencyCommandRunner,
+} from "../src/index";
+
+describe("dependency health", () => {
+  test("checks configured helper command paths and detects versions", async () => {
+    const config = createDefaultTmuConfig({
+      helpers: {
+        mpv: "/opt/bin/mpv",
+        ffprobe: "/opt/bin/ffprobe",
+        ytDlp: "/opt/bin/yt-dlp",
+      },
+    });
+    const runner: DependencyCommandRunner = async ({ command }) => {
+      if (command === "/opt/bin/mpv") return { exitCode: 0, stdout: "mpv 0.39.0\n", stderr: "" };
+      if (command === "/opt/bin/ffprobe") return { exitCode: 0, stdout: "ffprobe version 7.1\n", stderr: "" };
+      if (command === "/opt/bin/yt-dlp") return { exitCode: 0, stdout: "2026.01.02\n", stderr: "" };
+      return { exitCode: 127, stdout: "", stderr: "not found" };
+    };
+
+    const health = await checkDependencyHealth(config, { runner });
+
+    expect(health.helpers.mpv).toMatchObject({
+      command: "/opt/bin/mpv",
+      status: "present",
+      version: "0.39.0",
+    });
+    expect(health.helpers.ffprobe).toMatchObject({
+      command: "/opt/bin/ffprobe",
+      status: "present",
+      version: "7.1",
+    });
+    expect(health.helpers["yt-dlp"]).toMatchObject({
+      command: "/opt/bin/yt-dlp",
+      status: "present",
+      version: "2026.01.02",
+    });
+    expect(health.playback.enabled).toBe(true);
+    expect(health.metadata.degraded).toBe(false);
+    expect(health.youtubeUrlDownload.enabled).toBe(true);
+  });
+
+  test("reports source-gated missing helpers without host dependencies", async () => {
+    const config = createDefaultTmuConfig({
+      helpers: {
+        mpv: "/missing/mpv",
+        ffprobe: "/missing/ffprobe",
+        ytDlp: "/missing/yt-dlp",
+      },
+    });
+    const runner: DependencyCommandRunner = async ({ command }) => ({
+      exitCode: 127,
+      stdout: "",
+      stderr: `${command}: not found`,
+      errorMessage: "not found",
+    });
+
+    const health = await checkDependencyHealth(config, { runner });
+
+    expect(health.helpers.mpv).toMatchObject({
+      command: "/missing/mpv",
+      status: "missing",
+    });
+    expect(health.playback).toEqual({
+      enabled: false,
+      message: "Playback disabled: mpv missing at /missing/mpv",
+    });
+    expect(health.metadata).toEqual({
+      degraded: true,
+      message: "Metadata degraded: ffprobe missing at /missing/ffprobe",
+    });
+    expect(health.youtubeUrlDownload).toEqual({
+      enabled: false,
+      message: "YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp",
+    });
+  });
+
+  test("can recheck only yt-dlp for the YouTube URL Download source", async () => {
+    const config = createDefaultTmuConfig({
+      helpers: {
+        ytDlp: "/opt/bin/yt-dlp",
+      },
+    });
+    const requestedHelpers: string[] = [];
+    const runner: DependencyCommandRunner = async ({ helper, command }) => {
+      requestedHelpers.push(helper);
+      return { exitCode: 0, stdout: `${command} 2026.01.02\n`, stderr: "" };
+    };
+
+    const health = await checkHelperDependencyHealth(
+      config,
+      "yt-dlp",
+      createDefaultDependencyHealth({
+        helpers: {
+          "yt-dlp": { name: "yt-dlp", command: "/old/yt-dlp", status: "missing" },
+        },
+        youtubeUrlDownload: {
+          enabled: false,
+          message: "YouTube URL Download disabled: yt-dlp missing at /old/yt-dlp",
+        },
+      }),
+      { runner },
+    );
+
+    expect(requestedHelpers).toEqual(["yt-dlp"]);
+    expect(health.helpers["yt-dlp"]).toMatchObject({
+      command: "/opt/bin/yt-dlp",
+      status: "present",
+      version: "/opt/bin/yt-dlp 2026.01.02",
+    });
+    expect(health.playback.enabled).toBe(true);
+    expect(health.metadata.degraded).toBe(false);
+    expect(health.youtubeUrlDownload.enabled).toBe(true);
+  });
+});
