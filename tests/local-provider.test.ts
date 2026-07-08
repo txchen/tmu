@@ -39,6 +39,40 @@ describe("LocalProvider", () => {
     }
   });
 
+  test("checks local file availability when resolving playback locators", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-local-provider-"));
+    const file = join(dir, "restored.flac");
+
+    try {
+      await writeFile(file, "not real audio");
+      const provider = createLocalProvider({
+        dependencyHealth: createDefaultDependencyHealth({
+          helpers: {
+            ffprobe: { name: "ffprobe", command: "ffprobe", status: "missing" },
+          },
+          metadata: {
+            degraded: true,
+            message: "Metadata degraded: ffprobe missing at ffprobe",
+          },
+        }),
+      });
+
+      const track = await provider.createTrackFromCliArg(file);
+      const canonicalFile = await realpath(file);
+
+      expect(await provider.resolvePlaybackLocator(track!.identity)).toEqual({ kind: "file", path: canonicalFile });
+
+      await rm(file);
+
+      await expect(provider.resolvePlaybackLocator(track!.identity)).rejects.toThrow(
+        `Local file no longer exists: ${canonicalFile}`,
+      );
+      expect(provider.listVisibleTracks()).toHaveLength(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("dedupes explicit local Track identity through canonical symlink targets", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-local-provider-"));
     const file = join(dir, "cinder.mp3");

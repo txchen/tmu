@@ -82,6 +82,52 @@ function cancellableLocalProvider(): Provider & {
   };
 }
 
+function restoringLocalProvider(
+  options: {
+    tracks?: Track[];
+    unavailableStableIds?: readonly string[];
+  } = {},
+): Provider & {
+  resolveCalls: TrackIdentity[];
+  cliArgCalls: string[];
+  openPathCalls: string[];
+  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
+  onTrackMetadataChange(listener: (track: Track) => void): () => void;
+} {
+  const unavailable = new Set(options.unavailableStableIds ?? []);
+
+  return {
+    id: "local",
+    label: "Local",
+    hint: "files and folders",
+    resolveCalls: [],
+    cliArgCalls: [],
+    openPathCalls: [],
+    listVisibleTracks() {
+      return options.tracks ?? [];
+    },
+    async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
+      this.resolveCalls.push(identity);
+      if (unavailable.has(identity.stableId)) {
+        throw new Error(`Local file no longer exists: ${identity.stableId}`);
+      }
+      return { kind: "file", path: identity.stableId };
+    },
+    async createTrackFromCliArg(path: string): Promise<Track | undefined> {
+      this.cliArgCalls.push(path);
+      return undefined;
+    },
+    async createTracksFromOpenPath(path: string): Promise<LocalOpenResult> {
+      this.openPathCalls.push(path);
+      return { tracks: [], capped: false, cancelled: false };
+    },
+    onTrackMetadataChange(_listener: (track: Track) => void): () => void {
+      return () => undefined;
+    },
+  };
+}
+
 async function waitFor(assertion: () => void, timeoutMs = 500): Promise<void> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -743,6 +789,106 @@ describe("AppCoordinator", () => {
     });
     expect(second.appState.volume).toEqual({ percent: 64, ready: true });
     expect(second.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
+  });
+
+  test("marks missing restored Local Tracks unavailable without rescanning local paths", async () => {
+    const missing = track("local", "/music/missing.flac", "Missing File");
+    const present = track("local", "/music/present.flac", "Present File");
+    const local = restoringLocalProvider({
+      tracks: [missing, present],
+      unavailableStableIds: [missing.identity.stableId],
+    });
+    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+      snapshotPersistence,
+    });
+
+    await snapshotPersistence.save({
+      version: 1,
+      entries: [
+        { track: missing, availability: { status: "unknown" } },
+        { track: present, availability: { status: "unknown" } },
+      ],
+      currentIndex: 0,
+      shuffle: false,
+      repeatAll: false,
+      volume: { percent: 87, ready: true },
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
+
+    expect(local.resolveCalls.map((identity) => identity.stableId)).toEqual([
+      "/music/missing.flac",
+      "/music/present.flac",
+    ]);
+    expect(local.cliArgCalls).toEqual([]);
+    expect(local.openPathCalls).toEqual([]);
+    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable",
+      reason: "Local file no longer exists: /music/missing.flac",
+    });
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({ status: "available" });
+    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
+      "Missing File [unavailable: Local file no longer exists: /music/missing.flac]",
+    );
+
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    expect(player.loaded).toEqual([]);
+    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    expect(coordinator.appState.playback).toEqual({
+      status: "error",
+      currentTrackIdentity: missing.identity,
+      message: "Local file no longer exists: /music/missing.flac",
+    });
+  });
+
+  test("skips unavailable Local Tracks during next-track auto-advance", async () => {
+    const first = track("local", "/music/first.flac", "First File");
+    const missing = track("local", "/music/missing.flac", "Missing File");
+    const next = track("local", "/music/next.flac", "Next File");
+    const local = restoringLocalProvider({
+      tracks: [first, missing, next],
+      unavailableStableIds: [missing.identity.stableId],
+    });
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "moveSelection", delta: -2 });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await coordinator.dispatch({ type: "nextTrack" });
+
+    expect(player.loaded).toEqual([
+      { kind: "file", path: "/music/first.flac" },
+      { kind: "file", path: "/music/next.flac" },
+    ]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(next.identity);
+    expect(coordinator.appState.queue.currentIndex).toBe(2);
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
+      status: "unavailable",
+      reason: "Local file no longer exists: /music/missing.flac",
+    });
   });
 
   test("blocks playback actions when mpv dependency health is missing", async () => {

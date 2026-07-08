@@ -405,6 +405,11 @@ export class AppCoordinator {
       return;
     }
 
+    if (entry.availability.status === "unavailable") {
+      this.markUnavailable(entry, entry.availability.reason);
+      return;
+    }
+
     await this.playQueueEntry(entry);
   }
 
@@ -456,15 +461,40 @@ export class AppCoordinator {
   private async nextTrack(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    const entry = this.queue.next();
-    if (!entry) {
+    if (this.queue.entries.length === 0) {
       this.appState.lastEvent = "end of Queue";
       this.syncQueueState();
       return;
     }
 
-    this.uiState.selectedQueueIndex = this.queue.currentIndex;
-    await this.playQueueEntry(entry);
+    let skippedUnavailable = false;
+    for (let attempts = 0; attempts < this.queue.entries.length; attempts += 1) {
+      const entry = this.queue.next();
+      if (!entry) {
+        this.appState.lastEvent = skippedUnavailable ? "no available Tracks to play" : "end of Queue";
+        this.syncQueueState();
+        return;
+      }
+
+      this.uiState.selectedQueueIndex = this.queue.currentIndex;
+      if (entry.availability.status === "unavailable") {
+        skippedUnavailable = true;
+        continue;
+      }
+
+      const started = await this.playQueueEntry(entry);
+      if (started) return;
+
+      const currentEntry = this.queue.entries[this.queue.currentIndex];
+      if (currentEntry?.availability.status === "unavailable") {
+        skippedUnavailable = true;
+        continue;
+      }
+      return;
+    }
+
+    this.appState.lastEvent = "no available Tracks to play";
+    this.syncQueueState();
   }
 
   private async previousTrack(): Promise<void> {
@@ -535,6 +565,7 @@ export class AppCoordinator {
     }
 
     this.queue.restore(snapshot);
+    await this.refreshRestoredLocalAvailability();
     this.appState.volume = snapshot.volume;
     this.uiState.selectedQueueIndex = snapshot.currentIndex >= 0
       ? snapshot.currentIndex
@@ -543,11 +574,11 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private async playQueueEntry(entry: QueueEntry): Promise<void> {
+  private async playQueueEntry(entry: QueueEntry): Promise<boolean> {
     const provider = this.appState.providers[entry.track.identity.providerId];
     if (!provider) {
       this.markUnavailable(entry, `Provider ${entry.track.identity.providerId} is unavailable`);
-      return;
+      return false;
     }
 
     let locator;
@@ -556,7 +587,7 @@ export class AppCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Playback Locator could not be resolved";
       this.markUnavailable(entry, message);
-      return;
+      return false;
     }
 
     try {
@@ -565,7 +596,7 @@ export class AppCoordinator {
       this.mergePlayerPlayback(this.player.playback);
       this.appState.lastEvent = error instanceof Error ? error.message : String(error);
       this.syncQueueState();
-      return;
+      return false;
     }
 
     this.queue.markAvailability(entry.track.identity, { status: "available" });
@@ -576,6 +607,32 @@ export class AppCoordinator {
     };
     this.appState.lastEvent = `started ${entry.track.title}`;
     this.syncQueueState();
+    return true;
+  }
+
+  private async refreshRestoredLocalAvailability(): Promise<void> {
+    for (const entry of this.queue.entries) {
+      if (entry.track.identity.providerId !== "local") continue;
+
+      const provider = this.appState.providers[entry.track.identity.providerId];
+      if (!provider) {
+        this.queue.markAvailability(entry.track.identity, {
+          status: "unavailable",
+          reason: "Provider local is unavailable",
+        });
+        continue;
+      }
+
+      try {
+        await provider.resolvePlaybackLocator(entry.track.identity);
+        this.queue.markAvailability(entry.track.identity, { status: "available" });
+      } catch (error) {
+        this.queue.markAvailability(entry.track.identity, {
+          status: "unavailable",
+          reason: error instanceof Error ? error.message : "Playback Locator could not be resolved",
+        });
+      }
+    }
   }
 
   private async seedLocalCliArg(arg: string): Promise<void> {

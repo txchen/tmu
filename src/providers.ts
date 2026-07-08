@@ -198,6 +198,20 @@ class FileSystemLocalProvider implements LocalProvider {
       throw new Error(`Local Provider cannot resolve ${identity.providerId}`);
     }
 
+    let fileStat;
+    try {
+      fileStat = await stat(identity.stableId);
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        throw new Error(`Local file no longer exists: ${identity.stableId}`);
+      }
+      throw new Error(`Local file cannot be accessed: ${identity.stableId}`);
+    }
+
+    if (!fileStat.isFile()) {
+      throw new Error(`Local path is not a file: ${identity.stableId}`);
+    }
+
     return { kind: "file", path: identity.stableId };
   }
 
@@ -513,4 +527,11 @@ function tagValue(tags: Record<string, unknown> | undefined, name: string): stri
 function numberValue(value: unknown): number | undefined {
   const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "ENOENT";
 }
