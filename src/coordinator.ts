@@ -19,6 +19,7 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
+import { isNavidromeProvider } from "./navidrome";
 import { isLocalProvider } from "./providers";
 import {
   InMemoryLastQueueSnapshotPersistence,
@@ -210,11 +211,11 @@ export class AppCoordinator {
   }
 
   private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
-    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
-
     this.uiState.activeTargetId = targetId;
     this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
     this.uiState.focusedPane = targetId === "queue" ? "queue" : "content";
+    if (targetId === "navidrome") await this.refreshNavidromeConnection();
+    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
     this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
       ? "youtube-url"
       : null;
@@ -226,6 +227,7 @@ export class AppCoordinator {
     if (this.uiState.focusedPane === "targets") {
       this.uiState.selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
       this.uiState.activeTargetId = NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.id ?? "local";
+      if (this.uiState.activeTargetId === "navidrome") await this.refreshNavidromeConnection();
       if (this.uiState.activeTargetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
       return;
@@ -239,7 +241,7 @@ export class AppCoordinator {
 
     const targetId = this.uiState.activeTargetId;
     const current = this.uiState.selectedContentIndexByTarget[targetId] ?? 0;
-    this.uiState.selectedContentIndexByTarget[targetId] = clampIndex(current + delta, this.visibleTracks(targetId).length);
+    this.uiState.selectedContentIndexByTarget[targetId] = clampIndex(current + delta, this.visibleContentLength(targetId));
     this.appState.lastEvent = "moved Provider Browsing Surface selection";
   }
 
@@ -706,6 +708,22 @@ export class AppCoordinator {
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
+  private async refreshNavidromeConnection(): Promise<void> {
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) return;
+
+    const state = await provider.validateConnection();
+    if (state.status === "connected") {
+      try {
+        await provider.listArtists();
+      } catch (error) {
+        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    }
+    this.appState.lastEvent = state.message;
+  }
+
   private async runPlayerCommand(
     command: () => Promise<PlayerPlaybackState>,
     fallbackEvent?: string,
@@ -744,6 +762,14 @@ export class AppCoordinator {
   private visibleTracks(targetId: NavigationTargetId) {
     if (targetId === "queue") return [];
     return this.providerFor(targetId)?.listVisibleTracks() ?? [];
+  }
+
+  private visibleContentLength(targetId: NavigationTargetId): number {
+    if (targetId === "navidrome") {
+      const provider = this.providerFor(targetId);
+      if (isNavidromeProvider(provider)) return provider.getLibraryBrowserEntries().length;
+    }
+    return this.visibleTracks(targetId).length;
   }
 
   private providerFor(targetId: NavigationTargetId): Provider | undefined {

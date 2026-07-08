@@ -10,8 +10,10 @@ import {
   createInitialAppState,
   createInitialUiState,
   createDefaultProviders,
+  createTmuApp,
   renderShell,
   renderShellText,
+  type TmuConfigInput,
   type Track,
 } from "../src/index";
 
@@ -231,4 +233,142 @@ describe("renderShell", () => {
     expect(text).not.toContain("secret-token");
     expect(text).not.toContain("secret-salt");
   });
+
+  test("renders Navidrome missing-config Provider state", async () => {
+    const { coordinator } = createTmuApp();
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+    expect(text).toContain("! Navidrome missing config:");
+    expect(text).toContain("server URL");
+    expect(text).toContain("password or token+salt");
+  });
+
+  test("renders Navidrome connected Provider state", async () => {
+    const seenPaths: string[] = [];
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async (url) => {
+        seenPaths.push(url.pathname);
+        if (url.pathname.endsWith("/getArtists.view")) {
+          return navidromeJson({
+            status: "ok",
+            artists: {
+              index: [
+                {
+                  name: "A",
+                  artist: [
+                    { id: "artist-1", name: "Alpha", albumCount: 2 },
+                    { id: "artist-2", name: "Arc Light", albumCount: 1 },
+                  ],
+                },
+              ],
+            },
+          });
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    const shell = renderShell(coordinator.appState, coordinator.uiState);
+
+    expect(shell.providerSurface.lines).toContain(
+      "Navidrome: connected to https://music.example.test; Library Browser ready",
+    );
+    expect(shell.providerSurface.lines).toContain(">* Artists");
+    expect(shell.providerSurface.lines).toContain("     Alpha (2 albums)");
+    expect(shell.providerSurface.lines).toContain("     Arc Light (1 album)");
+    expect(seenPaths).toEqual([
+      "/rest/ping.view",
+      "/rest/getArtists.view",
+    ]);
+
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    const movedShell = renderShell(coordinator.appState, coordinator.uiState);
+    expect(movedShell.providerSurface.lines).toContain(">*   Alpha (2 albums)");
+    expect(seenPaths).toEqual([
+      "/rest/ping.view",
+      "/rest/getArtists.view",
+    ]);
+  });
+
+  test("renders Navidrome auth failure Provider state without secrets", async () => {
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig({
+        password: "secret-password",
+        token: "secret-token",
+        salt: "secret-salt",
+      }),
+      navidromeFetcher: async () => navidromeJson({
+        status: "failed",
+        error: {
+          code: 40,
+          message: "bad secret-password secret-token secret-salt",
+        },
+      }),
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+    expect(text).toContain("! Navidrome auth failed: bad [redacted] [redacted] [redacted] (code 40)");
+    expect(text).not.toContain("secret-password");
+    expect(text).not.toContain("secret-token");
+    expect(text).not.toContain("secret-salt");
+  });
+
+  test("renders Navidrome API failure Provider state", async () => {
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async () => navidromeJson({
+        status: "failed",
+        error: {
+          code: 70,
+          message: "The requested data was not found",
+        },
+      }),
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    const text = renderShellText(coordinator.appState, coordinator.uiState);
+
+    expect(text).toContain("! Navidrome API failed: The requested data was not found (code 70)");
+  });
 });
+
+function connectedNavidromeConfig(
+  overrides: NonNullable<NonNullable<TmuConfigInput["providers"]>["navidrome"]> = {},
+): TmuConfigInput {
+  return {
+    providers: {
+      navidrome: {
+        enabled: true,
+        serverUrl: "https://music.example.test",
+        username: "alex",
+        password: "secret-password",
+        clientName: "tmu-test",
+        ...overrides,
+      },
+    },
+  };
+}
+
+function navidromeJson(subsonicResponse: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({
+    "subsonic-response": {
+      version: "1.16.1",
+      ...subsonicResponse,
+    },
+  }), {
+    headers: { "content-type": "application/json" },
+  });
+}

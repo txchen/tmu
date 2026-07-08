@@ -7,6 +7,7 @@ import {
   type DependencyCommandRunner,
   type DependencyHealthState,
 } from "./dependencies";
+import { createDefaultTmuConfig } from "./config";
 import {
   identityKey,
   type NavigationTargetId,
@@ -15,6 +16,7 @@ import {
   type Track,
   type TrackIdentity,
 } from "./domain";
+import { createNavidromeProvider, type NavidromeProviderOptions } from "./navidrome";
 
 const LOCAL_PROVIDER_ID = "local";
 export const DEFAULT_LOCAL_DIRECTORY_SOFT_CAP = 10_000;
@@ -394,7 +396,10 @@ export function isLocalProvider(provider: Provider | undefined): provider is Loc
     && typeof (provider as Partial<LocalProvider>).onTrackMetadataChange === "function";
 }
 
-export function createDefaultProviders(options: { local?: LocalProviderOptions } = {}): Record<string, Provider> {
+export function createDefaultProviders(options: {
+  local?: LocalProviderOptions;
+  navidrome?: Partial<NavidromeProviderOptions>;
+} = {}): Record<string, Provider> {
   const localOptions = options.local ?? {
     dependencyHealth: createDefaultDependencyHealth({
       helpers: {
@@ -406,13 +411,15 @@ export function createDefaultProviders(options: { local?: LocalProviderOptions }
       },
     }),
   };
+  const defaultConfig = createDefaultTmuConfig();
+  const navidromeOptions = {
+    config: defaultConfig.providers.navidrome,
+    ...options.navidrome,
+  };
 
   return {
     local: createLocalProvider(localOptions),
-    navidrome: new SkeletonProvider("navidrome", "Navidrome", "artists, albums, playlists", [
-      skeletonTrack("navidrome", "song-101", "Northbound", "Navidrome"),
-      skeletonTrack("navidrome", "song-102", "Station Light", "Navidrome"),
-    ]),
+    navidrome: createNavidromeProvider(navidromeOptions),
     "offline-youtube-cache": new SkeletonProvider(
       "offline-youtube-cache",
       "Offline YouTube Cache",

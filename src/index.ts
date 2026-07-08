@@ -4,6 +4,7 @@ export * from "./coordinator";
 export * from "./dependencies";
 export * from "./domain";
 export * from "./main";
+export * from "./navidrome";
 export * from "./player";
 export * from "./providers";
 export * from "./queue";

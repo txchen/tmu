@@ -16,6 +16,7 @@ import { createDefaultTmuConfig, loadTmuConfig, type TmuConfig, type TmuConfigIn
 import type { DependencyHealthRefresh } from "./coordinator";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
+import type { NavidromeFetcher } from "./navidrome";
 
 export type TmuAppOptions = {
   config?: TmuConfigInput;
@@ -26,6 +27,8 @@ export type TmuAppOptions = {
   snapshotPersistence?: LastQueueSnapshotPersistence;
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
+  navidromeFetcher?: NavidromeFetcher;
+  navidromeSaltFactory?: () => string;
 };
 
 export type TmuRuntimeOptions = {
@@ -43,6 +46,11 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
       runner: options.dependencyRunner,
       metadataTimeoutMs: config.dependencyPolicy.checkTimeoutMs,
       directorySoftCap: config.providers.local.directorySoftCap,
+    },
+    navidrome: {
+      config: config.providers.navidrome,
+      fetcher: options.navidromeFetcher,
+      saltFactory: options.navidromeSaltFactory,
     },
   });
   const coordinator = new AppCoordinator({

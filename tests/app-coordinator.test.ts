@@ -464,17 +464,22 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.queue.entries).toEqual([]);
   });
 
-  test("routes navigation intents through the coordinator into UI State", () => {
+  test("routes navigation intents through the coordinator into UI State", async () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState(createDefaultProviders()),
+      appState: createInitialAppState({
+        navidrome: fakeProvider("navidrome", [
+          track("navidrome", "track-1", "Remote Track 1"),
+          track("navidrome", "track-2", "Remote Track 2"),
+        ]),
+      }),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
     });
 
-    coordinator.start([]);
-    coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
 
     expect(coordinator.uiState.activeTargetId).toBe("navidrome");
     expect(coordinator.uiState.focusedPane).toBe("content");

@@ -10,6 +10,7 @@ import {
   type UiState,
 } from "./domain";
 import { youtubeDownloadHealthMessage, type DependencyHealthState, type HelperDependencyHealth } from "./dependencies";
+import { isNavidromeProvider, navidromeConnectionStateLine, type NavidromeLibraryBrowserEntry } from "./navidrome";
 
 export type RenderedNavigationTarget = NavigationTarget & {
   selected: boolean;
@@ -47,7 +48,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     const selected = index === selectedContentIndex(uiState);
     return row(`${track.title}  ${track.providerLabel}`, selected, uiState.focusedPane === "content");
   });
-  const providerSurfaceHealthLines = providerSurfaceHealthLinesFor(appState, uiState.activeTargetId);
+  const providerSurfaceStatusLines = providerSurfaceStatusLinesFor(appState, uiState);
   const promptLines = providerSurfacePromptLines(uiState);
   const queueView = expandedQueueView(appState, uiState);
 
@@ -60,7 +61,7 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
     })),
     providerSurface: {
       title: queueView?.title ?? activeTarget.label,
-      lines: queueView?.lines ?? [...providerSurfaceHealthLines, ...promptLines, ...providerLines],
+      lines: queueView?.lines ?? [...providerSurfaceStatusLines, ...promptLines, ...providerLines],
       emptyMessage: emptyMessageFor(activeTarget.id),
     },
     queuePlayer: {
@@ -143,14 +144,42 @@ function emptyMessageFor(targetId: NavigationTarget["id"]): string {
     return "Provider Browsing Surface placeholder for the YouTube URL Download Flow";
   }
   if (targetId === "local") return "Provider Browsing Surface has no Local Tracks opened";
+  if (targetId === "navidrome") return "Navidrome Library Browser has no loaded entries";
   return "Provider Browsing Surface placeholder; provider behavior lands in later slices";
 }
 
-function providerSurfaceHealthLinesFor(appState: AppState, targetId: NavigationTarget["id"]): string[] {
+function providerSurfaceStatusLinesFor(appState: AppState, uiState: UiState): string[] {
+  const targetId = uiState.activeTargetId;
+  if (targetId === "navidrome") {
+    const provider = appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) return [];
+    const state = provider.getConnectionState();
+    return [
+      navidromeConnectionStateLine(state),
+      ...provider.getLibraryBrowserEntries().map((entry, index) => navidromeLibraryBrowserEntryLine(
+        entry,
+        index === selectedContentIndex(uiState),
+        uiState.focusedPane === "content",
+      )),
+    ];
+  }
+
   if (targetId !== "youtube-url-download") return [];
 
   const message = youtubeDownloadHealthMessage(appState.dependencyHealth);
   return message ? [`! ${message}`] : [];
+}
+
+function navidromeLibraryBrowserEntryLine(
+  entry: NavidromeLibraryBrowserEntry,
+  selected: boolean,
+  focused: boolean,
+): string {
+  const prefix = entry.depth === 0 ? "" : "  ";
+  const albumCount = entry.kind === "artist" && entry.albumCount !== undefined
+    ? ` (${entry.albumCount} ${entry.albumCount === 1 ? "album" : "albums"})`
+    : "";
+  return row(`${prefix}${entry.label}${albumCount}`, selected, focused);
 }
 
 function providerSurfacePromptLines(uiState: UiState): string[] {

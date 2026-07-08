@@ -1,6 +1,6 @@
 # Navidrome Connection And Library Browser Entry
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,14 +14,14 @@ This slice should not yet need full artist/album playback. It should make the co
 
 ## Acceptance criteria
 
-- [ ] Navidrome config supports server URL, username, password material, client name, and reporting opt-out fields as needed by the MVP.
-- [ ] Navidrome requests use token and salt auth with JSON response format.
-- [ ] Navidrome connection validation uses ping.
-- [ ] Failed Subsonic response payloads are surfaced as API errors even when HTTP status succeeds.
-- [ ] Navidrome server IDs are preserved as strings.
-- [ ] The Navidrome source shows connected, missing config, auth failure, and API failure states in the TUI.
-- [ ] Secret fields are redacted from errors and display.
-- [ ] Tests use fake HTTP responses to cover auth parameters, ping success, ping failure, failed payload handling, ID preservation, and TUI source state.
+- [x] Navidrome config supports server URL, username, password material, client name, and reporting opt-out fields as needed by the MVP.
+- [x] Navidrome requests use token and salt auth with JSON response format.
+- [x] Navidrome connection validation uses ping.
+- [x] Failed Subsonic response payloads are surfaced as API errors even when HTTP status succeeds.
+- [x] Navidrome server IDs are preserved as strings.
+- [x] The Navidrome source shows connected, missing config, auth failure, and API failure states in the TUI.
+- [x] Secret fields are redacted from errors and display.
+- [x] Tests use fake HTTP responses to cover auth parameters, ping success, ping failure, failed payload handling, ID preservation, and TUI source state.
 
 ## Blocked by
 
