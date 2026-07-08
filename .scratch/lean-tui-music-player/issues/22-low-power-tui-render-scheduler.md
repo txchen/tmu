@@ -1,6 +1,6 @@
 # Low-Power TUI Render Scheduler
 
-Status: ready-for-agent
+Status: resolved
 
 ## Parent
 
@@ -14,13 +14,13 @@ Prototype context: the low-power TUI rendering prototype demonstrates the intend
 
 ## Acceptance criteria
 
-- [ ] User input requests an immediate redraw.
-- [ ] App State and UI State changes request redraws without requiring a fixed-FPS loop.
-- [ ] Playing state enables coarse playback-position ticks no faster than the PRD cadence unless mpv events make ticks unnecessary.
-- [ ] Idle and paused states stop playback-position ticks.
-- [ ] Download and Provider progress updates are throttled for normal status display.
-- [ ] The render scheduler is testable without asserting raw terminal escape output.
-- [ ] Tests cover input redraw, state-change redraw, playing tick behavior, idle/paused tick shutdown, and progress throttling.
+- [x] User input requests an immediate redraw.
+- [x] App State and UI State changes request redraws without requiring a fixed-FPS loop.
+- [x] Playing state enables coarse playback-position ticks no faster than the PRD cadence unless mpv events make ticks unnecessary.
+- [x] Idle and paused states stop playback-position ticks.
+- [x] Download and Provider progress updates are throttled for normal status display.
+- [x] The render scheduler is testable without asserting raw terminal escape output.
+- [x] Tests cover input redraw, state-change redraw, playing tick behavior, idle/paused tick shutdown, and progress throttling.
 
 ## Blocked by
 
