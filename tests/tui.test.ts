@@ -98,6 +98,7 @@ describe("intentFromKey", () => {
     expect(intentFromKey("\r")).toEqual({ type: "activateSelectedContent" });
     expect(intentFromKey("a")).toEqual({ type: "enqueueSelectedTrack" });
     expect(intentFromKey("f")).toEqual({ type: "refreshNavidromeLibrary" });
+    expect(intentFromKey("/")).toEqual({ type: "openNavidromeSearchPrompt" });
   });
 });
 

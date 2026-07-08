@@ -184,6 +184,7 @@ function navidromeLibraryBrowserEntryLine(
 
 function providerSurfacePromptLines(uiState: UiState): string[] {
   if (uiState.activePrompt === "local-open-path") return [`Open local path: ${uiState.promptInput}`];
+  if (uiState.activePrompt === "navidrome-search") return [`Navidrome search: ${uiState.promptInput}`];
   if (uiState.activePrompt === "youtube-url") return [`YouTube URL: ${uiState.promptInput}`];
   return [];
 }

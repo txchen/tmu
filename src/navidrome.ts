@@ -32,8 +32,18 @@ export type NavidromeAlbum = {
   coverArtId?: string;
 };
 
+export type NavidromePlaylist = {
+  id: string;
+  name: string;
+  trackCount?: number;
+  durationSeconds?: number;
+  coverArtId?: string;
+};
+
 export type NavidromeLibraryBrowserEntry =
   | { kind: "artists-root"; label: string; depth: 0 }
+  | { kind: "playlists-root"; label: string; depth: 0 }
+  | { kind: "search-root"; label: string; depth: 0 }
   | { kind: "artist"; id: string; label: string; albumCount?: number; coverArtId?: string; depth: 1 }
   | {
     kind: "album";
@@ -56,7 +66,35 @@ export type NavidromeLibraryBrowserEntry =
     depth: 3;
   }
   | { kind: "load-more-albums"; artistId: string; label: string; depth: 2 }
-  | { kind: "load-more-tracks"; artistId: string; albumId: string; label: string; depth: 3 };
+  | { kind: "load-more-tracks"; artistId: string; albumId: string; label: string; depth: 3 }
+  | {
+    kind: "playlist";
+    id: string;
+    label: string;
+    trackCount?: number;
+    durationSeconds?: number;
+    coverArtId?: string;
+    depth: 1;
+  }
+  | {
+    kind: "playlist-track";
+    id: string;
+    playlistId: string;
+    label: string;
+    track: Track;
+    coverArtId?: string;
+    depth: 2;
+  }
+  | { kind: "load-more-playlist-tracks"; playlistId: string; label: string; depth: 2 }
+  | {
+    kind: "search-result";
+    id: string;
+    label: string;
+    track: Track;
+    coverArtId?: string;
+    depth: 1;
+  }
+  | { kind: "load-more-search-results"; label: string; depth: 1 };
 
 export type NavidromeProvider = Provider & {
   getConnectionState(): NavidromeConnectionState;
@@ -66,9 +104,14 @@ export type NavidromeProvider = Provider & {
   refreshArtists(): Promise<readonly NavidromeArtist[]>;
   listArtistAlbums(artistId: string): Promise<readonly NavidromeAlbum[]>;
   listAlbumTracks(albumId: string): Promise<readonly Track[]>;
+  listPlaylists(): Promise<readonly NavidromePlaylist[]>;
+  listPlaylistTracks(playlistId: string): Promise<readonly Track[]>;
+  searchTracks(query: string): Promise<readonly Track[]>;
   openLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Promise<void>;
   refreshLibraryBrowser(): Promise<void>;
   trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined;
+  reportNowPlaying(identity: TrackIdentity): Promise<void>;
+  reportCompletedPlay(identity: TrackIdentity): Promise<void>;
 };
 
 export type NavidromeProviderOptions = {
@@ -119,9 +162,14 @@ export function isNavidromeProvider(provider: Provider | undefined): provider is
     && typeof (provider as Partial<NavidromeProvider>).refreshArtists === "function"
     && typeof (provider as Partial<NavidromeProvider>).listArtistAlbums === "function"
     && typeof (provider as Partial<NavidromeProvider>).listAlbumTracks === "function"
+    && typeof (provider as Partial<NavidromeProvider>).listPlaylists === "function"
+    && typeof (provider as Partial<NavidromeProvider>).listPlaylistTracks === "function"
+    && typeof (provider as Partial<NavidromeProvider>).searchTracks === "function"
     && typeof (provider as Partial<NavidromeProvider>).openLibraryBrowserEntry === "function"
     && typeof (provider as Partial<NavidromeProvider>).refreshLibraryBrowser === "function"
-    && typeof (provider as Partial<NavidromeProvider>).trackForLibraryBrowserEntry === "function";
+    && typeof (provider as Partial<NavidromeProvider>).trackForLibraryBrowserEntry === "function"
+    && typeof (provider as Partial<NavidromeProvider>).reportNowPlaying === "function"
+    && typeof (provider as Partial<NavidromeProvider>).reportCompletedPlay === "function";
 }
 
 export function navidromeServerId(value: unknown): string {
@@ -164,6 +212,13 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   private readonly albumTracks = new Map<string, Track[]>();
   private readonly albumVisibleCounts = new Map<string, number>();
   private readonly trackVisibleCounts = new Map<string, number>();
+  private playlists: NavidromePlaylist[] | null = null;
+  private expandedPlaylistId: string | null = null;
+  private readonly playlistTracks = new Map<string, Track[]>();
+  private readonly playlistTrackVisibleCounts = new Map<string, number>();
+  private searchQuery = "";
+  private searchResults: Track[] = [];
+  private searchHasMore = false;
 
   constructor(options: NavidromeProviderOptions) {
     this.config = options.config;
@@ -273,6 +328,67 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
       }
     }
 
+    entries.push({ kind: "playlists-root", label: "Playlists", depth: 0 });
+    for (const playlist of this.playlists ?? []) {
+      entries.push({
+        kind: "playlist",
+        id: playlist.id,
+        label: playlist.name,
+        trackCount: playlist.trackCount,
+        durationSeconds: playlist.durationSeconds,
+        coverArtId: playlist.coverArtId,
+        depth: 1,
+      });
+
+      if (this.expandedPlaylistId !== playlist.id) continue;
+
+      const tracks = this.playlistTracks.get(playlist.id) ?? [];
+      const visibleTrackCount = Math.min(this.playlistTrackVisibleCounts.get(playlist.id) ?? this.pageSize, tracks.length);
+      for (const track of tracks.slice(0, visibleTrackCount)) {
+        entries.push({
+          kind: "playlist-track",
+          id: this.trackIdFromIdentity(track.identity) ?? track.identity.stableId,
+          playlistId: playlist.id,
+          label: track.title,
+          track,
+          coverArtId: track.coverArtId,
+          depth: 2,
+        });
+      }
+
+      if (visibleTrackCount < tracks.length) {
+        entries.push({
+          kind: "load-more-playlist-tracks",
+          playlistId: playlist.id,
+          label: "Load more playlist tracks",
+          depth: 2,
+        });
+      }
+    }
+
+    entries.push({
+      kind: "search-root",
+      label: this.searchQuery ? `Search: ${this.searchQuery}` : "Search",
+      depth: 0,
+    });
+    for (const track of this.searchResults) {
+      entries.push({
+        kind: "search-result",
+        id: this.trackIdFromIdentity(track.identity) ?? track.identity.stableId,
+        label: track.title,
+        track,
+        coverArtId: track.coverArtId,
+        depth: 1,
+      });
+    }
+    if (this.searchHasMore) {
+      entries.push({
+        kind: "load-more-search-results",
+        label: "Load more search results",
+        depth: 1,
+      });
+    }
+
     return entries;
   }
 
@@ -362,6 +478,50 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     }
   }
 
+  async listPlaylists(): Promise<readonly NavidromePlaylist[]> {
+    if (this.playlists) return this.playlists;
+
+    try {
+      const response = await this.requestSubsonic<{ playlists?: unknown }>("getPlaylists");
+      this.playlists = parsePlaylists(response.playlists);
+      return this.playlists;
+    } catch (error) {
+      const apiError = toNavidromeApiError(error, this.config);
+      this.connectionState = failedConnectionState(apiError);
+      throw apiError;
+    }
+  }
+
+  async listPlaylistTracks(playlistId: string): Promise<readonly Track[]> {
+    const cached = this.playlistTracks.get(playlistId);
+    if (cached) return cached;
+
+    try {
+      const response = await this.requestSubsonic<{ playlist?: unknown }>("getPlaylist", { id: playlistId });
+      const tracks = parseTracks(response.playlist, normalizedServerUrl(this.config.serverUrl));
+      this.playlistTracks.set(playlistId, tracks);
+      this.playlistTrackVisibleCounts.set(playlistId, Math.min(this.pageSize, tracks.length));
+      return tracks;
+    } catch (error) {
+      const apiError = toNavidromeApiError(error, this.config);
+      this.connectionState = failedConnectionState(apiError);
+      throw apiError;
+    }
+  }
+
+  async searchTracks(query: string): Promise<readonly Track[]> {
+    const trimmed = query.trim();
+    this.searchQuery = trimmed;
+    this.searchResults = [];
+    this.searchHasMore = false;
+    if (!trimmed) return this.searchResults;
+
+    const firstPage = await this.searchTracksPage(trimmed, 0);
+    this.searchResults = firstPage;
+    this.searchHasMore = firstPage.length >= this.pageSize;
+    return this.searchResults;
+  }
+
   async openLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Promise<void> {
     switch (entry.kind) {
       case "artists-root":
@@ -391,23 +551,99 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
         this.trackVisibleCounts.set(entry.albumId, Math.min(current + this.pageSize, tracks.length));
         return;
       }
+      case "playlists-root":
+        await this.listPlaylists();
+        this.expandedPlaylistId = null;
+        return;
+      case "playlist":
+        this.expandedPlaylistId = entry.id;
+        await this.listPlaylistTracks(entry.id);
+        return;
+      case "load-more-playlist-tracks": {
+        const tracks = await this.listPlaylistTracks(entry.playlistId);
+        const current = this.playlistTrackVisibleCounts.get(entry.playlistId) ?? this.pageSize;
+        this.playlistTrackVisibleCounts.set(entry.playlistId, Math.min(current + this.pageSize, tracks.length));
+        return;
+      }
+      case "load-more-search-results": {
+        if (!this.searchQuery || !this.searchHasMore) return;
+
+        const nextPage = await this.searchTracksPage(this.searchQuery, this.searchResults.length);
+        this.searchResults = [...this.searchResults, ...nextPage];
+        this.searchHasMore = nextPage.length >= this.pageSize;
+        return;
+      }
       case "track":
+      case "playlist-track":
+      case "search-result":
+      case "search-root":
         return;
     }
   }
 
   async refreshLibraryBrowser(): Promise<void> {
+    this.playlists = null;
+    this.expandedPlaylistId = null;
+    this.playlistTracks.clear();
+    this.playlistTrackVisibleCounts.clear();
+    this.searchQuery = "";
+    this.searchResults = [];
+    this.searchHasMore = false;
     await this.refreshArtists();
   }
 
   trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined {
-    return entry.kind === "track" ? entry.track : undefined;
+    return entry.kind === "track" || entry.kind === "playlist-track" || entry.kind === "search-result"
+      ? entry.track
+      : undefined;
+  }
+
+  async reportNowPlaying(identity: TrackIdentity): Promise<void> {
+    await this.reportScrobble(identity, false);
+  }
+
+  async reportCompletedPlay(identity: TrackIdentity): Promise<void> {
+    await this.reportScrobble(identity, true);
   }
 
   private trackIdFromIdentity(identity: TrackIdentity): string | undefined {
     const prefix = `${this.label}:${normalizedServerUrl(this.config.serverUrl)}:track:`;
     if (!identity.stableId.startsWith(prefix)) return undefined;
     return identity.stableId.slice(prefix.length);
+  }
+
+  private async searchTracksPage(query: string, offset: number): Promise<Track[]> {
+    try {
+      const response = await this.requestSubsonic<{ searchResult3?: unknown }>("search3", {
+        query,
+        artistCount: "0",
+        albumCount: "0",
+        songCount: String(this.pageSize),
+        songOffset: String(Math.max(0, offset)),
+      });
+      return parseTracks(response.searchResult3, normalizedServerUrl(this.config.serverUrl));
+    } catch (error) {
+      const apiError = toNavidromeApiError(error, this.config);
+      this.connectionState = failedConnectionState(apiError);
+      throw apiError;
+    }
+  }
+
+  private async reportScrobble(identity: TrackIdentity, submission: boolean): Promise<void> {
+    if (!this.config.scrobble) return;
+
+    const trackId = this.trackIdFromIdentity(identity);
+    if (!trackId) {
+      throw new Error("Navidrome Track Identity does not match this server");
+    }
+
+    const params: Record<string, string> = {
+      id: trackId,
+      submission: String(submission),
+    };
+    if (submission) params.time = String(Date.now());
+
+    await this.requestSubsonic("scrobble", params);
   }
 
   private async requestSubsonic<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -547,13 +783,38 @@ function parseAlbums(value: unknown): NavidromeAlbum[] {
   return albums;
 }
 
+function parsePlaylists(value: unknown): NavidromePlaylist[] {
+  if (!isRecord(value)) return [];
+  const rawPlaylists = Array.isArray(value.playlist) ? value.playlist : [];
+  const playlists: NavidromePlaylist[] = [];
+
+  for (const playlist of rawPlaylists) {
+    if (!isRecord(playlist)) continue;
+    const id = navidromeServerId(playlist.id);
+    const name = stringValue(playlist.name);
+    if (!id || !name) continue;
+
+    playlists.push({
+      id,
+      name,
+      trackCount: numberValue(playlist.songCount),
+      durationSeconds: numberValue(playlist.duration),
+      coverArtId: playlist.coverArt === undefined ? undefined : navidromeServerId(playlist.coverArt),
+    });
+  }
+
+  return playlists;
+}
+
 function parseTracks(value: unknown, serverUrl: string): Track[] {
   if (!isRecord(value)) return [];
   const rawTracks = Array.isArray(value.song)
     ? value.song
     : Array.isArray(value.child)
       ? value.child
-      : [];
+      : Array.isArray(value.entry)
+        ? value.entry
+        : [];
   const albumName = stringValue(value.name) ?? stringValue(value.title);
   const albumArtist = stringValue(value.artist);
   const tracks: Track[] = [];

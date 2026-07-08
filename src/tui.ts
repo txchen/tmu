@@ -372,7 +372,7 @@ export class TerminalTui {
     this.input.on("data", async (data) => {
       scheduler.requestInputRedraw();
       for (const key of splitKeys(data)) {
-        if (this.app.coordinator.uiState.activePrompt === "local-open-path") {
+        if (this.app.coordinator.uiState.activePrompt) {
           const handled = await this.handlePromptKey(key);
           if (handled) continue;
         }
@@ -441,6 +441,7 @@ export function intentFromKey(key: string): AppIntent | null {
   if (key === "S") return { type: "saveLastQueueSnapshot" };
   if (key === "R") return { type: "restoreLastQueueSnapshot" };
   if (key === "f") return { type: "refreshNavidromeLibrary" };
+  if (key === "/") return { type: "openNavidromeSearchPrompt" };
   if (key === "o") return { type: "openLocalPathPrompt" };
   if (key === "x") return { type: "removeSelectedQueueEntry" };
   if (key === "c") return { type: "clearQueue" };

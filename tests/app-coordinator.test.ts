@@ -10,9 +10,11 @@ import {
   NAVIGATION_TARGETS,
   createTmuApp,
   createDefaultDependencyHealth,
+  createDefaultTmuConfig,
   createInitialAppState,
   createInitialUiState,
   createDefaultProviders,
+  createNavidromeProvider,
   renderShellText,
   type NavidromeFetcher,
   type DependencyCommandRunner,
@@ -183,6 +185,63 @@ class RecordingPlayer extends NoopPlayer implements Player {
   async teardown() {
     this.teardowns += 1;
     await super.teardown();
+  }
+}
+
+class ManualPlaybackPlayer implements Player {
+  readonly loaded: PlaybackLocator[] = [];
+  private state: PlayerPlaybackState = { status: "idle" };
+  private readonly listeners = new Set<(state: PlayerPlaybackState) => void>();
+
+  get playback(): PlayerPlaybackState {
+    return this.state;
+  }
+
+  async start(): Promise<PlayerPlaybackState> {
+    return this.state;
+  }
+
+  async load(locator: PlaybackLocator): Promise<void> {
+    this.loaded.push(locator);
+    this.emitPlaybackState({ status: "playing" });
+  }
+
+  async togglePause(): Promise<PlayerPlaybackState> {
+    this.emitPlaybackState({ ...this.state, status: this.state.status === "playing" ? "paused" : "playing" });
+    return this.state;
+  }
+
+  async setPaused(paused: boolean): Promise<PlayerPlaybackState> {
+    this.emitPlaybackState({ ...this.state, status: paused ? "paused" : "playing", paused });
+    return this.state;
+  }
+
+  async stop(): Promise<PlayerPlaybackState> {
+    this.emitPlaybackState({ status: "stopped" });
+    return this.state;
+  }
+
+  async seekBy(_seconds: number): Promise<PlayerPlaybackState> {
+    return this.state;
+  }
+
+  async setVolume(percent: number): Promise<PlayerPlaybackState> {
+    this.emitPlaybackState({ ...this.state, volumePercent: Math.max(0, Math.min(100, Math.round(percent))) });
+    return this.state;
+  }
+
+  async teardown(): Promise<void> {
+    return undefined;
+  }
+
+  onPlaybackStateChange(listener: (state: PlayerPlaybackState) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emitPlaybackState(state: PlayerPlaybackState): void {
+    this.state = state;
+    for (const listener of this.listeners) listener(this.state);
   }
 }
 
@@ -605,7 +664,253 @@ describe("AppCoordinator", () => {
       providerId: "navidrome",
       stableId: "Navidrome:https://music.example.test:track:track-1",
     });
-    expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtist", "getAlbum"]);
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtist", "getAlbum", "scrobble"]);
+  });
+
+  test("browses Navidrome playlists and enqueues playlist Tracks through coordinator intents", async () => {
+    const seenEndpoints: string[] = [];
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async (url) => {
+        seenEndpoints.push(navidromeEndpointName(url));
+        if (url.pathname.endsWith("/getArtists.view")) {
+          return navidromeJson({ status: "ok", artists: { index: [] } });
+        }
+        if (url.pathname.endsWith("/getPlaylists.view")) {
+          expect(url.searchParams.has("username")).toBe(false);
+          return navidromeJson({
+            status: "ok",
+            playlists: {
+              playlist: [{ id: "playlist-1", name: "Favorites", songCount: 1 }],
+            },
+          });
+        }
+        if (url.pathname.endsWith("/getPlaylist.view")) {
+          return navidromeJson({
+            status: "ok",
+            playlist: {
+              id: "playlist-1",
+              name: "Favorites",
+              entry: [{
+                id: "playlist-track-1",
+                title: "Playlist Track",
+                artist: "Alex",
+                album: "Remote Set",
+                duration: 181,
+              }],
+            },
+          });
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "activateSelectedContent" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "activateSelectedContent" });
+    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([{
+      identity: {
+        providerId: "navidrome",
+        stableId: "Navidrome:https://music.example.test:track:playlist-track-1",
+      },
+      title: "Playlist Track",
+      providerLabel: "Navidrome",
+      artist: "Alex",
+      album: "Remote Set",
+      durationSeconds: 181,
+    }]);
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "getPlaylists", "getPlaylist"]);
+  });
+
+  test("searches Navidrome Tracks with simple text and enqueues search results", async () => {
+    const seenSearchParams: Record<string, string>[] = [];
+    const { coordinator } = createTmuApp({
+      config: connectedNavidromeConfig(),
+      navidromeFetcher: async (url) => {
+        if (url.pathname.endsWith("/getArtists.view")) {
+          return navidromeJson({ status: "ok", artists: { index: [] } });
+        }
+        if (url.pathname.endsWith("/search3.view")) {
+          seenSearchParams.push(Object.fromEntries(url.searchParams.entries()));
+          return navidromeJson({
+            status: "ok",
+            searchResult3: {
+              song: [{
+                id: "search-track-1",
+                title: "Found Track",
+                artist: "Search Artist",
+              }],
+            },
+          });
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      navidromeSaltFactory: () => "salt",
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await coordinator.dispatch({ type: "openNavidromeSearchPrompt" });
+    await coordinator.dispatch({ type: "setPromptInput", value: "found" });
+    await coordinator.dispatch({ type: "submitPrompt" });
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+
+    expect(seenSearchParams).toHaveLength(1);
+    expect(seenSearchParams[0]).toMatchObject({
+      query: "found",
+      songOffset: "0",
+    });
+    expect(Number(seenSearchParams[0]?.songCount)).toBeGreaterThan(0);
+    expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
+      identity: {
+        providerId: "navidrome",
+        stableId: "Navidrome:https://music.example.test:track:search-track-1",
+      },
+      title: "Found Track",
+      artist: "Search Artist",
+    });
+  });
+
+  test("reports Navidrome now-playing scrobble when playback starts and reporting is enabled", async () => {
+    const player = new ManualPlaybackPlayer();
+    const seenScrobbles: Record<string, string>[] = [];
+    const queue = new MemoryQueue();
+    const remoteTrack = navidromeTrack("track-1", "Remote Track", 180);
+    queue.enqueue(remoteTrack);
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      fetcher: async (url) => {
+        if (url.pathname.endsWith("/scrobble.view")) {
+          seenScrobbles.push(Object.fromEntries(url.searchParams.entries()));
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      saltFactory: () => "salt",
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    await waitFor(() => {
+      expect(seenScrobbles).toContainEqual(expect.objectContaining({ id: "track-1", submission: "false" }));
+    });
+    expect(player.loaded).toHaveLength(1);
+    expect(coordinator.appState.playback.status).toBe("playing");
+  });
+
+  test("reports Navidrome completed-play scrobble after the local threshold", async () => {
+    const player = new ManualPlaybackPlayer();
+    const seenScrobbles: Record<string, string>[] = [];
+    const queue = new MemoryQueue();
+    const remoteTrack = navidromeTrack("track-2", "Long Remote Track", 300);
+    queue.enqueue(remoteTrack);
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      fetcher: async (url) => {
+        if (url.pathname.endsWith("/scrobble.view")) {
+          seenScrobbles.push(Object.fromEntries(url.searchParams.entries()));
+        }
+        return navidromeJson({ status: "ok" });
+      },
+      saltFactory: () => "salt",
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    player.emitPlaybackState({ status: "playing", positionSeconds: 149, durationSeconds: 300 });
+    await Bun.sleep(10);
+    expect(seenScrobbles.filter((params) => params.submission === "true")).toEqual([]);
+
+    player.emitPlaybackState({ status: "playing", positionSeconds: 150, durationSeconds: 300 });
+
+    await waitFor(() => {
+      expect(seenScrobbles).toContainEqual(expect.objectContaining({ id: "track-2", submission: "true" }));
+    });
+    player.emitPlaybackState({ status: "playing", positionSeconds: 180, durationSeconds: 300 });
+    await Bun.sleep(10);
+    expect(seenScrobbles.filter((params) => params.submission === "true")).toHaveLength(1);
+  });
+
+  test("does not report Navidrome scrobbles when reporting is disabled", async () => {
+    const player = new ManualPlaybackPlayer();
+    const seenEndpoints: string[] = [];
+    const queue = new MemoryQueue();
+    queue.enqueue(navidromeTrack("track-3", "Opt Out Track", 120));
+    const config = connectedNavidromeConfig({ scrobble: false });
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(config).providers.navidrome,
+      fetcher: async (url) => {
+        seenEndpoints.push(navidromeEndpointName(url));
+        return navidromeJson({ status: "ok" });
+      },
+      saltFactory: () => "salt",
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    player.emitPlaybackState({ status: "playing", positionSeconds: 90, durationSeconds: 120 });
+    await Bun.sleep(10);
+
+    expect(seenEndpoints).toEqual([]);
+    expect(coordinator.appState.playback.status).toBe("playing");
+  });
+
+  test("keeps Navidrome reporting failures non-blocking and visible in diagnostics", async () => {
+    const player = new ManualPlaybackPlayer();
+    const queue = new MemoryQueue();
+    queue.enqueue(navidromeTrack("track-4", "Failure Track", 120));
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      fetcher: async () => {
+        throw new Error("scrobble network failed");
+      },
+      saltFactory: () => "salt",
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.start([]);
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+
+    await waitFor(() => {
+      expect(coordinator.appState.appErrors).toContain("Navidrome reporting failed: request failed for scrobble: scrobble network failed");
+    });
+    expect(player.loaded).toHaveLength(1);
+    expect(coordinator.appState.playback.status).toBe("playing");
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({ status: "available" });
   });
 
   test("loads Navidrome artists once through navigation and reloads them on explicit refresh", async () => {
@@ -1302,7 +1607,7 @@ describe("AppCoordinator", () => {
   });
 });
 
-function connectedNavidromeConfig(): TmuConfigInput {
+function connectedNavidromeConfig(navidromeOverrides: NonNullable<TmuConfigInput["providers"]>["navidrome"] = {}): TmuConfigInput {
   return {
     providers: {
       navidrome: {
@@ -1311,8 +1616,21 @@ function connectedNavidromeConfig(): TmuConfigInput {
         username: "alex",
         password: "secret-password",
         clientName: "tmu-test",
+        ...navidromeOverrides,
       },
     },
+  };
+}
+
+function navidromeTrack(id: string, title: string, durationSeconds?: number): Track {
+  return {
+    identity: {
+      providerId: "navidrome",
+      stableId: `Navidrome:https://music.example.test:track:${id}`,
+    },
+    title,
+    providerLabel: "Navidrome",
+    durationSeconds,
   };
 }
 

@@ -1,6 +1,7 @@
 import {
   NAVIGATION_TARGETS,
   clampIndex,
+  identityKey,
   navigationTargetIndex,
   sameIdentity,
   type AppIntent,
@@ -11,6 +12,7 @@ import {
   type Queue,
   type QueueEntry,
   type NavigationTargetId,
+  type Track,
   type UiState,
 } from "./domain";
 import {
@@ -52,6 +54,8 @@ export class AppCoordinator {
   private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<() => void>();
   private activeLocalOpen: AbortController | null = null;
+  private reportingSessionKey: string | null = null;
+  private completedPlayReported = false;
   private tornDown = false;
 
   constructor(options: AppCoordinatorOptions) {
@@ -63,6 +67,7 @@ export class AppCoordinator {
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       this.mergePlayerPlayback(playback);
+      this.maybeReportCompletedPlay(playback);
       this.notifyStateChanged();
     });
     this.unsubscribeFromProviders = Object.values(this.appState.providers)
@@ -122,6 +127,12 @@ export class AppCoordinator {
         case "refreshNavidromeLibrary":
           if (this.uiState.activeTargetId !== "navidrome") return;
           await this.refreshNavidromeLibrary();
+          return;
+        case "openNavidromeSearchPrompt":
+          this.openNavidromeSearchPrompt();
+          return;
+        case "searchNavidromeTracks":
+          await this.searchNavidromeTracks(intent.query);
           return;
         case "openLocalPathPrompt":
           this.openLocalPathPrompt();
@@ -356,6 +367,18 @@ export class AppCoordinator {
     this.appState.lastEvent = "opened Local path prompt";
   }
 
+  private openNavidromeSearchPrompt(): void {
+    if (this.uiState.activeTargetId !== "navidrome") {
+      this.appState.lastEvent = "Navidrome search is only available in the Navidrome Library Browser";
+      return;
+    }
+
+    this.uiState.focusedPane = "content";
+    this.uiState.activePrompt = "navidrome-search";
+    this.uiState.promptInput = "";
+    this.appState.lastEvent = "opened Navidrome search prompt";
+  }
+
   private setPromptInput(value: string): void {
     if (!this.uiState.activePrompt) return;
     this.uiState.promptInput = value;
@@ -374,6 +397,14 @@ export class AppCoordinator {
       this.uiState.activePrompt = null;
       this.uiState.promptInput = "";
       this.appState.lastEvent = "YouTube URL Download is not implemented yet";
+      return;
+    }
+
+    if (this.uiState.activePrompt === "navidrome-search") {
+      const query = this.uiState.promptInput;
+      this.uiState.activePrompt = null;
+      this.uiState.promptInput = "";
+      await this.searchNavidromeTracks(query);
     }
   }
 
@@ -667,8 +698,11 @@ export class AppCoordinator {
       status: "playing",
       currentTrackIdentity: entry.track.identity,
     };
+    this.reportingSessionKey = identityKey(entry.track.identity);
+    this.completedPlayReported = false;
     this.appState.lastEvent = `started ${entry.track.title}`;
     this.syncQueueState();
+    this.reportNowPlaying(entry.track);
     return true;
   }
 
@@ -808,6 +842,32 @@ export class AppCoordinator {
     this.appState.lastEvent = "refreshed Navidrome Library Browser";
   }
 
+  private async searchNavidromeTracks(query: string): Promise<void> {
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) {
+      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
+      return;
+    }
+
+    if (this.uiState.activeTargetId !== "navidrome") {
+      this.uiState.activeTargetId = "navidrome";
+      this.uiState.selectedTargetIndex = navigationTargetIndex("navidrome");
+    }
+    this.uiState.focusedPane = "content";
+
+    try {
+      const results = await provider.searchTracks(query);
+      const entries = provider.getLibraryBrowserEntries();
+      const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
+      this.uiState.selectedContentIndexByTarget.navidrome = firstResultIndex === -1 ? 0 : firstResultIndex;
+      this.appState.lastEvent = results.length === 0
+        ? `Navidrome search found no Tracks for ${query.trim()}`
+        : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
+    } catch (error) {
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+    }
+  }
+
   private async runPlayerCommand(
     command: () => Promise<PlayerPlaybackState>,
     fallbackEvent?: string,
@@ -834,6 +894,56 @@ export class AppCoordinator {
       ...playback,
       currentTrackIdentity: options.clearCurrentTrack ? null : this.appState.playback.currentTrackIdentity,
     };
+  }
+
+  private reportNowPlaying(track: Track): void {
+    if (!this.shouldReportNavidromeScrobble(track)) return;
+
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) return;
+
+    void provider.reportNowPlaying(track.identity)
+      .catch((error) => this.recordReportingFailure(error));
+  }
+
+  private maybeReportCompletedPlay(playback: PlayerPlaybackState): void {
+    if (this.completedPlayReported || playback.status !== "playing") return;
+
+    const currentIdentity = this.appState.playback.currentTrackIdentity;
+    if (!currentIdentity) return;
+
+    const currentKey = identityKey(currentIdentity);
+    if (this.reportingSessionKey !== currentKey) return;
+
+    const entry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, currentIdentity));
+    if (!entry || !this.shouldReportNavidromeScrobble(entry.track)) return;
+
+    const positionSeconds = playback.positionSeconds;
+    if (typeof positionSeconds !== "number" || !Number.isFinite(positionSeconds)) return;
+
+    const durationSeconds = playback.durationSeconds ?? entry.track.durationSeconds;
+    const thresholdSeconds = completedPlayThresholdSeconds(durationSeconds);
+    if (positionSeconds < thresholdSeconds) return;
+
+    const provider = this.appState.providers.navidrome;
+    if (!isNavidromeProvider(provider)) return;
+
+    this.completedPlayReported = true;
+    void provider.reportCompletedPlay(entry.track.identity)
+      .catch((error) => this.recordReportingFailure(error));
+  }
+
+  private shouldReportNavidromeScrobble(track: Track): boolean {
+    return track.identity.providerId === "navidrome"
+      && this.appState.config.providers.navidrome.scrobble;
+  }
+
+  private recordReportingFailure(error: unknown): void {
+    if (this.tornDown) return;
+
+    const message = `Navidrome reporting failed: ${error instanceof Error ? error.message : String(error)}`;
+    this.appState.appErrors.push(message);
+    this.notifyStateChanged();
   }
 
   private selectedVisibleTrack() {
@@ -877,4 +987,10 @@ export class AppCoordinator {
   private notifyStateChanged(): void {
     for (const listener of this.stateListeners) listener();
   }
+}
+
+function completedPlayThresholdSeconds(durationSeconds: number | null | undefined): number {
+  return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
+    ? Math.min(240, durationSeconds / 2)
+    : 240;
 }

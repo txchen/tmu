@@ -168,7 +168,7 @@ export type UiState = {
   selectedTargetIndex: number;
   selectedContentIndexByTarget: Record<NavigationTargetId, number>;
   selectedQueueIndex: number;
-  activePrompt: null | "youtube-url" | "local-open-path";
+  activePrompt: null | "youtube-url" | "local-open-path" | "navidrome-search";
   promptInput: string;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
@@ -181,6 +181,8 @@ export type AppIntent =
   | { type: "cycleFocus" }
   | { type: "enqueueSelectedTrack" }
   | { type: "refreshNavidromeLibrary" }
+  | { type: "openNavidromeSearchPrompt" }
+  | { type: "searchNavidromeTracks"; query: string }
   | { type: "openLocalPathPrompt" }
   | { type: "setPromptInput"; value: string }
   | { type: "submitPrompt" }
