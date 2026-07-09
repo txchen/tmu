@@ -108,9 +108,9 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
       },
     },
     lowPower: {
-      playbackTickMs: 500,
-      downloadProgressThrottleMs: 500,
-      providerProgressThrottleMs: 500,
+      playbackTickMs: 1000,
+      downloadProgressThrottleMs: 1000,
+      providerProgressThrottleMs: 1000,
     },
     offlineYouTubeCache: {
       cacheDir: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "tmu", "offline-youtube-cache"),
@@ -121,7 +121,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
       maxConcurrentDownloads: 1,
     },
     dependencyPolicy: {
-      checkTimeoutMs: 2000,
+      checkTimeoutMs: 10000,
     },
     persistence: {
       lastQueueSnapshotPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "last-queue.json"),

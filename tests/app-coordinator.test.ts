@@ -2274,7 +2274,7 @@ describe("AppCoordinator", () => {
           artist: "Prompt Artist",
           durationSeconds: 205,
         },
-        progressThrottleMs: 500,
+        progressThrottleMs: 1000,
       });
       expect(coordinator.appState.queue.entries[0]).toMatchObject({
         availability: { status: "available" },

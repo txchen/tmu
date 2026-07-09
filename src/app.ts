@@ -92,6 +92,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       workDir: tmpdir(),
       adapter: new BunMpvProcessAdapter(),
       commandTimeoutMs: loaded.config.dependencyPolicy.checkTimeoutMs,
+      positionPollMs: loaded.config.lowPower.playbackTickMs,
     })
     : new NoopPlayer();
 

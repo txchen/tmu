@@ -3,7 +3,12 @@ import { rm } from "node:fs/promises";
 import net from "node:net";
 import type { PlaybackLocator, Player, PlayerPlaybackState } from "./domain";
 
-const OBSERVED_MPV_PROPERTIES = ["time-pos", "duration", "pause", "idle-active", "eof-reached"] as const;
+const OBSERVED_MPV_PROPERTIES = ["duration", "pause", "idle-active", "eof-reached"] as const;
+const DEFAULT_POSITION_POLL_MS = 1000;
+const LOCAL_FILE_PLAYBACK_OPTIONS = {
+  "demuxer-thread": "no",
+  "audio-pitch-correction": "no",
+} as const;
 
 export type MpvProcessHandle = {
   readonly exited: Promise<number | null>;
@@ -31,6 +36,7 @@ export type MpvPlayerOptions = {
   adapter?: MpvProcessAdapter;
   commandTimeoutMs?: number;
   startTimeoutMs?: number;
+  positionPollMs?: number;
 };
 
 type PendingCommand = {
@@ -38,6 +44,8 @@ type PendingCommand = {
   resolve(value: unknown): void;
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
+  recordErrors: boolean;
+  updateOnReply: boolean;
 };
 
 export class NoopPlayer implements Player {
@@ -125,17 +133,20 @@ export class MpvPlayer implements Player {
   private readonly adapter: MpvProcessAdapter;
   private readonly commandTimeoutMs: number;
   private readonly startTimeoutMs: number;
+  private readonly positionPollMs: number;
   private readonly listeners = new Set<(state: PlayerPlaybackState) => void>();
   private process: MpvProcessHandle | null = null;
   private ipc: MpvIpcClient | null = null;
   private nextRequestId = 1;
   private pending = new Map<number, PendingCommand>();
+  private positionPollTimer: ReturnType<typeof setTimeout> | null = null;
   private tearingDown = false;
 
   constructor(private readonly options: MpvPlayerOptions) {
     this.adapter = options.adapter ?? new BunMpvProcessAdapter();
     this.commandTimeoutMs = options.commandTimeoutMs ?? 2500;
     this.startTimeoutMs = options.startTimeoutMs ?? 2500;
+    this.positionPollMs = normalizePositionPollMs(options.positionPollMs);
   }
 
   get playback(): PlayerPlaybackState {
@@ -175,8 +186,7 @@ export class MpvPlayer implements Player {
   }
 
   async load(locator: PlaybackLocator): Promise<void> {
-    const target = locator.kind === "file" ? locator.path : locator.url;
-    await this.command(["loadfile", target, "replace"]);
+    await this.command(this.loadCommand(locator));
     this.updateState({
       status: "playing",
       positionSeconds: null,
@@ -186,6 +196,7 @@ export class MpvPlayer implements Player {
       eof: false,
       message: undefined,
     });
+    this.reschedulePositionPoll(0);
   }
 
   async togglePause(): Promise<PlayerPlaybackState> {
@@ -197,6 +208,7 @@ export class MpvPlayer implements Player {
       idle: false,
       eof: false,
     });
+    if (!paused) this.reschedulePositionPoll(0);
     return this.state;
   }
 
@@ -208,6 +220,7 @@ export class MpvPlayer implements Player {
       idle: false,
       eof: false,
     });
+    if (!paused) this.reschedulePositionPoll(0);
     return this.state;
   }
 
@@ -221,6 +234,7 @@ export class MpvPlayer implements Player {
       idle: true,
       eof: false,
     });
+    this.clearPositionPoll();
     return this.state;
   }
 
@@ -240,6 +254,7 @@ export class MpvPlayer implements Player {
 
   async teardown(): Promise<void> {
     this.tearingDown = true;
+    this.clearPositionPoll();
     const process = this.process;
     try {
       if (this.ipc) {
@@ -273,26 +288,56 @@ export class MpvPlayer implements Player {
 
   private mpvArgs(): string[] {
     return [
+      "--no-config",
       "--idle=yes",
       "--terminal=no",
       "--vid=no",
       "--audio-display=no",
       "--no-resume-playback",
       "--really-quiet",
+      "--load-scripts=no",
+      "--ytdl=no",
+      "--osc=no",
+      "--input-default-bindings=no",
+      "--input-builtin-bindings=no",
       `--input-ipc-server=${this.options.ipcPath}`,
     ];
   }
 
+  private loadCommand(locator: PlaybackLocator): unknown[] {
+    if (locator.kind === "url") return ["loadfile", locator.url, "replace"];
+
+    return ["loadfile", locator.path, "replace", -1, LOCAL_FILE_PLAYBACK_OPTIONS];
+  }
+
   private async command(command: unknown[], timeoutMs = this.commandTimeoutMs): Promise<unknown> {
+    return await this.sendCommand(command, timeoutMs, {
+      recordErrors: true,
+      updateOnReply: true,
+    });
+  }
+
+  private async query(command: unknown[], timeoutMs = this.commandTimeoutMs): Promise<unknown> {
+    return await this.sendCommand(command, timeoutMs, {
+      recordErrors: false,
+      updateOnReply: false,
+    });
+  }
+
+  private async sendCommand(
+    command: unknown[],
+    timeoutMs: number,
+    options: Pick<PendingCommand, "recordErrors" | "updateOnReply">,
+  ): Promise<unknown> {
     if (!this.ipc) {
       const error = new Error("mpv IPC socket is not connected");
-      this.recordCommandError(command, error);
+      if (options.recordErrors) this.recordCommandError(command, error);
       throw error;
     }
 
     const requestId = this.nextRequestId;
     this.nextRequestId += 1;
-    const commandText = command.map(String).join(" ");
+    const commandText = command.map(formatCommandPart).join(" ");
     const payload = JSON.stringify({ command, request_id: requestId });
     this.ipc.writeLine(payload);
 
@@ -300,7 +345,7 @@ export class MpvPlayer implements Player {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
         const error = new Error(`mpv command timed out: ${commandText}`);
-        this.recordCommandError(command, error);
+        if (options.recordErrors) this.recordCommandError(command, error);
         reject(error);
       }, timeoutMs);
       this.pending.set(requestId, {
@@ -308,6 +353,8 @@ export class MpvPlayer implements Player {
         resolve,
         reject,
         timeout,
+        recordErrors: options.recordErrors,
+        updateOnReply: options.updateOnReply,
       });
     });
   }
@@ -335,6 +382,7 @@ export class MpvPlayer implements Player {
     }
 
     if (message.event === "end-file") {
+      this.clearPositionPoll();
       this.updateState({
         status: "idle",
         positionSeconds: null,
@@ -356,21 +404,23 @@ export class MpvPlayer implements Player {
 
     if (message.error && message.error !== "success") {
       const error = new Error(`mpv error: ${String(message.error)}`);
-      this.recordCommandError(pending.commandText, error);
+      if (pending.recordErrors) this.recordCommandError(pending.commandText, error);
       pending.reject(error);
       return;
     }
 
-    this.updateState({
-      commandError: undefined,
-      message: undefined,
-    });
+    if (pending.updateOnReply) {
+      this.updateState({
+        commandError: undefined,
+        message: undefined,
+      });
+    }
     pending.resolve(message.data);
   }
 
   private applyProperty(name: string, value: unknown): void {
     if (name === "time-pos") {
-      this.updateState({ positionSeconds: typeof value === "number" ? value : null });
+      this.updatePlaybackPosition(typeof value === "number" ? value : null);
       return;
     }
     if (name === "duration") {
@@ -404,6 +454,66 @@ export class MpvPlayer implements Player {
     }
   }
 
+  private updatePlaybackPosition(positionSeconds: number | null): void {
+    const previous = this.state.positionSeconds;
+    if (
+      typeof positionSeconds === "number"
+      && typeof previous === "number"
+      && Math.floor(positionSeconds) === Math.floor(previous)
+    ) {
+      return;
+    }
+
+    if (positionSeconds === null && previous === null) return;
+    this.updateState({ positionSeconds });
+  }
+
+  private shouldPollPosition(): boolean {
+    return this.state.status === "playing" && Boolean(this.ipc) && !this.tearingDown;
+  }
+
+  private schedulePositionPoll(delayMs = this.positionPollMs): void {
+    if (!this.shouldPollPosition() || this.positionPollTimer) return;
+
+    this.positionPollTimer = setTimeout(() => {
+      this.positionPollTimer = null;
+      void this.pollPlaybackPosition();
+    }, Math.max(0, delayMs));
+  }
+
+  private reschedulePositionPoll(delayMs = this.positionPollMs): void {
+    this.clearPositionPoll();
+    this.schedulePositionPoll(delayMs);
+  }
+
+  private clearPositionPoll(): void {
+    if (!this.positionPollTimer) return;
+    clearTimeout(this.positionPollTimer);
+    this.positionPollTimer = null;
+  }
+
+  private syncPositionPolling(): void {
+    if (this.shouldPollPosition()) {
+      this.schedulePositionPoll();
+      return;
+    }
+
+    this.clearPositionPoll();
+  }
+
+  private async pollPlaybackPosition(): Promise<void> {
+    if (!this.shouldPollPosition()) return;
+
+    try {
+      const position = await this.query(["get_property", "time-pos"]);
+      this.updatePlaybackPosition(typeof position === "number" ? position : null);
+    } catch {
+      return;
+    } finally {
+      this.schedulePositionPoll();
+    }
+  }
+
   private onIpcError(error: Error): void {
     this.updateState({
       status: "error",
@@ -415,6 +525,7 @@ export class MpvPlayer implements Player {
   private onProcessExit(code: number | null): void {
     if (this.tearingDown) return;
 
+    this.clearPositionPoll();
     const error = new Error(`mpv exited before teardown, code ${code ?? "unknown"}`);
     this.updateState({
       status: "error",
@@ -432,7 +543,7 @@ export class MpvPlayer implements Player {
   }
 
   private recordCommandError(command: unknown[] | string, error: Error): void {
-    const commandText = Array.isArray(command) ? command.map(String).join(" ") : command;
+    const commandText = Array.isArray(command) ? command.map(formatCommandPart).join(" ") : command;
     this.updateState({
       status: "error",
       commandError: {
@@ -457,6 +568,7 @@ export class MpvPlayer implements Player {
       ...this.state,
       ...patch,
     };
+    this.syncPositionPolling();
     for (const listener of this.listeners) listener(this.state);
   }
 
@@ -466,6 +578,18 @@ export class MpvPlayer implements Player {
       Bun.sleep(timeoutMs).then(() => false),
     ]);
   }
+}
+
+function formatCommandPart(part: unknown): string {
+  if (typeof part === "string") return part;
+  if (typeof part === "number" || typeof part === "boolean" || part === null) return String(part);
+  return JSON.stringify(part);
+}
+
+function normalizePositionPollMs(value: number | undefined): number {
+  return Number.isFinite(value) && value !== undefined && value > 0
+    ? Math.max(500, Math.round(value))
+    : DEFAULT_POSITION_POLL_MS;
 }
 
 export class BunMpvProcessAdapter implements MpvProcessAdapter {

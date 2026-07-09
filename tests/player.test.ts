@@ -73,6 +73,7 @@ class FakeIpcClient implements MpvIpcClient {
 
   private dataForCommand(command: unknown[]): unknown {
     if (command[0] === "get_property" && command[1] === "volume") return 88;
+    if (command[0] === "get_property" && command[1] === "time-pos") return 12.5;
     return null;
   }
 }
@@ -104,7 +105,21 @@ class FakeProcessAdapter implements MpvProcessAdapter {
   }
 }
 
+function countTimePositionPolls(messages: readonly unknown[]): number {
+  return messages.filter((message) => {
+    const command = (message as { command?: unknown }).command;
+    return Array.isArray(command)
+      && command[0] === "get_property"
+      && command[1] === "time-pos";
+  }).length;
+}
+
 describe("MpvPlayer", () => {
+  const localFilePlaybackOptions = {
+    "demuxer-thread": "no",
+    "audio-pitch-correction": "no",
+  };
+
   test("starts one long-lived audio-only idle mpv process and observes properties", async () => {
     const adapter = new FakeProcessAdapter();
     const player = new MpvPlayer({
@@ -119,12 +134,18 @@ describe("MpvPlayer", () => {
     expect(adapter.started).toEqual([{
       command: "/usr/bin/mpv",
       args: [
+        "--no-config",
         "--idle=yes",
         "--terminal=no",
         "--vid=no",
         "--audio-display=no",
         "--no-resume-playback",
         "--really-quiet",
+        "--load-scripts=no",
+        "--ytdl=no",
+        "--osc=no",
+        "--input-default-bindings=no",
+        "--input-builtin-bindings=no",
         "--input-ipc-server=/tmp/tmu-test.sock",
       ],
       cwd: "/tmp",
@@ -132,12 +153,11 @@ describe("MpvPlayer", () => {
     expect(adapter.waitedForIpc).toEqual(["/tmp/tmu-test.sock"]);
     expect(adapter.connectedToIpc).toEqual(["/tmp/tmu-test.sock"]);
     expect(adapter.ipc.sent).toEqual([
-      { command: ["observe_property", 1, "time-pos"], request_id: 1 },
-      { command: ["observe_property", 2, "duration"], request_id: 2 },
-      { command: ["observe_property", 3, "pause"], request_id: 3 },
-      { command: ["observe_property", 4, "idle-active"], request_id: 4 },
-      { command: ["observe_property", 5, "eof-reached"], request_id: 5 },
-      { command: ["get_property", "volume"], request_id: 6 },
+      { command: ["observe_property", 1, "duration"], request_id: 1 },
+      { command: ["observe_property", 2, "pause"], request_id: 2 },
+      { command: ["observe_property", 3, "idle-active"], request_id: 3 },
+      { command: ["observe_property", 4, "eof-reached"], request_id: 4 },
+      { command: ["get_property", "volume"], request_id: 5 },
     ]);
     expect(player.playback).toMatchObject({
       status: "idle",
@@ -152,6 +172,7 @@ describe("MpvPlayer", () => {
       ipcPath: "/tmp/tmu-test.sock",
       workDir: "/tmp",
       adapter,
+      positionPollMs: 100000,
     });
 
     await player.start();
@@ -162,13 +183,13 @@ describe("MpvPlayer", () => {
     await player.setVolume(42);
     await player.stop();
 
-    expect(adapter.ipc.sent.slice(6)).toEqual([
-      { command: ["loadfile", "/music/amber.flac", "replace"], request_id: 7 },
-      { command: ["cycle", "pause"], request_id: 8 },
-      { command: ["set_property", "pause", false], request_id: 9 },
-      { command: ["seek", 12.5, "relative"], request_id: 10 },
-      { command: ["set_property", "volume", 42], request_id: 11 },
-      { command: ["stop"], request_id: 12 },
+    expect(adapter.ipc.sent.slice(5)).toEqual([
+      { command: ["loadfile", "/music/amber.flac", "replace", -1, localFilePlaybackOptions], request_id: 6 },
+      { command: ["cycle", "pause"], request_id: 7 },
+      { command: ["set_property", "pause", false], request_id: 8 },
+      { command: ["seek", 12.5, "relative"], request_id: 9 },
+      { command: ["set_property", "volume", 42], request_id: 10 },
+      { command: ["stop"], request_id: 11 },
     ]);
     expect(player.playback.status).toBe("stopped");
     expect(player.playback.volumePercent).toBe(42);
@@ -207,6 +228,79 @@ describe("MpvPlayer", () => {
     });
   });
 
+  test("coalesces sub-second playback position updates", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+    const observed: unknown[] = [];
+
+    player.onPlaybackStateChange((state) => observed.push(state.positionSeconds));
+    await player.start();
+    observed.length = 0;
+
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 12.1 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 12.4 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 12.9 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 13 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 13.2 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: null });
+
+    expect(observed).toEqual([12.1, 13, null]);
+    expect(player.playback.positionSeconds).toBeNull();
+  });
+
+  test("polls playback position at a low cadence instead of observing every mpv update", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+      positionPollMs: 10,
+    });
+
+    await player.start();
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+    await Bun.sleep(20);
+
+    expect(adapter.ipc.sent).not.toContainEqual({ command: ["observe_property", 1, "time-pos"], request_id: 1 });
+    expect(adapter.ipc.sent).toContainEqual(
+      expect.objectContaining({ command: ["get_property", "time-pos"] }),
+    );
+    expect(player.playback.positionSeconds).toBe(12.5);
+
+    await player.stop();
+    const pollCountAfterStop = countTimePositionPolls(adapter.ipc.sent);
+    await Bun.sleep(20);
+
+    expect(countTimePositionPolls(adapter.ipc.sent)).toBe(pollCountAfterStop);
+  });
+
+  test("defaults playback position polling to a one-second cadence", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+
+    await player.start();
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+    await Bun.sleep(900);
+
+    expect(countTimePositionPolls(adapter.ipc.sent)).toBe(1);
+
+    await Bun.sleep(200);
+
+    expect(countTimePositionPolls(adapter.ipc.sent)).toBeGreaterThanOrEqual(2);
+    await player.stop();
+  });
+
   test("records end-of-file transitions from mpv events", async () => {
     const adapter = new FakeProcessAdapter();
     const player = new MpvPlayer({
@@ -218,6 +312,11 @@ describe("MpvPlayer", () => {
 
     await player.start();
     await player.load({ kind: "url", url: "https://example.test/song.flac" });
+
+    expect(adapter.ipc.sent.at(-1)).toEqual({
+      command: ["loadfile", "https://example.test/song.flac", "replace"],
+      request_id: 6,
+    });
 
     adapter.ipc.emit({ event: "end-file", reason: "eof" });
 
@@ -291,8 +390,8 @@ describe("MpvPlayer", () => {
 
     await player.teardown();
 
-    expect(adapter.ipc.sent.at(-2)).toEqual({ command: ["stop"], request_id: 8 });
-    expect(adapter.ipc.sent.at(-1)).toEqual({ command: ["quit"], request_id: 9 });
+    expect(adapter.ipc.sent.at(-2)).toEqual({ command: ["stop"], request_id: 7 });
+    expect(adapter.ipc.sent.at(-1)).toEqual({ command: ["quit"], request_id: 8 });
     expect(adapter.ipc.closed).toBe(true);
     expect(adapter.process.killCalls).toBe(1);
     expect(adapter.cleanedUpIpc).toEqual(["/tmp/tmu-test.sock"]);
@@ -315,7 +414,7 @@ describe("MpvPlayer", () => {
     await player.start();
     await player.teardown();
 
-    expect(adapter.ipc.sent.at(-1)).toEqual({ command: ["quit"], request_id: 7 });
+    expect(adapter.ipc.sent.at(-1)).toEqual({ command: ["quit"], request_id: 6 });
     expect(adapter.process.killCalls).toBe(0);
     expect(adapter.cleanedUpIpc).toEqual(["/tmp/tmu-test.sock"]);
   });
@@ -336,7 +435,7 @@ describe("MpvPlayer", () => {
     await expect(player.load({ kind: "file", path: "/music/amber.flac" })).rejects.toThrow("mpv command timed out");
 
     expect(player.playback.commandError).toMatchObject({
-      command: "loadfile /music/amber.flac replace",
+      command: 'loadfile /music/amber.flac replace -1 {"demuxer-thread":"no","audio-pitch-correction":"no"}',
       recoverable: true,
     });
 

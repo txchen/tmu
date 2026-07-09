@@ -33,9 +33,9 @@ describe("TMU config", () => {
     expect(loaded.config.persistence.lastQueueSnapshotPath).toContain("last-queue.json");
     expect(loaded.config.persistence.appPreferencesPath).toContain("preferences.json");
     expect(loaded.config.lowPower).toEqual({
-      playbackTickMs: 500,
-      downloadProgressThrottleMs: 500,
-      providerProgressThrottleMs: 500,
+      playbackTickMs: 1000,
+      downloadProgressThrottleMs: 1000,
+      providerProgressThrottleMs: 1000,
     });
   });
 
@@ -101,7 +101,7 @@ describe("TMU config", () => {
     expect(loaded.config.providers.local.directorySoftCap).toBe(25);
     expect(loaded.config.providers.youtubeUrlDownload.enabled).toBe(false);
     expect(loaded.config.lowPower.playbackTickMs).toBe(1000);
-    expect(loaded.config.lowPower.downloadProgressThrottleMs).toBe(500);
+    expect(loaded.config.lowPower.downloadProgressThrottleMs).toBe(1000);
     expect(loaded.config.offlineYouTubeCache.cacheDir).toBe("/var/cache/tmu/youtube");
     expect(loaded.config.offlineYouTubeCache.metadataFileName).toBe("entry.json");
     expect(loaded.config.youtube.cookiesFromBrowser).toBe("firefox");

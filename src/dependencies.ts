@@ -231,6 +231,13 @@ export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, 
   return new Promise((resolve) => {
     execFile(command, args, { timeout: timeoutMs, signal }, (error, stdout, stderr) => {
       const errorCode = (error as (Error & { code?: string | number }) | null)?.code;
+      const timedOut = Boolean(
+        error
+          && "killed" in error
+          && (error as Error & { killed?: boolean; signal?: string }).killed
+          && (error as Error & { killed?: boolean; signal?: string }).signal === "SIGTERM"
+          && !signal?.aborted,
+      );
       const exitCode = typeof errorCode === "number"
         ? errorCode
         : error
@@ -241,7 +248,11 @@ export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, 
         exitCode,
         stdout: String(stdout),
         stderr: String(stderr),
-        errorMessage: error instanceof Error ? error.message : undefined,
+        errorMessage: timedOut
+          ? `Command timed out after ${timeoutMs}ms`
+          : error instanceof Error
+            ? error.message
+            : undefined,
       });
     });
   });

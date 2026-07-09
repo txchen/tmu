@@ -4,6 +4,7 @@ import {
   checkHelperDependencyHealth,
   createDefaultTmuConfig,
   createDefaultDependencyHealth,
+  nodeDependencyCommandRunner,
   type DependencyCommandRunner,
 } from "../src/index";
 
@@ -116,5 +117,19 @@ describe("dependency health", () => {
     expect(health.playback.enabled).toBe(true);
     expect(health.metadata.degraded).toBe(false);
     expect(health.youtubeUrlDownload.enabled).toBe(true);
+  });
+
+  test("reports execFile timeouts with an explicit timeout message", async () => {
+    const result = await nodeDependencyCommandRunner({
+      helper: "yt-dlp",
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 1000)"],
+      timeoutMs: 10,
+    });
+
+    expect(result).toMatchObject({
+      exitCode: null,
+      errorMessage: "Command timed out after 10ms",
+    });
   });
 });
