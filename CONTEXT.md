@@ -21,7 +21,7 @@ The source-specific UI and query behavior used to find Tracks within one Provide
 _Avoid_: shared library, central library module
 
 **Global Search**:
-The on-demand TUI flow for finding Tracks and music collections across Local, Navidrome, and Offline YouTube Cache Providers, with Provider identity shown as result metadata or used as an optional filter rather than chosen before searching.
+The typed-query state of the music-finding Picker Overlay, returning sections for Tracks, Artists, Albums, and Playlists across Local, Navidrome, and Offline YouTube Cache Providers. Each Provider's ranking remains intact within its result-type and Provider subgroup, Provider identity is result metadata or an optional filter, and no Provider must be chosen before searching. Clearing the query restores the prior Provider navigation location and selection.
 _Avoid_: provider search, source-first search
 
 **Track**:
@@ -31,6 +31,14 @@ _Avoid_: song, media item, provider item
 **Music Collection**:
 An ordered group of Tracks returned by Global Search, such as an Album or Playlist, that TMU can place into the Queue as one contiguous, deduplicated block.
 _Avoid_: Queue, search folder, result group
+
+**Local Directory**:
+A non-playable navigation container in the Local Provider Browsing Surface. Opening one reveals its children; TMU does not infer that a directory is an Album or Playlist or recursively send it to Play Next or Play Now.
+_Avoid_: local album, folder collection, queueable directory
+
+**Artist**:
+A searchable, non-playable navigation result that opens the Artist's Albums. An Artist is not a Music Collection and cannot be sent directly to Play Next or Play Now in the MVP.
+_Avoid_: artist collection, queueable artist
 
 **Track Identity**:
 The durable identity of a Track within its Provider, used for queue deduplication, queue restore, and provider-specific refresh without storing a runtime playback address as identity.
@@ -77,11 +85,23 @@ An MVP shape where every Provider feeds a single playback queue, and browsing/se
 _Avoid_: library-browser-first MVP, media manager MVP
 
 **Queue**:
-The ordered list of Tracks TMU is preparing to play or is currently playing, shared across every Provider in the Queue-First MVP.
+The ordered list of Tracks TMU is preparing to play or is currently playing, shared across every Provider in the Queue-First MVP. Reordering follows Track Identity: Queue selection follows the moved Track, and the Current Track remains Current without interrupting playback.
 _Avoid_: playlist, play queue per source
 
+**Current Track**:
+The one Track in the Queue designated for playback. Queue selection is independent UI State rather than another playback status; global Play, Pause, and Resume always target the Current Track even when another row is selected. Only when no Current Track exists may Play start the selected row. The Last Queue Snapshot remembers the Current Track across relaunch so the user can explicitly resume it without autoplay. Removing the Current Track stops playback, clears the designation, and never advances automatically.
+_Avoid_: separate playing Track, selected Track as playback state
+
+**Resume**:
+The explicit action that starts the restored Current Track at its last saved playback position after relaunch. Relaunch never resumes automatically, and Play Now starts the Track from the beginning instead.
+_Avoid_: autoplay on relaunch, Play Now from saved position
+
+**Stop**:
+The playback action that halts the Player, keeps the Current Track, and resets its resumable position to the beginning. Pause instead preserves position; removing the Current Track clears the designation. Reaching the natural end of the final playable Track with repeat off produces the same retained-Current, position-zero state.
+_Avoid_: clearing Current Track, preserving the stopped position
+
 **Queue Home**:
-The default two-pane TUI surface, with the Queue Pane on the left and the Playing Track Pane on the right; Picker Overlays appear above it only when explicitly opened by the user.
+The default two-pane TUI surface opened by TMU's only launch form, `tmu`, with the Queue Pane on the left and the Playing Track Pane on the right; Picker Overlays appear above it only when explicitly opened by the user. Launch restores the Last Queue Snapshot without autoplay. Queue Home remains visible when the Queue is empty, keeps Queue Pane focus, shows no Current Track, and offers contextual actions for Global Search, opening Local music, and the YouTube URL Download Flow rather than opening a Provider automatically.
 _Avoid_: dashboard, browse home, always-visible search
 
 **Queue Pane**:
@@ -89,11 +109,11 @@ The left side of Queue Home, showing the ordered Queue entries together with the
 _Avoid_: library pane, playlist view, browser pane
 
 **Playing Track Pane**:
-The right side of Queue Home, showing static metadata and playback status for the playing Track and providing the future home for lyrics that update at a bounded low frequency.
+The non-focusable, informational right side of Queue Home, showing static metadata and playback status for the Current Track and providing the future home for lyrics that update at a bounded low frequency. Queue Pane retains focus in the MVP because playback controls are global and Playing Track Pane exposes no direct actions. It distinguishes restored playback that can Resume at a saved position from an explicitly Stopped Track that will start from the beginning.
 _Avoid_: now-playing bar, Queue details, animated playback panel
 
 **Picker Overlay**:
-A shared Telescope-style popup model over Queue Home for Global Search, Provider navigation, the Command Palette, and shortcut help; each is keyboard-controlled and dismissed with `Esc` without losing Queue context.
+A shared Telescope-style popup model over Queue Home for finding music, the Command Palette, and shortcut help; each is keyboard-controlled and dismissed with `Esc` without losing Queue context. The music-finding form opens in Provider navigation when its query is empty and switches to Global Search when the user types. It remembers the last navigation location and selection within the current TMU session, but a relaunch starts it at a source-neutral Provider root.
 _Avoid_: split pane, full-workspace replacement, permanent browser
 
 **Vim Navigation**:
@@ -109,21 +129,33 @@ The searchable `:` surface that exposes every action available in the current co
 _Avoid_: command line, settings menu, shortcut help
 
 **Play Next**:
-The TUI action that moves or inserts a Track or Music Collection into the next Queue positions without duplicates and never starts playback; collections preserve their Track order, and an empty Queue receives the result at its head.
+The TUI action that moves or inserts a Track or Music Collection into the next Queue positions without duplicates and never starts playback. Deduplication uses Track Identity: existing non-Current Tracks are moved into one contiguous block after the Current Track in collection order, while the Current Track stays in place and is omitted from that block. An empty Queue receives the result at its head.
 _Avoid_: enqueue, add to end, play now, autoplay
 
 **Play Now**:
-The TUI action that makes a Track current and starts playback immediately; for a Music Collection, its first Track becomes current and its remaining Tracks follow contiguously in collection order without duplicates.
+The TUI action that makes a Track current and starts it from the beginning immediately. The requested Track or Music Collection is deduplicated by Track Identity into one contiguous block; its first Track becomes Current and the rest follow in collection order. A different former Current Track remains immediately before the block so Previous returns to it; without a Current Track, the block goes at the Queue head.
 _Avoid_: autoplay, resume, play next
 
+**Clear Queue**:
+The destructive TUI action that, after explicit confirmation, stops playback, clears the Current Track, and removes every Track from the Queue. Cancelling the confirmation leaves both Queue and playback unchanged.
+_Avoid_: unconfirmed clear, automatic advance after clear
+
+**Shuffle**:
+The Queue action that visibly randomizes only Tracks after the Current Track, preserving listening history and the Current Track. Playback follows that visible order, Play Next remains literally next, disabling Shuffle keeps the current order, and a repeated cycle reshuffles the upcoming portion.
+_Avoid_: hidden random playback order, reshuffling listening history
+
+**Previous Track**:
+The playback action that restarts the Current Track when playback is more than five seconds in; at five seconds or less it starts the preceding visible Queue Track. At the Queue head it restarts Current rather than clearing it.
+_Avoid_: always changing Queue rows, clearing Current at Queue head
+
 **Track Availability**:
-The current ability of a queued Track to resolve and play, shown visibly when a local file, cached media file, provider auth, or playback attempt fails.
+The current ability of a queued Track to resolve and play, shown visibly with a reason when a local file, cached media file, provider auth, or playback attempt fails. Unavailable restored Tracks retain their Queue order and Current Track designation and may recover later; TMU never silently removes them. Next and automatic advancement skip unavailable Tracks, but direct Resume and Play Now fail on the requested Track without substitution.
 _Avoid_: silently removed track, hidden playback error
 
 **Last Queue Snapshot**:
-The small persistence record TMU updates and restores automatically so the previous Queue and nearby playback preferences survive exit and relaunch, without becoming a general app database or media-library index.
+The small persistence record TMU updates and restores automatically so Queue order and Track data, availability, Current Track and position, shuffle, repeat, and volume survive exit and relaunch. It excludes Queue selection, scroll, filters, Picker Overlays, and other UI State, and never becomes a general app database or media-library index. Restoration is all-or-nothing. Corrupt, unsupported, or partially invalid snapshot data is quarantined for recovery; TMU opens an empty Queue Home with a non-blocking warning and does not replace it until the user makes a meaningful state change. Write failures leave playback and in-memory state working, remain visibly actionable, retry later, and never trap exit.
 _Avoid_: app database, library index
 
 **Navidrome Library Browser**:
-The MVP browsing surface for a Navidrome Provider, covering artist and album navigation well enough to enqueue tracks from a remote music library.
+The MVP browsing surface for a configured Navidrome Provider, covering Artists, Albums, and Playlists well enough to enqueue Tracks from a remote music library. Navidrome is absent from the source-neutral Provider root until TMU Config identifies a server; once configured, disabled, offline, and authentication-failure states remain visible with their reason and recovery action.
 _Avoid_: Navidrome playlist-only mode
