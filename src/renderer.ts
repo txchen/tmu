@@ -128,6 +128,10 @@ export function renderShellText(appState: AppState, uiState: UiState): string {
   ].join("\n");
 }
 
+export function renderPlaybackProgressLine(appState: AppState): string {
+  return progressText(appState);
+}
+
 function visibleProviderTracks(appState: AppState, uiState: UiState): readonly Track[] {
   if (uiState.activeTargetId === "queue") return [];
   return appState.providers[uiState.activeTargetId]?.listVisibleTracks() ?? [];

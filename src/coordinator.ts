@@ -53,6 +53,7 @@ export type DependencyHealthRefresh = (
   helper: HelperName,
   currentHealth: DependencyHealthState,
 ) => Promise<DependencyHealthState>;
+export type AppStateChangeReason = "state" | "playback";
 
 export type AppCoordinatorOptions = {
   appState: AppState;
@@ -78,7 +79,7 @@ export class AppCoordinator {
   private readonly youtubeDownloader: YouTubeDownloader;
   private readonly unsubscribeFromPlayer: () => void;
   private readonly unsubscribeFromProviders: Array<() => void>;
-  private readonly stateListeners = new Set<() => void>();
+  private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeLocalOpen: AbortController | null = null;
   private activeYouTubeDownload: AbortController | null = null;
   private reportingSessionKey: string | null = null;
@@ -99,7 +100,7 @@ export class AppCoordinator {
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       this.mergePlayerPlayback(playback);
       this.maybeReportCompletedPlay(playback);
-      this.notifyStateChanged();
+      this.notifyStateChanged("playback");
     });
     this.unsubscribeFromProviders = Object.values(this.appState.providers)
       .filter(isLocalProvider)
@@ -259,7 +260,7 @@ export class AppCoordinator {
     await this.player.teardown();
   }
 
-  onStateChange(listener: () => void): () => void {
+  onStateChange(listener: (reason: AppStateChangeReason) => void): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
   }
@@ -1292,8 +1293,8 @@ export class AppCoordinator {
     this.appState.queue = this.queue.snapshot();
   }
 
-  private notifyStateChanged(): void {
-    for (const listener of this.stateListeners) listener();
+  private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
+    for (const listener of this.stateListeners) listener(reason);
   }
 }
 

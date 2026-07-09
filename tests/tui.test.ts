@@ -165,7 +165,7 @@ describe("RenderScheduler", () => {
       ...appState.playback,
       positionSeconds: 1,
     };
-    scheduler.requestStateRedraw();
+    scheduler.requestStateRedraw("playback");
     timers.advanceBy(398);
 
     expect(renderTimes).toEqual([0]);
@@ -174,7 +174,7 @@ describe("RenderScheduler", () => {
       ...appState.playback,
       positionSeconds: 2,
     };
-    scheduler.requestStateRedraw();
+    scheduler.requestStateRedraw("playback");
 
     expect(renderTimes).toEqual([0]);
 
@@ -195,12 +195,42 @@ describe("RenderScheduler", () => {
       ...appState.playback,
       positionSeconds: 3,
     };
-    scheduler.requestStateRedraw();
+    scheduler.requestStateRedraw("playback");
 
     expect(renderTimes).toEqual([0, 500, 1000]);
   });
 
-  test("resumes fallback playback ticks after position events stop", () => {
+  test("uses a lightweight scheduler path for Player playback-position notifications", () => {
+    const { appState, scheduler, renderTimes, timers } = createSchedulerHarness();
+
+    appState.playback = {
+      ...appState.playback,
+      status: "playing",
+      positionSeconds: 0,
+    };
+    scheduler.requestStateRedraw();
+
+    appState.providers.local = {
+      ...appState.providers.local,
+      listVisibleTracks: () => {
+        throw new Error("full Provider snapshot should not run for playback ticks");
+      },
+    };
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 1,
+    };
+
+    expect(() => scheduler.requestStateRedraw("playback")).not.toThrow();
+    expect(renderTimes).toEqual([0]);
+
+    timers.advanceBy(500);
+
+    expect(renderTimes).toEqual([0, 500]);
+    expect(() => scheduler.requestStateRedraw()).toThrow("full Provider snapshot");
+  });
+
+  test("does not redraw autonomously when playback-position events stop", () => {
     const { appState, scheduler, renderTimes, timers } = createSchedulerHarness();
 
     appState.playback = {
@@ -214,7 +244,7 @@ describe("RenderScheduler", () => {
       ...appState.playback,
       positionSeconds: 1,
     };
-    scheduler.requestStateRedraw();
+    scheduler.requestStateRedraw("playback");
     timers.advanceBy(399);
 
     expect(renderTimes).toEqual([0]);
@@ -227,9 +257,9 @@ describe("RenderScheduler", () => {
 
     expect(renderTimes).toEqual([0, 500]);
 
-    timers.advanceBy(1);
+    timers.advanceBy(1000);
 
-    expect(renderTimes).toEqual([0, 500, 1000]);
+    expect(renderTimes).toEqual([0, 500]);
   });
 
   test("clamps configured cadences to the low-power maximum redraw rate", () => {
@@ -242,9 +272,16 @@ describe("RenderScheduler", () => {
     appState.playback = {
       ...appState.playback,
       status: "playing",
+      positionSeconds: 0,
     };
     scheduler.requestStateRedraw();
-    timers.advanceBy(499);
+    timers.advanceBy(100);
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 1,
+    };
+    scheduler.requestStateRedraw("playback");
+    timers.advanceBy(399);
 
     expect(renderTimes).toEqual([0]);
 
@@ -289,15 +326,22 @@ describe("RenderScheduler", () => {
     expect(progressHarness.renderTimes).toEqual([0, 500]);
   });
 
-  test("does not fire a stale playback tick sooner than the cadence after another redraw", () => {
+  test("clears a stale pending playback redraw after another redraw", () => {
     const { appState, scheduler, renderTimes, timers } = createSchedulerHarness();
 
     appState.playback = {
       ...appState.playback,
       status: "playing",
+      positionSeconds: 0,
     };
     scheduler.requestStateRedraw();
-    timers.advanceBy(400);
+    timers.advanceBy(100);
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 1,
+    };
+    scheduler.requestStateRedraw("playback");
+    timers.advanceBy(300);
     appState.lastEvent = "redrew before the pending playback tick";
     scheduler.requestStateRedraw();
     timers.advanceBy(99);
@@ -310,18 +354,24 @@ describe("RenderScheduler", () => {
 
     timers.advanceBy(400);
 
-    expect(renderTimes).toEqual([0, 400, 900]);
+    expect(renderTimes).toEqual([0, 400]);
   });
 
-  test("stops playback ticks while paused or idle", () => {
+  test("clears pending playback redraws while paused or idle", () => {
     const { appState, scheduler, renderTimes, timers } = createSchedulerHarness();
 
     appState.playback = {
       ...appState.playback,
       status: "playing",
+      positionSeconds: 0,
     };
     scheduler.requestStateRedraw();
-    timers.advanceBy(500);
+    timers.advanceBy(100);
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 1,
+    };
+    scheduler.requestStateRedraw("playback");
     appState.playback = {
       ...appState.playback,
       status: "paused",
@@ -329,14 +379,20 @@ describe("RenderScheduler", () => {
     scheduler.requestStateRedraw();
     timers.advanceBy(1000);
 
-    expect(renderTimes).toEqual([0, 500, 500]);
+    expect(renderTimes).toEqual([0, 100]);
 
     appState.playback = {
       ...appState.playback,
       status: "playing",
+      positionSeconds: 2,
     };
     scheduler.requestStateRedraw();
-    timers.advanceBy(500);
+    timers.advanceBy(100);
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 3,
+    };
+    scheduler.requestStateRedraw("playback");
     appState.playback = {
       ...appState.playback,
       status: "idle",
@@ -344,7 +400,7 @@ describe("RenderScheduler", () => {
     scheduler.requestStateRedraw();
     timers.advanceBy(1000);
 
-    expect(renderTimes).toEqual([0, 500, 500, 1500, 2000, 2000]);
+    expect(renderTimes).toEqual([0, 100, 1100, 1200]);
   });
 
   test("throttles download and Provider progress redraws independently", () => {
@@ -494,6 +550,55 @@ describe("TerminalTui", () => {
 
     expect(output.chunks.length).toBeGreaterThan(writesAfterInitialDraw);
     expect(coordinator.appState.playback.status).toBe("playing");
+  });
+
+  test("updates only the progress row for playback-position redraws", () => {
+    let notifyStateChanged: ((reason: "state" | "playback") => void) | undefined;
+    const appState = createInitialAppState(createDefaultProviders(), {
+      config: {
+        lowPower: {
+          playbackTickMs: 500,
+          downloadProgressThrottleMs: 500,
+          providerProgressThrottleMs: 700,
+        },
+      },
+    });
+    appState.playback = {
+      ...appState.playback,
+      status: "playing",
+      positionSeconds: 0,
+      durationSeconds: 120,
+    };
+    const fakeCoordinator = {
+      appState,
+      uiState: createInitialUiState(),
+      onStateChange: (listener: (reason: "state" | "playback") => void) => {
+        notifyStateChanged = listener;
+        return () => undefined;
+      },
+      dispatch: async () => undefined,
+    };
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const timers = new ManualTimers();
+    const tui = new TerminalTui(
+      { coordinator: fakeCoordinator as unknown as AppCoordinator },
+      input as unknown as NodeJS.ReadStream,
+      output as unknown as NodeJS.WriteStream,
+      timers,
+    );
+
+    tui.run();
+    appState.playback = {
+      ...appState.playback,
+      positionSeconds: 1,
+    };
+    notifyStateChanged?.("playback");
+    timers.advanceBy(500);
+
+    const lastChunk = output.chunks.at(-1) ?? "";
+    expect(lastChunk).toContain("\x1b[s\x1b[15;1H\x1b[2KProgress: 00:01 / 02:00\x1b[u");
+    expect(lastChunk).not.toContain("\x1b[2J");
   });
 
   test("redraws on input even when no intent is mapped", () => {

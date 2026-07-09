@@ -5,8 +5,8 @@ import {
   type NavigationTargetId,
   type UiState,
 } from "./domain";
-import { renderShellText } from "./renderer";
-import type { AppCoordinator } from "./coordinator";
+import { renderPlaybackProgressLine, renderShellText } from "./renderer";
+import type { AppCoordinator, AppStateChangeReason } from "./coordinator";
 
 export type RuntimeApp = {
   coordinator: AppCoordinator;
@@ -21,7 +21,7 @@ export type RenderSchedulerTimers = {
 };
 
 export type RenderSchedulerOptions = {
-  render: () => void;
+  render: (reason?: RenderReason) => void;
   readState: () => { appState: AppState; uiState: UiState };
   cadence: RenderSchedulerCadence;
   timers?: Partial<RenderSchedulerTimers>;
@@ -39,9 +39,14 @@ type SchedulerSnapshot = {
   providerProgress: string;
   providerDisplayMetadata: string;
 };
+type PlaybackSchedulerSnapshot = {
+  withoutPosition: string;
+  position: string;
+  status: AppState["playback"]["status"];
+};
 
 type ThrottledProgressKind = "download" | "provider";
-type RenderReason = "playback-tick" | "playback-event" | ThrottledProgressKind;
+export type RenderReason = "playback-event" | ThrottledProgressKind;
 
 type ProgressThrottle = {
   cadenceMs: number;
@@ -51,16 +56,17 @@ type ProgressThrottle = {
 
 const PROGRESS_KINDS: readonly ThrottledProgressKind[] = ["download", "provider"];
 const MIN_LOW_POWER_REDRAW_MS = 500;
+const PLAYBACK_PROGRESS_TERMINAL_ROW = 15;
 
 export class RenderScheduler {
-  private readonly render: () => void;
+  private readonly render: (reason?: RenderReason) => void;
   private readonly readState: () => { appState: AppState; uiState: UiState };
   private readonly cadence: RenderSchedulerCadence;
   private readonly timers: RenderSchedulerTimers;
   private previousSnapshot: SchedulerSnapshot | null = null;
+  private previousPlaybackSnapshot: PlaybackSchedulerSnapshot | null = null;
   private playbackTimer: unknown | null = null;
   private playbackDueAt: number | null = null;
-  private playbackTimerReason: Extract<RenderReason, "playback-tick" | "playback-event"> | null = null;
   private lastPlaybackDrawAt: number | null = null;
   private readonly progress: Record<ThrottledProgressKind, ProgressThrottle>;
 
@@ -102,7 +108,7 @@ export class RenderScheduler {
 
   start(): void {
     this.previousSnapshot = this.captureSnapshot();
-    this.ensurePlaybackTick();
+    this.previousPlaybackSnapshot = this.capturePlaybackSnapshot();
   }
 
   stop(): void {
@@ -112,6 +118,7 @@ export class RenderScheduler {
 
   requestImmediateRedraw(): void {
     this.previousSnapshot = this.captureSnapshot();
+    this.previousPlaybackSnapshot = this.capturePlaybackSnapshot();
     this.performRender();
   }
 
@@ -119,10 +126,16 @@ export class RenderScheduler {
     this.requestImmediateRedraw();
   }
 
-  requestStateRedraw(): void {
+  requestStateRedraw(reason: AppStateChangeReason = "state"): void {
+    if (reason === "playback") {
+      this.requestPlaybackStateRedraw();
+      return;
+    }
+
     const nextSnapshot = this.captureSnapshot();
     const previousSnapshot = this.previousSnapshot;
     this.previousSnapshot = nextSnapshot;
+    this.previousPlaybackSnapshot = this.capturePlaybackSnapshot();
 
     if (!previousSnapshot) {
       this.performRender();
@@ -130,7 +143,6 @@ export class RenderScheduler {
     }
 
     if (previousSnapshot.full === nextSnapshot.full) {
-      this.ensurePlaybackTick();
       return;
     }
 
@@ -150,6 +162,30 @@ export class RenderScheduler {
     }
 
     this.performRender();
+  }
+
+  private requestPlaybackStateRedraw(): void {
+    const nextSnapshot = this.capturePlaybackSnapshot();
+    const previousSnapshot = this.previousPlaybackSnapshot;
+    this.previousPlaybackSnapshot = nextSnapshot;
+
+    if (!previousSnapshot) {
+      this.previousSnapshot = this.captureSnapshot();
+      this.performRender();
+      return;
+    }
+
+    if (previousSnapshot.withoutPosition !== nextSnapshot.withoutPosition) {
+      this.previousSnapshot = this.captureSnapshot();
+      this.performRender();
+      return;
+    }
+
+    if (previousSnapshot.position === nextSnapshot.position) {
+      return;
+    }
+
+    this.requestPlaybackProgressRedraw();
   }
 
   private requestDownloadProgressRedraw(): void {
@@ -198,7 +234,7 @@ export class RenderScheduler {
   }
 
   private performRender(reason?: RenderReason): void {
-    this.render();
+    this.render(reason);
     const now = this.timers.now();
     const displayedProgressKinds = reason === "download" || reason === "provider"
       ? [reason]
@@ -211,31 +247,15 @@ export class RenderScheduler {
     if (this.isPlaying()) {
       this.lastPlaybackDrawAt = now;
       this.clearPlaybackTick();
-      this.schedulePlaybackTimer(this.cadence.playbackTickMs, "playback-tick");
       return;
     }
 
     this.clearPlaybackTick();
   }
 
-  private ensurePlaybackTick(): void {
-    if (!this.isPlaying()) {
-      this.clearPlaybackTick();
-      return;
-    }
-
-    if (this.playbackTimer) return;
-
-    const now = this.timers.now();
-    const elapsed = this.lastPlaybackDrawAt === null
-      ? 0
-      : now - this.lastPlaybackDrawAt;
-    this.schedulePlaybackTimer(Math.max(0, this.cadence.playbackTickMs - elapsed), "playback-tick");
-  }
-
   private schedulePlaybackTimer(
     delayMs: number,
-    reason: Extract<RenderReason, "playback-tick" | "playback-event">,
+    reason: Extract<RenderReason, "playback-event">,
   ): void {
     if (!this.isPlaying()) {
       this.clearPlaybackTick();
@@ -247,21 +267,17 @@ export class RenderScheduler {
       this.playbackTimer
       && this.playbackDueAt !== null
       && this.playbackDueAt <= dueAt
-      && (this.playbackTimerReason === "playback-event" || reason === "playback-tick")
     ) {
       return;
     }
 
     this.clearPlaybackTick();
     this.playbackDueAt = dueAt;
-    this.playbackTimerReason = reason;
     this.playbackTimer = this.timers.setTimeout(() => {
-      const timerReason = this.playbackTimerReason ?? "playback-tick";
       this.playbackTimer = null;
       this.playbackDueAt = null;
-      this.playbackTimerReason = null;
       if (!this.isPlaying()) return;
-      this.performRender(timerReason);
+      this.performRender(reason);
     }, Math.max(0, delayMs));
   }
 
@@ -271,7 +287,6 @@ export class RenderScheduler {
     this.timers.clearTimeout(this.playbackTimer);
     this.playbackTimer = null;
     this.playbackDueAt = null;
-    this.playbackTimerReason = null;
   }
 
   private clearProgressTimer(kind: ThrottledProgressKind): void {
@@ -335,9 +350,24 @@ export class RenderScheduler {
       }),
     };
   }
+
+  private capturePlaybackSnapshot(): PlaybackSchedulerSnapshot {
+    const playback = this.readState().appState.playback;
+    const playbackWithoutPosition = {
+      ...playback,
+      positionSeconds: undefined,
+    };
+    return {
+      withoutPosition: JSON.stringify(playbackWithoutPosition),
+      position: JSON.stringify({ positionSeconds: playback.positionSeconds }),
+      status: playback.status,
+    };
+  }
 }
 
 export class TerminalTui {
+  private drewFullFrame = false;
+
   constructor(
     private readonly app: RuntimeApp,
     private readonly input: NodeJS.ReadStream = process.stdin,
@@ -355,7 +385,7 @@ export class TerminalTui {
     this.input.resume();
     this.output.write("\x1b[?25l");
     const scheduler = new RenderScheduler({
-      render: () => this.draw(),
+      render: (reason) => this.render(reason),
       readState: () => ({
         appState: this.app.coordinator.appState,
         uiState: this.app.coordinator.uiState,
@@ -363,8 +393,8 @@ export class TerminalTui {
       cadence: this.app.coordinator.appState.config.lowPower,
       timers: this.timers,
     });
-    const unsubscribe = this.app.coordinator.onStateChange(() => {
-      scheduler.requestStateRedraw();
+    const unsubscribe = this.app.coordinator.onStateChange((reason) => {
+      scheduler.requestStateRedraw(reason);
     });
     scheduler.start();
     scheduler.requestImmediateRedraw();
@@ -419,8 +449,31 @@ export class TerminalTui {
     return false;
   }
 
+  private drawPlaybackProgress(): void {
+    if (!this.drewFullFrame) {
+      this.draw();
+      return;
+    }
+
+    this.output.write(`\x1b[s\x1b[${PLAYBACK_PROGRESS_TERMINAL_ROW};1H\x1b[2K${renderPlaybackProgressLine(this.app.coordinator.appState)}\x1b[u`);
+  }
+
+  private fullFrame(): string {
+    return `\x1b[2J\x1b[H${renderShellText(this.app.coordinator.appState, this.app.coordinator.uiState)}`;
+  }
+
+  private render(reason?: RenderReason): void {
+    if (reason === "playback-event") {
+      this.drawPlaybackProgress();
+      return;
+    }
+
+    this.draw();
+  }
+
   private draw(): void {
-    this.output.write(`\x1b[2J\x1b[H${renderShellText(this.app.coordinator.appState, this.app.coordinator.uiState)}`);
+    this.output.write(this.fullFrame());
+    this.drewFullFrame = true;
   }
 }
 
