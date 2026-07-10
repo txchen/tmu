@@ -23,6 +23,9 @@ export type UiActionIntent = {
 } | {
   type: "requestConfirmation";
   kind: "clear-queue";
+} | {
+  type: "routeKey";
+  key: string;
 };
 
 export type ActionIntent = AppIntent | UiActionIntent;
@@ -38,6 +41,7 @@ export type ActionDefinition = {
   readonly enabled: (context: ActionContext) => boolean;
   readonly disabledReason: (context: ActionContext) => string | null;
   readonly createIntent: (context: ActionContext) => ActionIntent | null;
+  readonly scope: "context" | "global";
 };
 
 export type ResolvedAction = {
@@ -82,6 +86,40 @@ export function createActionRegistry(): ActionRegistry {
     promptAction("download.start", "Download YouTube URL", "youtube-url", (url) => ({
       type: "downloadOperation", operation: "start", url,
     })),
+    routeAction("navigation.move-down", "Move Down", ["next row"], [
+      { key: "j", label: "j" }, { key: "\x1b[B", label: "Down" },
+    ], "j", isListContext),
+    routeAction("navigation.move-up", "Move Up", ["previous row"], [
+      { key: "k", label: "k" }, { key: "\x1b[A", label: "Up" },
+    ], "k", isListContext),
+    routeAction("navigation.first", "First Row", ["go to top"], [
+      { key: "g", label: "gg" }, { key: "\x1b[H", label: "Home" },
+    ], "gg", isListContext),
+    routeAction("navigation.last", "Last Row", ["go to bottom"], [
+      { key: "G", label: "G" }, { key: "\x1b[F", label: "End" },
+    ], "G", isListContext),
+    routeAction("navigation.half-page-down", "Half Page Down", ["scroll down"], [
+      { key: "\x04", label: "Ctrl-d" },
+    ], "\x04", isListContext),
+    routeAction("navigation.half-page-up", "Half Page Up", ["scroll up"], [
+      { key: "\x15", label: "Ctrl-u" },
+    ], "\x15", isListContext),
+    routeAction("navigation.page-down", "Page Down", ["next page"], [
+      { key: "\x1b[6~", label: "Page Down" },
+    ], "\x1b[6~", isListContext),
+    routeAction("navigation.page-up", "Page Up", ["previous page"], [
+      { key: "\x1b[5~", label: "Page Up" },
+    ], "\x1b[5~", isListContext),
+    routeAction("navigation.open", "Open", ["inspect"], [
+      { key: "l", label: "l" }, { key: "\x1b[C", label: "Right" },
+    ], "l", isMusicResultsContext),
+    routeAction("navigation.back", "Back", ["parent"], [
+      { key: "h", label: "h" }, { key: "\x1b[D", label: "Left" },
+      { key: "\x7f", label: "Backspace" },
+    ], "h", isMusicResultsContext),
+    routeAction("overlay.dismiss", "Dismiss Overlay", ["close"], [
+      { key: "\x1b", label: "Esc" }, { key: "q", label: "q" },
+    ], "\x1b", isNonTextOverlayContext),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -133,6 +171,7 @@ export function createActionRegistry(): ActionRegistry {
     }),
     {
       id: "provider.refresh",
+      scope: "context",
       name: "Refresh Provider",
       aliases: ["reload provider"],
       bindings: [{ key: "f", label: "f" }],
@@ -147,6 +186,7 @@ export function createActionRegistry(): ActionRegistry {
     },
     {
       id: "provider.retry",
+      scope: "context",
       name: "Retry Provider",
       aliases: ["reconnect provider"],
       bindings: [{ key: "r", label: "r" }],
@@ -164,6 +204,7 @@ export function createActionRegistry(): ActionRegistry {
     ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
     {
       id: "legacy.unsupported-enqueue",
+      scope: "context",
       name: "Unsupported legacy enqueue binding",
       aliases: [],
       bindings: [{ key: "a", label: "a" }],
@@ -174,6 +215,7 @@ export function createActionRegistry(): ActionRegistry {
     },
     {
       id: "player.toggle-play-pause",
+      scope: "global",
       name: "Play / Pause / Resume",
       aliases: ["play", "pause", "resume"],
       bindings: [{ key: " ", label: "Space" }],
@@ -197,6 +239,7 @@ export function createActionRegistry(): ActionRegistry {
     }),
     {
       id: "queue.clear",
+      scope: "context",
       name: "Clear Queue",
       aliases: ["empty queue"],
       bindings: [{ key: "c", label: "c" }],
@@ -225,6 +268,7 @@ export function createActionRegistry(): ActionRegistry {
     }),
     {
       id: "download.cancel",
+      scope: "context",
       name: "Cancel YouTube Download",
       aliases: ["stop download"],
       bindings: [{ key: "d", label: "d" }],
@@ -236,7 +280,7 @@ export function createActionRegistry(): ActionRegistry {
     boundAction("app.quit", "Quit", ["exit"], [
       { key: "q", label: "q" },
       { key: "\u0003", label: "Ctrl-c" },
-    ], { type: "playerOperation", operation: "quit" }),
+    ], { type: "playerOperation", operation: "quit" }, "global"),
   ];
 }
 
@@ -256,7 +300,7 @@ export function discoveryActions(registry: ActionRegistry, context: ActionContex
   return registry
     .filter((action) => action.applies(effectiveContext))
     .map((action) => resolveAction(action, effectiveContext))
-    .sort((left, right) => Number(isGlobalAction(left.id)) - Number(isGlobalAction(right.id)));
+    .sort((left, right) => Number(left.scope === "global") - Number(right.scope === "global"));
 }
 
 export const footerActions = discoveryActions;
@@ -304,6 +348,7 @@ function promptAction(
 ): ActionDefinition {
   return {
     id,
+    scope: "context",
     name,
     aliases: [],
     bindings: [{ key: "\r", label: "Enter" }],
@@ -328,6 +373,7 @@ function queueTrackAction(options: {
 }): ActionDefinition {
   return {
     ...options,
+    scope: "context",
     applies: (context) => context.uiState.activeTargetId === "queue"
       && context.uiState.overlays.length === 0,
     enabled: (context) => selectedQueueTrack(context) !== null,
@@ -348,6 +394,7 @@ function providerTargetAction(options: {
 }): ActionDefinition {
   return {
     ...options,
+    scope: "context",
     applies: (context) => selectedProviderTarget(context) !== null
       && (context.uiState.activeTargetId !== "queue" || selectedOverlayTarget(context) !== null),
     enabled: (context) => selectedProviderTarget(context) !== null,
@@ -367,7 +414,7 @@ function simpleAction(
   label: string,
   intent: AppIntent,
 ): ActionDefinition {
-  return boundAction(id, name, aliases, [{ key, label }], intent);
+  return boundAction(id, name, aliases, [{ key, label }], intent, "global");
 }
 
 function paletteAction(
@@ -376,7 +423,23 @@ function paletteAction(
   aliases: readonly string[],
   intent: AppIntent,
 ): ActionDefinition {
-  return boundAction(id, name, aliases, [], intent);
+  return boundAction(id, name, aliases, [], intent, "global");
+}
+
+function routeAction(
+  id: string,
+  name: string,
+  aliases: readonly string[],
+  bindings: readonly ActionBinding[],
+  key: string,
+  applies: (context: ActionContext) => boolean,
+): ActionDefinition {
+  return {
+    id, name, aliases, bindings, applies, scope: "context",
+    enabled: always,
+    disabledReason: neverDisabled,
+    createIntent: () => ({ type: "routeKey", key }),
+  };
 }
 
 function uiAction(
@@ -389,6 +452,7 @@ function uiAction(
 ): ActionDefinition {
   return {
     id,
+    scope: "context",
     name,
     aliases,
     bindings: [{ key, label }],
@@ -408,7 +472,7 @@ function discoveryUiAction(
   intent: UiActionIntent,
 ): ActionDefinition {
   return {
-    id, name, aliases, bindings: [{ key, label }],
+    id, name, aliases, bindings: [{ key, label }], scope: "global",
     applies: always,
     enabled: always,
     disabledReason: neverDisabled,
@@ -422,9 +486,11 @@ function boundAction(
   aliases: readonly string[],
   bindings: readonly ActionBinding[],
   intent: AppIntent,
+  scope: ActionDefinition["scope"] = "context",
 ): ActionDefinition {
   return {
     id,
+    scope,
     name,
     aliases,
     bindings,
@@ -445,7 +511,7 @@ function resolveAction(action: ActionDefinition, context: ActionContext): Resolv
     enabled,
     disabledReason: enabled ? null : action.disabledReason(context),
     intent: enabled ? action.createIntent(context) : null,
-    scope: isGlobalAction(action.id) ? "global" : "context",
+    scope: action.scope,
   };
 }
 
@@ -458,14 +524,20 @@ function underlyingDiscoveryContext(context: ActionContext): ActionContext {
   };
 }
 
-function isGlobalAction(id: string): boolean {
-  return id.startsWith("player.")
-    || id.startsWith("persistence.")
-    || id === "queue.shuffle"
-    || id === "queue.repeat-all"
-    || id === "help.open"
-    || id === "palette.open"
-    || id === "app.quit";
+function isListContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  return overlay?.focus === "results"
+    || (!overlay && context.uiState.activeTargetId === "queue" && context.uiState.focusedPane === "queue");
+}
+
+function isMusicResultsContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  return overlay?.kind === "music-picker" && overlay.focus === "results";
+}
+
+function isNonTextOverlayContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  return Boolean(overlay && overlay.focus === "results");
 }
 
 function selectedQueueTrack(context: ActionContext): Track | null {

@@ -99,6 +99,11 @@ export class RootInputRouter {
       return true;
     }
     if (overlay && isTextEntryFocus(overlay.focus)) {
+      if ((overlay.kind === "shortcut-help" || overlay.kind === "command-palette")
+        && ["\x1b[A", "\x1b[B", "\x1b[H", "\x1b[F", "\x1b[5~", "\x1b[6~"].includes(key)) {
+        this.moveDiscoverySelection(key, overlay);
+        return true;
+      }
       if (key === "\x1b") {
         if (overlay.kind === "music-picker" && overlay.focus === "search") {
           this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
@@ -125,21 +130,14 @@ export class RootInputRouter {
         } else {
           this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
         }
-      } else if (key === "\x7f" || key === "\b") {
-        const query = overlay.query.slice(0, -1);
-        this.uiState.dispatch({ type: "setQuery", query });
-        if (!query && this.appState().globalSearch.query) await this.clearGlobalSearch();
-      } else if (key === "\x17") {
-        const query = deletePreviousWord(overlay.query);
-        this.uiState.dispatch({ type: "setQuery", query });
-        if (!query && this.appState().globalSearch.query) await this.clearGlobalSearch();
-      } else if (key === "\x15") {
-        this.uiState.dispatch({ type: "setQuery", query: "" });
-        if (this.appState().globalSearch.query) await this.clearGlobalSearch();
       } else if (key === "\t" && overlay.kind === "music-picker") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "filter" });
-      } else if (isPrintableKey(key)) {
-        this.uiState.dispatch({ type: "setQuery", query: `${overlay.query}${key}` });
+      } else {
+        const query = editText(overlay.query, key);
+        if (query !== null) {
+          this.uiState.dispatch({ type: "setQuery", query });
+          if (!query && this.appState().globalSearch.query) await this.clearGlobalSearch();
+        }
       }
       return true;
     }
@@ -194,10 +192,10 @@ export class RootInputRouter {
         await this.dispatchBinding(key);
         this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
       } else if (key === "\x1b") this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-      else if (key === "\x7f" || key === "\b") this.uiState.dispatch({ type: "setQuery", query: query.slice(0, -1) });
-      else if (key === "\x17") this.uiState.dispatch({ type: "setQuery", query: deletePreviousWord(query) });
-      else if (key === "\x15") this.uiState.dispatch({ type: "setQuery", query: "" });
-      else if (isPrintableKey(key)) this.uiState.dispatch({ type: "setQuery", query: `${query}${key}` });
+      else {
+        const edited = editText(query, key);
+        if (edited !== null) this.uiState.dispatch({ type: "setQuery", query: edited });
+      }
       return true;
     }
 
@@ -426,6 +424,10 @@ export class RootInputRouter {
       this.uiState.dispatch({ type: "requestConfirmation", kind: intent.kind });
       return;
     }
+    if (intent.type === "routeKey") {
+      for (const key of intent.key === "gg" ? ["g", "g"] : [intent.key]) await this.route(key);
+      return;
+    }
     await this.dispatchApp(intent);
     if (intent.type === "playerOperation" && intent.operation === "quit") this.requestQuit?.();
   }
@@ -435,6 +437,18 @@ export class RootInputRouter {
       appState: this.appState(), uiState: this.uiState.snapshot,
       selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
     }, query);
+  }
+
+  private moveDiscoverySelection(key: string, overlay: UiState["overlays"][number]): void {
+    const actions = this.discoveryRows(overlay.query);
+    const visibleRows = overlayContentRows(overlay.kind,
+      this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
+      this.uiState.snapshot.terminal.rows);
+    const movement = listMovementForKey(key, visibleRows);
+    if (!movement) return;
+    this.uiState.dispatch(movement.kind === "boundary"
+      ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
+      : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
   }
 
   private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
@@ -550,6 +564,13 @@ function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" 
 
 function deletePreviousWord(value: string): string {
   return value.replace(/\s*\S+\s*$/, "");
+}
+
+function editText(value: string, key: string): string | null {
+  if (key === "\x7f" || key === "\b") return value.slice(0, -1);
+  if (key === "\x17") return deletePreviousWord(value);
+  if (key === "\x15") return "";
+  return isPrintableKey(key) ? `${value}${key}` : null;
 }
 
 function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppState>): number {
