@@ -2,6 +2,8 @@
 
 Research for **whether TMU should switch its runtime from Bun to Node.js to reduce CPU use and energy consumption**. Reviewed 2026-07-10 against TMU's current source, Bun 1.3.11, and Node.js 24.13.0. External claims use runtime- or kernel-owned documentation; vendor performance claims are treated as claims, not independent measurements.
 
+> Historical note: this comparison records the evidence used to choose Node. ADR-0002 and the current README supersede its pre-migration runtime descriptions.
+
 ## Conclusion
 
 **The playback-controller experiment favors Node.js for CPU efficiency.** In a complete 172-second playback with the same track, mpv options, Unix-socket IPC, JSON messages, and one-second position polling, Node used 0.123 controller CPU-seconds versus Bun's 1.051 seconds—about 88% less. Including mpv, Node used 3.099 CPU-seconds versus Bun's 3.973 seconds—about 22% less total CPU. The gap is large enough to justify evaluating a complete Node port.
@@ -10,7 +12,7 @@ Node did use more controller memory: 52,952 KiB peak RSS versus Bun's 46,392 KiB
 
 TMU has subsequently decided to migrate the complete runtime to Node and benchmark the real TUI as validation rather than as a migration gate ([ADR 0002](../adr/0002-use-node-for-runtime-and-distribution.md)). The experiment establishes that Node is substantially more CPU-efficient for TMU's core mpv-control loop; it does not yet establish the size of the benefit once Vue TUI rendering, persistence, user input, and downloads are included.
 
-TMU currently uses Bun-only production APIs (`Bun.spawn`, `Bun.sleep`, and `Bun.write`), so Node remains a real port rather than a runtime flag change.
+Before the migration, TMU used runtime-specific production APIs (`Bun.spawn`, `Bun.sleep`, and `Bun.write`), so moving to Node required a real port rather than a runtime flag change.
 
 ## Controlled playback experiment
 
@@ -52,7 +54,7 @@ Startup microbenchmarks are low-value for a long-running player; steady-state CP
 
 ### A Node evaluation requires a real port
 
-Production source uses `Bun.spawn` and `Bun.sleep` for mpv startup and `Bun.write` for snapshot persistence. Tests and packaging use further Bun-specific terminal, subprocess, shell, and file APIs. Bun documents its child-process API independently ([Bun child processes](https://bun.com/docs/runtime/child-process)), while its compatibility page states that Node compatibility is still incomplete ([Bun Node.js compatibility](https://bun.com/docs/runtime/nodejs-compat)). Running the same source under Node is therefore not a valid A/B comparison: first the runtime-specific operations and packaging path must be adapted behind equivalent behavior.
+At the time of the experiment, production source used `Bun.spawn` and `Bun.sleep` for mpv startup and `Bun.write` for snapshot persistence. Tests and packaging used further runtime-specific terminal, subprocess, shell, and file APIs. Bun documents its child-process API independently ([Bun child processes](https://bun.com/docs/runtime/child-process)), while its compatibility page states that Node compatibility was incomplete for the evaluated version ([Bun Node.js compatibility](https://bun.com/docs/runtime/nodejs-compat)). Running that pre-migration source under Node was therefore not a valid A/B comparison: the runtime-specific operations and packaging path first had to be adapted behind equivalent behavior.
 
 ## Follow-up full-application measurement
 
