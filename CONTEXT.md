@@ -1,6 +1,6 @@
 # TMU
 
-TMU is a lean terminal music player effort focused on efficient everyday playback across local and remote music sources.
+TMU is a lean terminal music player focused on downloading YouTube media, caching it on disk, and playing it from that cache.
 
 ## Language
 
@@ -8,44 +8,24 @@ TMU is a lean terminal music player effort focused on efficient everyday playbac
 The working name for the new lean TUI music player being planned in this repository.
 _Avoid_: cliamp clone, lightweight cliamp
 
-**Navidrome**:
-A self-hosted music server that TMU should integrate with through the Subsonic/OpenSubsonic client API surface.
-_Avoid_: navidrone
-
 **Provider**:
-A source of playable music and metadata, such as a local music library, Navidrome server, YouTube Music account, or offline YouTube download cache.
+A narrow boundary that lists and searches Tracks and resolves them for playback. The YouTube Cache is the only current Provider, while the abstraction remains as an extension point for possible future sources.
 _Avoid_: backend, source
 
-**Provider Browsing Surface**:
-The source-specific UI and query behavior used to find Tracks within one Provider, such as local file opening, Navidrome artist/album browsing, or Offline YouTube Cache listing.
-_Avoid_: shared library, central library module
-
-**Global Search**:
-The typed-query state of the music-finding Picker Overlay, returning sections for Tracks, Artists, Albums, and Playlists across Local, Navidrome, and Offline YouTube Cache Providers. Each Provider's ranking remains intact within its result-type and Provider subgroup, Provider identity is result metadata or an optional filter, and no Provider must be chosen before searching. Clearing the query restores the prior Provider navigation location and selection.
-_Avoid_: provider search, source-first search
+**Cache Search**:
+The typed-query state of the Library tab, matching cached Tracks by title, artist or uploader, or YouTube video ID without Provider headings, filters, or network calls. With no query, the YouTube Cache is ordered by newest Cache Entry first.
+_Avoid_: Global Search, Provider Search, YouTube search
 
 **Track**:
-The canonical playable music item that Providers add to TMU's shared queue, regardless of whether the item comes from a local file, Navidrome, or the Offline YouTube Cache.
+The canonical playable music item that Providers add to TMU's shared queue. Current Tracks come from the YouTube Cache.
 _Avoid_: song, media item, provider item
 
-**Music Collection**:
-An ordered group of Tracks returned by Global Search, such as an Album or Playlist, that TMU can place into the Queue as one contiguous, deduplicated block.
-_Avoid_: Queue, search folder, result group
-
-**Local Directory**:
-A non-playable navigation container in the Local Provider Browsing Surface. Opening one reveals its children; TMU does not infer that a directory is an Album or Playlist or recursively send it to Play Next or Play Now.
-_Avoid_: local album, folder collection, queueable directory
-
-**Artist**:
-A searchable, non-playable navigation result that opens the Artist's Albums. An Artist is not a Music Collection and cannot be sent directly to Play Next or Play Now in the MVP.
-_Avoid_: artist collection, queueable artist
-
 **Track Identity**:
-The durable identity of a Track within its Provider, used for queue deduplication, queue restore, and provider-specific refresh without storing a runtime playback address as identity.
+The durable `(providerId, stableId)` identity used for queue deduplication, restore, and Provider refresh. YouTube Cache Tracks use Provider ID `youtube-cache` and the YouTube video ID, never a title or URL.
 _Avoid_: stream URL identity, display title identity
 
 **Playback Locator**:
-The runtime address TMU hands to the Player to start playback, such as a local file path or freshly generated authenticated stream URL.
+The runtime disk path TMU hands to the Player to start a cached Track.
 _Avoid_: track ID, provider ID
 
 **Player**:
@@ -61,20 +41,44 @@ The source of truth for Provider data, Queue contents, current playback state, d
 _Avoid_: UI state, view model
 
 **UI State**:
-The TUI-owned state for navigation and view-local interaction, such as focused pane, selected row, active prompt, filter text, and scroll position.
+The TUI-owned, session-only state for navigation and view-local interaction, such as active tab, focused pane, selected row, active prompt, filter text, and scroll position. Library and YouTube Downloader keep this state while switching tabs, but it is not persisted across restarts.
 _Avoid_: app state, playback state
 
 **TMU Config**:
-The MVP configuration file for TMU settings and credential material, including paths, provider settings, low-power cadence, dependency policy, and Navidrome auth fields.
+The configuration file for YouTube download settings, low-power cadence, and dependency policy. It does not choose among Providers or configure the YouTube Cache location in the MVP.
 _Avoid_: separate credentials store, secret database
 
-**Offline YouTube Cache**:
-The local library of audio files and metadata created by downloading YouTube or YouTube Music items before playback inside TMU. In the MVP, YouTube playback goes through this cache instead of live streaming from YouTube.
-_Avoid_: download folder, saved YouTube
+**External Tools**:
+The command-line programs TMU orchestrates rather than reimplementing: `yt-dlp` for YouTube extraction/download and `mpv` for playback. TMU does not require `ffmpeg` globally; any extra tool need is reported only when the invoked `yt-dlp` operation requires it.
+_Avoid_: built-in downloader, built-in transcoder, media processing engine
+
+**YouTube Cache**:
+The fixed-location, TMU-managed library of audio files and metadata created by the YouTube URL Download Flow, and the canonical implementation/UI name replacing Offline YouTube Cache. YouTube and YouTube Music URLs resolve to the same cache identity when they share a video ID. A healthy existing Track is not redownloaded, refreshed, or changed to a different container; an incomplete entry is repairable, arbitrary user-copied audio is not imported, and cached Tracks are never removed automatically for age or size.
+_Avoid_: Offline YouTube Cache, local music folder, download folder, saved YouTube, reveal file
+
+**Cache Entry**:
+The atomic on-disk representation of one cached Track: one non-empty media file produced by successful `yt-dlp` download, named `<video-id>.<ext>` in its selected native container, and one authoritative TMU JSON sidecar named `<video-id>.json` containing YouTube video ID, title, uploader or channel, known duration, cached time, media filename/container, and optional thumbnail URL. Missing or invalid media or JSON makes the entry incomplete; repair may adopt a different `<video-id>.<new-ext>` when the old entry was already incomplete. Embedded media tags are optional and never authoritative, a full source URL is derivable rather than stored as source authority, and deeper playability is discovered by mpv during playback.
+_Avoid_: media file, database row, embedded tags, raw yt-dlp info JSON
+
+**Cache Health**:
+The non-blocking Library warning/status area for incomplete TMU-shaped Cache Entries excluded from the normal Library list. It identifies entries by video ID or cache-file stem, shows title/uploader only when readable from the sidecar, and keys cleanup actions on the video ID/stem rather than display metadata. Recoverable entries may be repaired by resubmitting their URL in YouTube Downloader, while cleanup requires confirmation and unrelated files are ignored and never deleted automatically.
+_Avoid_: Track Availability, local-file import, automatic cleanup
+
+**Cache Deletion**:
+The explicitly confirmed, permanent removal of a Track's media and metadata from the YouTube Cache, recoverable only by downloading again. Any matching Queue entry remains visibly unavailable; deleting the playing Current Track first stops playback, retains it as Current, and resets its position.
+_Avoid_: remove from Queue, automatic cleanup, filesystem delete
 
 **YouTube URL Download Flow**:
-The MVP workflow that accepts a direct YouTube or YouTube Music URL, downloads it with yt-dlp into the Offline YouTube Cache, and then enqueues the cached Track.
-_Avoid_: YouTube streaming, YouTube provider playback
+The only workflow for adding media to the YouTube Cache. Each submission accepts one `youtube.com`, `music.youtube.com`, or `youtu.be` URL, including Shorts URLs that resolve to a normal YouTube video ID, and rejects bare IDs or obvious non-YouTube URLs before extraction. A normal video/watch URL creates a single-video Download Batch even if it also contains a playlist parameter, while an explicit playlist URL first requires all-or-cancel confirmation of its title and best-known source item count. Downloaded Tracks are stored independently without retaining playlist information or changing playback.
+_Avoid_: YouTube search, YouTube browsing, YouTube streaming, YouTube provider playback
+
+**Download Batch**:
+The sequential work created by one submitted YouTube URL, processing its Tracks one at a time in source order. Successes survive item failures, unavailable playlist entries, or cancellation; batch cancellation stops remaining work in that batch and removes the interrupted item's partial files, while the final result distinguishes downloaded, already-cached, failed, and cancelled work.
+_Avoid_: Playlist, Music Collection, transaction
+
+**Download Pipeline**:
+The session-bound FIFO sequence of submitted Download Batches, with at most one active Track download across all batches. It may run alongside playback without changing playback state; cancelling the active batch continues to the next pending batch, and pending batches may be removed before they start without affecting the cache. Its queue, status, progress, and session summaries are shown in the YouTube Downloader rather than the Playback Tab. Quitting with work requires confirmation before cancelling all active and pending work. Summaries and failures are not persisted.
+_Avoid_: Queue, parallel downloads, download playlist
 
 **Low-Power TUI**:
 The UI constraint that terminal rendering remains event-driven and bounded, with no autonomous playback redraws or animated progress bar by default; TMU Config may opt into a periodic progress cadence.
@@ -100,40 +104,52 @@ _Avoid_: autoplay on relaunch, Play Now from saved position
 The playback action that halts the Player, keeps the Current Track, and resets its resumable position to the beginning. Pause instead preserves position; removing the Current Track clears the designation. Reaching the natural end of the final playable Track with repeat off produces the same retained-Current, position-zero state.
 _Avoid_: clearing Current Track, preserving the stopped position
 
-**Queue Home**:
-The default two-pane TUI surface opened by TMU's only launch form, `tmu`, with the Queue Pane on the left and the Playing Track Pane on the right; Picker Overlays appear above it only when explicitly opened by the user. Launch restores the Last Queue Snapshot without autoplay. Queue Home remains visible when the Queue is empty, keeps Queue Pane focus, shows no Current Track, and offers contextual actions for Global Search, opening Local music, and the YouTube URL Download Flow rather than opening a Provider automatically.
+**Playback Tab**:
+The default two-pane TUI surface opened by TMU's only launch form, `tmu`, with the Queue Pane on the left and the Playing Track Pane on the right. Launch always starts on the Playback Tab and restores the Last Queue Snapshot without autoplay. The Playback Tab remains visible when the Queue is empty, keeps Queue Pane focus, shows no Current Track, and belongs to the same top-level tab set as Library and YouTube Downloader.
 _Avoid_: dashboard, browse home, always-visible search
 
 **Queue Pane**:
-The left side of Queue Home, showing the ordered Queue entries together with their selection, current, and playback status.
+The left side of the Playback Tab, showing the ordered Queue entries together with their selection, current, and playback status.
 _Avoid_: library pane, playlist view, browser pane
 
 **Playing Track Pane**:
-The non-focusable, informational right side of Queue Home, showing static metadata and playback status for the Current Track and providing the future home for lyrics that update at a bounded low frequency. Queue Pane retains focus in the MVP because playback controls are global and Playing Track Pane exposes no direct actions. It distinguishes restored playback that can Resume at a saved position from an explicitly Stopped Track that will start from the beginning.
+The non-focusable, informational right side of the Playback Tab, showing static metadata and playback status for the Current Track and providing the future home for lyrics that update at a bounded low frequency. Queue Pane retains focus in the MVP because playback controls are global and Playing Track Pane exposes no direct actions. It distinguishes restored playback that can Resume at a saved position from an explicitly Stopped Track that will start from the beginning.
 _Avoid_: now-playing bar, Queue details, animated playback panel
 
-**Picker Overlay**:
-A shared Telescope-style popup model over Queue Home for finding music, the Command Palette, and shortcut help; each is keyboard-controlled and dismissed with `Esc` without losing Queue context. The music-finding form opens in Provider navigation when its query is empty and switches to Global Search when the user types. It remembers the last navigation location and selection within the current TMU session, but a relaunch starts it at a source-neutral Provider root.
-_Avoid_: split pane, full-workspace replacement, permanent browser
+**Library**:
+The top-level tab for finding healthy playable Tracks already present in the YouTube Cache and adding them to the Queue. It is entirely local, uses Cache Search for filtering, `Enter` on a Track means Play Now, and separate actions handle Play Next, Add to Queue, and confirmed Cache Deletion. It does not show download queue, download progress, or incomplete Cache Entries as selectable Tracks.
+_Avoid_: provider browser, local library, download status
+
+**YouTube Downloader**:
+The top-level tab for submitting YouTube or YouTube Music video and playlist URLs and observing the Download Pipeline. It owns download queue display, active download status, cancellation, pending-batch removal, and session summaries; accepted submissions clear the URL input after they create a Download Batch, while pre-batch validation failures or cancelled playlist confirmations keep it editable. Downloading never adds Tracks to the Queue by itself.
+_Avoid_: Library, Queue Home status, playback queue
+
+**Top-Level Tabs**:
+The primary TUI structure containing Playback, Library, and YouTube Downloader. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, and YouTube Downloader is for download submission and status. Global playback shortcuts continue to work across tabs except where a focused text input intentionally captures keys.
+_Avoid_: overlay-first UI, provider tabs, hidden download status
 
 **Vim Navigation**:
 TMU's canonical keyboard movement language: `j`/`k`, `h`/`l`, `gg`/`G`, and paging keys, with arrow, Home, and End keys available as conventional aliases.
 _Avoid_: arrow-only navigation, mouse-first navigation
 
 **Contextual Shortcut Help**:
-TMU's keyboard-discovery layer: a small footer shows the most relevant actions for the active surface, while `?` opens its complete shortcut reference.
+TMU's keyboard-discovery layer: a small footer shows the most relevant actions for the active tab, while `?` opens that tab's shortcut reference plus global playback and tab-switching shortcuts.
 _Avoid_: permanent shortcut wall, undocumented keymap
 
 **Command Palette**:
-The searchable `:` surface that exposes every action available in the current context by name together with its shortcut.
+The optional searchable `:` convenience surface that exposes available actions by name together with their shortcuts. Core Playback, Library, and YouTube Downloader workflows remain operable through visible contextual actions and direct shortcuts without relying on the palette.
 _Avoid_: command line, settings menu, shortcut help
 
 **Play Next**:
-The TUI action that moves or inserts a Track or Music Collection into the next Queue positions without duplicates and never starts playback. Deduplication uses Track Identity: existing non-Current Tracks are moved into one contiguous block after the Current Track in collection order, while the Current Track stays in place and is omitted from that block. An empty Queue receives the result at its head.
+The TUI action that moves or inserts a Track into the next Queue position without duplicates and never starts playback. The Current Track stays in place; an empty Queue receives the Track at its head.
 _Avoid_: enqueue, add to end, play now, autoplay
 
+**Add to Queue**:
+The Library action that adds a cached Track to the end of the Queue only when it is not already queued, without starting playback, moving existing Queue entries, or changing the Current Track. It is distinct from downloading, which never queues Tracks by itself.
+_Avoid_: download to queue, Play Now, Play Next
+
 **Play Now**:
-The TUI action that makes a Track current and starts it from the beginning immediately. The requested Track or Music Collection is deduplicated by Track Identity into one contiguous block; its first Track becomes Current and the rest follow in collection order. A different former Current Track remains immediately before the block so Previous returns to it; without a Current Track, the block goes at the Queue head.
+The TUI action that deduplicates a Track into the Queue, makes it Current, and starts it from the beginning immediately. A different former Current Track remains immediately before it so Previous returns to that Track; without a Current Track, it goes at the Queue head.
 _Avoid_: autoplay, resume, play next
 
 **Clear Queue**:
@@ -153,13 +169,9 @@ The playback action that restarts the Current Track when playback is more than f
 _Avoid_: always changing Queue rows, clearing Current at Queue head
 
 **Track Availability**:
-The current ability of a queued Track to resolve and play, shown visibly with a reason when a local file, cached media file, provider auth, or playback attempt fails. Unavailable restored Tracks retain their Queue order and Current Track designation and may recover later; TMU never silently removes them. Next and automatic advancement skip unavailable Tracks, but direct Resume and Play Now fail on the requested Track without substitution.
+The runtime-derived ability of a queued Track to resolve and play, shown visibly with a reason when its Cache Entry or a playback attempt fails. mpv playback failures mark the Track unavailable for the session so automatic advancement skips it instead of repeatedly retrying. Unavailable restored Tracks retain their Queue order and Current Track designation and may recover later after cache rescan; TMU never silently removes them. Direct Resume and Play Now fail on the requested Track without substitution unless a future explicit retry action is added.
 _Avoid_: silently removed track, hidden playback error
 
 **Last Queue Snapshot**:
-The small persistence record TMU updates and restores automatically so Queue order and Track data, availability, Current Track and position, shuffle, repeat, and volume survive exit and relaunch. It excludes Queue selection, scroll, filters, Picker Overlays, and other UI State, and never becomes a general app database or media-library index. Restoration is all-or-nothing. Corrupt, unsupported, or partially invalid snapshot data is quarantined for recovery; TMU opens an empty Queue Home with a non-blocking warning and does not replace it until the user makes a meaningful state change. Write failures leave playback and in-memory state working, remain visibly actionable, retry later, and never trap exit.
+The small persistence record TMU updates and restores automatically so Queue order, Track data, Current Track and position, shuffle, repeat, and volume survive exit and relaunch. It excludes Track Availability, Queue selection, scroll, filters, active tab, and other UI State, and never becomes a general app database or media-library index. Restoration is all-or-nothing. Corrupt, unsupported, or partially invalid snapshot data is quarantined for recovery; TMU opens the Playback Tab with an empty Queue and a non-blocking warning, and does not replace it until the user makes a meaningful state change. Write failures leave playback and in-memory state working, remain visibly actionable, retry later, and never trap exit.
 _Avoid_: app database, library index
-
-**Navidrome Library Browser**:
-The MVP browsing surface for a configured Navidrome Provider, covering Artists, Albums, and Playlists well enough to enqueue Tracks from a remote music library. Navidrome is absent from the source-neutral Provider root until TMU Config identifies a server; once configured, disabled, offline, and authentication-failure states remain visible with their reason and recovery action.
-_Avoid_: Navidrome playlist-only mode
