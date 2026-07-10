@@ -51,6 +51,10 @@ export function createInitialAppState(
     downloads: {
       active: false,
       lines: [],
+      pendingBatches: [],
+      summaries: [],
+      quitConfirmationRequired: false,
+      preparingSubmissions: 0,
     },
     appErrors: [],
     lastEvent: "opened target switcher",

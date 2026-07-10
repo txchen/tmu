@@ -75,11 +75,20 @@ export class AppCoordinator {
   private readonly dependencyRunner: DependencyCommandRunner;
   private readonly prepareDownloadBatch: typeof prepareYouTubeDownloadBatch;
   private readonly executeDownloadBatch: typeof executeYouTubeDownloadBatch;
-  private pendingPlaylistConfirmation: Extract<PrepareYouTubeDownloadBatchResult, { kind: "confirmation-required" }> | null = null;
+  private pendingPlaylistConfirmation: {
+    id: number;
+    sourceUrl: string;
+    prepared: Extract<PrepareYouTubeDownloadBatchResult, { kind: "confirmation-required" }>;
+    settle(): void;
+  } | null = null;
+  private readonly pendingDownloadBatches: Array<{ id: number; batch: YouTubeDownloadBatch }> = [];
+  private activeDownloadBatch: { id: number; batch: YouTubeDownloadBatch; controller: AbortController } | null = null;
+  private nextDownloadBatchId = 1;
+  private downloadSubmissionTail: Promise<void> = Promise.resolve();
+  private activeDownloadPreparation: AbortController | null = null;
   private readonly unsubscribeFromPlayer: () => void;
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
-  private activeYouTubeDownload: AbortController | null = null;
-  private activeYouTubeDownloadTask: Promise<void> | null = null;
+  private activeDownloadTask: Promise<void> | null = null;
   private naturalAdvanceInFlight = false;
   private tornDown = false;
   private readonly now: () => number;
@@ -152,9 +161,12 @@ export class AppCoordinator {
           return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
-          else if (intent.operation === "cancel") this.cancelYouTubeDownload();
+          else if (intent.operation === "cancel" || intent.operation === "cancel-active") this.cancelYouTubeDownload();
           else if (intent.operation === "confirm-playlist") this.confirmPlaylistDownload();
-          else this.cancelPlaylistDownload();
+          else if (intent.operation === "cancel-playlist") this.cancelPlaylistDownload();
+          else if (intent.operation === "remove-pending") this.removePendingDownloadBatch(intent.batchId);
+          else if (intent.operation === "confirm-quit") await this.confirmQuitWithDownloads();
+          else this.cancelQuitWithDownloads();
           return;
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
@@ -179,12 +191,19 @@ export class AppCoordinator {
     if (this.tornDown) return;
     this.tornDown = true;
     await this.saveLastQueueSnapshot({ meaningful: false });
-    this.activeYouTubeDownload?.abort();
-    this.activeYouTubeDownload = null;
+    this.pendingDownloadBatches.length = 0;
+    this.pendingPlaylistConfirmation?.prepared.cancel();
+    this.pendingPlaylistConfirmation?.settle();
+    this.pendingPlaylistConfirmation = null;
+    this.activeDownloadPreparation?.abort();
+    this.activeDownloadBatch?.controller.abort();
     this.unsubscribeFromPlayer();
     const cleanupFailures: string[] = [];
-    if (this.activeYouTubeDownloadTask) {
-      await this.activeYouTubeDownloadTask.catch((error) => {
+    await this.downloadSubmissionTail.catch((error) => {
+      cleanupFailures.push(error instanceof Error ? error.message : String(error));
+    });
+    if (this.activeDownloadTask) {
+      await this.activeDownloadTask.catch((error) => {
         cleanupFailures.push(error instanceof Error ? error.message : String(error));
       });
     }
@@ -358,6 +377,11 @@ export class AppCoordinator {
         return;
       case "set-volume": await this.setVolume(intent.percent, intent.ready); return;
       case "quit":
+        if (this.hasDownloadWork()) {
+          this.appState.downloads.quitConfirmationRequired = true;
+          this.appState.lastEvent = "confirm quit to cancel active and pending Download Batches";
+          return;
+        }
         this.appState.lastEvent = "quit requested";
         await this.teardown();
         return;
@@ -365,39 +389,28 @@ export class AppCoordinator {
   }
 
   private startYouTubeUrlDownload(url: string): void {
-    if (this.activeYouTubeDownload) {
-      this.appState.lastEvent = "YouTube download already in progress";
-      return;
-    }
-
-    const controller = new AbortController();
-    this.activeYouTubeDownload = controller;
-    this.appState.downloads = {
-      active: true,
-      lines: [],
-    };
-    this.appState.lastEvent = "starting YouTube URL Download";
-
-    const task = this.submitYouTubeUrl(url, controller.signal)
+    const id = this.nextDownloadBatchId++;
+    this.appState.downloads.preparingSubmissions += 1;
+    this.appState.lastEvent = "preparing YouTube URL Download Batch";
+    const submission = this.downloadSubmissionTail.then(() => this.prepareSubmittedDownload(id, url))
       .catch((error) => {
         this.appState.lastEvent = error instanceof Error ? error.message : String(error);
       })
       .finally(() => {
-        if (this.activeYouTubeDownload === controller) this.activeYouTubeDownload = null;
-        if (this.activeYouTubeDownloadTask === task) this.activeYouTubeDownloadTask = null;
+        this.appState.downloads.preparingSubmissions -= 1;
         this.notifyStateChanged();
       });
-    this.activeYouTubeDownloadTask = task;
+    this.downloadSubmissionTail = submission;
   }
 
   private cancelYouTubeDownload(): void {
-    if (!this.activeYouTubeDownload) {
-      this.appState.lastEvent = "no active YouTube download";
+    if (!this.activeDownloadBatch) {
+      this.appState.lastEvent = "no active Download Batch";
       return;
     }
 
-    this.activeYouTubeDownload.abort();
-    this.appState.lastEvent = "cancelling YouTube download and cleaning up partial files";
+    this.activeDownloadBatch.controller.abort();
+    this.appState.lastEvent = "cancelling active Download Batch and cleaning up partial files";
   }
 
   private async startSelectedQueueEntry(): Promise<void> {
@@ -701,42 +714,46 @@ export class AppCoordinator {
     this.syncQueueState();
     return true;
   }
-  private async submitYouTubeUrl(url: string, signal: AbortSignal): Promise<void> {
+  private async prepareSubmittedDownload(id: number, url: string): Promise<void> {
+    if (this.tornDown) return;
     await this.refreshHelperDependency("yt-dlp");
+    if (this.tornDown) return;
     const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
     if (healthMessage) {
       this.appState.lastEvent = healthMessage;
-      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
 
+    const controller = new AbortController();
+    this.activeDownloadPreparation = controller;
     const prepared = await this.prepareDownloadBatch(url, {
       command: this.appState.config.helpers.ytDlp,
       timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
-      signal,
+      signal: controller.signal,
       runner: this.dependencyRunner,
+    }).finally(() => {
+      if (this.activeDownloadPreparation === controller) this.activeDownloadPreparation = null;
     });
+    if (this.tornDown) return;
     if (prepared.kind === "rejected") {
       this.appState.lastEvent = prepared.message;
-      this.finishYouTubeDownload({ clearLines: true });
       return;
     }
     if (prepared.kind === "confirmation-required") {
-      this.pendingPlaylistConfirmation = prepared;
-      this.appState.downloads = {
-        active: false,
-        lines: [],
-        confirmation: prepared.confirmation,
-      };
-      this.appState.lastEvent = `confirm playlist ${prepared.confirmation.title} (${prepared.confirmation.itemCount} items)`;
+      await new Promise<void>((settle) => {
+        this.pendingPlaylistConfirmation = { id, sourceUrl: url, prepared, settle };
+        this.appState.downloads.confirmation = prepared.confirmation;
+        this.appState.lastEvent = `confirm playlist ${prepared.confirmation.title} (${prepared.confirmation.itemCount} items)`;
+        this.notifyStateChanged();
+      });
       return;
     }
 
-    await this.runPreparedDownloadBatch(prepared.batch, signal);
+    this.enqueueDownloadBatch(id, prepared.batch);
   }
 
-  private async runPreparedDownloadBatch(batch: YouTubeDownloadBatch, signal: AbortSignal): Promise<void> {
+  private async runPreparedDownloadBatch(id: number, batch: YouTubeDownloadBatch, signal: AbortSignal): Promise<void> {
     const summary = await this.executeDownloadBatch(batch, {
       command: this.appState.config.helpers.ytDlp,
       cache: { cacheDir: defaultYouTubeCacheDirectory() },
@@ -745,16 +762,14 @@ export class AppCoordinator {
       signal,
       onProgress: (_entryIndex, line) => this.recordYouTubeDownloadProgress(line),
     });
-    this.appState.downloads = {
-      active: false,
-      lines: this.appState.downloads.lines,
-      summary: {
-        downloaded: summary.downloaded,
-        alreadyCached: summary.alreadyCached,
-        failed: summary.failed,
-        cancelled: summary.cancelled,
-      },
+    const categoricalSummary = {
+      downloaded: summary.downloaded,
+      alreadyCached: summary.alreadyCached,
+      failed: summary.failed,
+      cancelled: summary.cancelled,
     };
+    this.appState.downloads.summary = categoricalSummary;
+    this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary });
     this.appState.lastEvent = `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`;
     const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
     if (isYouTubeCacheProvider(provider)) provider.refresh();
@@ -767,21 +782,10 @@ export class AppCoordinator {
       return;
     }
     this.pendingPlaylistConfirmation = null;
-    const batch = pending.confirm();
-    const controller = new AbortController();
-    this.activeYouTubeDownload = controller;
-    this.appState.downloads = { active: true, lines: [] };
-    this.appState.lastEvent = `starting confirmed playlist Download Batch`;
-    const task = this.runPreparedDownloadBatch(batch, controller.signal)
-      .catch((error) => {
-        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      })
-      .finally(() => {
-        if (this.activeYouTubeDownload === controller) this.activeYouTubeDownload = null;
-        if (this.activeYouTubeDownloadTask === task) this.activeYouTubeDownloadTask = null;
-        this.notifyStateChanged();
-      });
-    this.activeYouTubeDownloadTask = task;
+    delete this.appState.downloads.confirmation;
+    this.enqueueDownloadBatch(pending.id, pending.prepared.confirm());
+    pending.settle();
+    this.appState.lastEvent = "queued confirmed playlist Download Batch";
   }
 
   private cancelPlaylistDownload(): void {
@@ -790,26 +794,106 @@ export class AppCoordinator {
       this.appState.lastEvent = "no playlist confirmation pending";
       return;
     }
-    pending.cancel();
+    pending.prepared.cancel();
     this.pendingPlaylistConfirmation = null;
-    this.appState.downloads = { active: false, lines: [] };
+    delete this.appState.downloads.confirmation;
+    pending.settle();
     this.appState.lastEvent = "playlist Download Batch cancelled before start";
+  }
+
+  private enqueueDownloadBatch(id: number, batch: YouTubeDownloadBatch): void {
+    this.pendingDownloadBatches.push({ id, batch });
+    this.pendingDownloadBatches.sort((left, right) => left.id - right.id);
+    this.syncDownloadPipelineState();
+    this.pumpDownloadPipeline();
+  }
+
+  private pumpDownloadPipeline(): void {
+    if (this.tornDown || this.activeDownloadBatch) return;
+    const next = this.pendingDownloadBatches.shift();
+    if (!next) {
+      this.syncDownloadPipelineState();
+      return;
+    }
+    const controller = new AbortController();
+    this.activeDownloadBatch = { ...next, controller };
+    this.appState.downloads.lines = [];
+    this.syncDownloadPipelineState();
+    const task = this.runPreparedDownloadBatch(next.id, next.batch, controller.signal)
+      .catch((error) => {
+        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        if (this.activeDownloadBatch?.id === next.id) this.activeDownloadBatch = null;
+        if (this.activeDownloadTask === task) this.activeDownloadTask = null;
+        this.syncDownloadPipelineState();
+        this.notifyStateChanged();
+        this.pumpDownloadPipeline();
+      });
+    this.activeDownloadTask = task;
+  }
+
+  private removePendingDownloadBatch(batchId: number): void {
+    const index = this.pendingDownloadBatches.findIndex((candidate) => candidate.id === batchId);
+    if (index < 0) {
+      this.appState.lastEvent = "pending Download Batch not found";
+      return;
+    }
+    this.pendingDownloadBatches.splice(index, 1);
+    this.syncDownloadPipelineState();
+    this.appState.lastEvent = "removed pending Download Batch";
+  }
+
+  private hasDownloadWork(): boolean {
+    return Boolean(
+      this.appState.downloads.preparingSubmissions
+      || this.activeDownloadBatch
+      || this.pendingDownloadBatches.length
+      || this.pendingPlaylistConfirmation,
+    );
+  }
+
+  private async confirmQuitWithDownloads(): Promise<void> {
+    this.pendingDownloadBatches.length = 0;
+    this.pendingPlaylistConfirmation?.prepared.cancel();
+    this.pendingPlaylistConfirmation?.settle();
+    this.pendingPlaylistConfirmation = null;
+    this.activeDownloadPreparation?.abort();
+    delete this.appState.downloads.confirmation;
+    this.appState.downloads.quitConfirmationRequired = false;
+    this.activeDownloadBatch?.controller.abort();
+    this.syncDownloadPipelineState();
+    await this.teardown();
+  }
+
+  private cancelQuitWithDownloads(): void {
+    this.appState.downloads.quitConfirmationRequired = false;
+    this.appState.lastEvent = "quit cancelled; Download Pipeline continues";
+  }
+
+  private syncDownloadPipelineState(): void {
+    const active = this.activeDownloadBatch;
+    this.appState.downloads.active = Boolean(active);
+    if (active) {
+      this.appState.downloads.activeBatch = {
+        id: active.id,
+        sourceUrl: active.batch.sourceUrl,
+        kind: active.batch.kind,
+      };
+    } else {
+      delete this.appState.downloads.activeBatch;
+    }
+    this.appState.downloads.pendingBatches = this.pendingDownloadBatches.map(({ id, batch }) => ({
+      id,
+      sourceUrl: batch.sourceUrl,
+      kind: batch.kind,
+    }));
   }
 
   private recordYouTubeDownloadProgress(line: string): void {
     const lines = [...this.appState.downloads.lines, line].slice(-4);
-    this.appState.downloads = {
-      active: true,
-      lines,
-    };
+    this.appState.downloads.lines = lines;
     this.notifyStateChanged();
-  }
-
-  private finishYouTubeDownload(options: { clearLines: boolean }): void {
-    this.appState.downloads = {
-      active: false,
-      lines: options.clearLines ? [] : this.appState.downloads.lines,
-    };
   }
 
   private markSelectedYouTubeCacheAvailability(entry: QueueEntry): void {
