@@ -120,6 +120,9 @@ export function createActionRegistry(): ActionRegistry {
     routeAction("overlay.dismiss", "Dismiss Overlay", ["close"], [
       { key: "\x1b", label: "Esc" }, { key: "q", label: "q" },
     ], "\x1b", isNonTextOverlayContext),
+    routeAction("search.filters", "Search Filters", ["filter results"], [
+      { key: "f", label: "f" },
+    ], "f", isMusicResultsContext),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -174,7 +177,7 @@ export function createActionRegistry(): ActionRegistry {
       scope: "context",
       name: "Refresh Provider",
       aliases: ["reload provider"],
-      bindings: [{ key: "f", label: "f" }],
+      bindings: [],
       applies: (context) => providerSupports(context, "refresh"),
       enabled: always,
       disabledReason: neverDisabled,

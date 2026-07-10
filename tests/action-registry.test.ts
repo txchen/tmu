@@ -699,6 +699,8 @@ describe("root input router", () => {
     await router.route("ambient mix");
     await router.route("\x1b");
     expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "music-picker", focus: "results" });
+    await router.route("f");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "music-picker", focus: "filter" });
   });
 
   test("routes configured Provider recovery from the results overlay", async () => {
