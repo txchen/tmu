@@ -34,6 +34,25 @@ function context() {
 }
 
 describe("action registry contracts", () => {
+  test("owns Provider and result-type filter bindings and discovery", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    current.uiState.overlays = [{
+      kind: "music-picker", focus: "filter", query: "", selectedIdentity: null, scroll: 0,
+      providerLocation: { providerId: null, path: [] }, providerFilter: "all", resultTypeFilter: "all",
+    }];
+
+    expect(actionForBinding(registry, "p", current)).toMatchObject({
+      id: "search.filter-provider", intent: { type: "routeUi", operation: "cycle-provider-filter" },
+    });
+    expect(actionForBinding(registry, "t", current)).toMatchObject({
+      id: "search.filter-result-type", intent: { type: "routeUi", operation: "cycle-result-type-filter" },
+    });
+    expect(discoveryActions(registry, current).map((action) => action.id)).toEqual(expect.arrayContaining([
+      "search.filter-provider", "search.filter-result-type",
+    ]));
+  });
+
   test("direct input and discovery resolve identical metadata and semantic targets", () => {
     const registry = createActionRegistry();
     const current = context();
@@ -745,12 +764,12 @@ describe("root input router", () => {
     await router.route("\r");
     expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: [] });
     await router.route("l");
-    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: ["/music/Album"] });
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: [{ kind: "local-directory", path: "/music/Album" }] });
     await router.route("\r");
     expect(intents).toEqual([{ type: "playNext", target: amber }]);
     await router.route("q");
     await router.route("o");
-    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: ["/music/Album"] });
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: [{ kind: "local-directory", path: "/music/Album" }] });
     await router.route("h");
     await router.route("\x7f");
     expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: null, path: [] });

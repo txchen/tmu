@@ -621,9 +621,9 @@ describe("AppCoordinator", () => {
 
     expect(coordinator.uiState.overlays).toHaveLength(1);
     expect(coordinator.uiState.overlays[0]).toMatchObject({
-      query: "", providerLocation: { providerId: "navidrome", path: ["artists", "artist:artist"] },
+      query: "", providerLocation: { providerId: "navidrome", path: [{ kind: "artists" }, { kind: "artist", id: "artist" }] },
     });
-    expect(navidrome.listBrowserEntries!({ providerId: "navidrome", path: ["artists", "artist:artist"] }))
+    expect(navidrome.listBrowserEntries!({ providerId: "navidrome", path: [{ kind: "artists" }, { kind: "artist", id: "artist" }] }))
       .toEqual(expect.arrayContaining([
         { id: "artist", kind: "artist", label: "Artist" },
         { id: "album", kind: "album", label: "Album", detail: "Artist" },

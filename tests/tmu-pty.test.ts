@@ -487,16 +487,18 @@ describe("production tmu real PTY", () => {
       fetch(request) {
         const url = new URL(request.url);
         if (url.pathname.endsWith("/search3.view")) {
-          return Response.json(subsonicOk({
-            searchResult3: {
-              album: [
+          return Response.json(subsonicOk({ searchResult3: { song: [] } }));
+        }
+        if (url.pathname.endsWith("/getArtists.view")) {
+          return Response.json(subsonicOk({ artists: { index: [{ artist: [
+            { id: "pty-artist", name: "PTY Artist" },
+          ] }] } }));
+        }
+        if (url.pathname.endsWith("/getArtist.view")) {
+          return Response.json(subsonicOk({ artist: { album: [
                 { id: "album-ok", name: "PTY Album", artist: "PTY Artist" },
                 { id: "album-broken", name: "Broken Album", artist: "PTY Artist" },
-              ],
-              artist: [],
-              song: [],
-            },
-          }));
+          ] } }));
         }
         if (url.pathname.endsWith("/getAlbum.view")) {
           if (url.searchParams.get("id") === "album-broken") {
@@ -534,14 +536,16 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Queue · 3 Tracks", 10_000);
       terminal.write("/");
       await waitForOutput(read, "Search:");
-      terminal.write("Collection");
-      await waitForOutput(read, "Search: Collection");
+      terminal.write("Album");
+      await waitForOutput(read, "Search: Album");
       terminal.write("\r");
       await waitForOutput(read, "PTY Album");
-      terminal.write("j");
+      terminal.write("G");
       await Bun.sleep(50);
-      terminal.write("j");
-      await waitForOutput(read, "› PTY Album");
+      terminal.write("k");
+      await Bun.sleep(50);
+      terminal.write("k");
+      await Bun.sleep(200);
 
       terminal.write("\r");
       await waitForOutput(read, "Queue · 5 Tracks", 10_000);
@@ -555,7 +559,7 @@ describe("production tmu real PTY", () => {
       expect(snapshot.entries[snapshot.currentIndex].track.title).toBe("Collection One");
 
       const beforeFailure = await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text();
-      terminal.write("j");
+      terminal.write("k");
       await Bun.sleep(50);
       terminal.write("\r");
       await waitForOutput(read, "Could not load Music Collection: Album temporarily unavailable");

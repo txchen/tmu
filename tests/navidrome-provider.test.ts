@@ -627,12 +627,12 @@ describe("Navidrome Provider", () => {
     await provider.validateConnection();
     expect(await provider.searchTracks("moon")).toHaveLength(2);
     expect(provider.getLibraryBrowserEntries(navidromeRoot).some((entry) => entry.kind === "search-result")).toBe(false);
-    let entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: ["search", "moon"] });
+    let entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: [{ kind: "search", query: "moon" }] });
     expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(2);
     expect(entries.at(-1)).toEqual({ kind: "load-more-search-results", label: "Load more search results", depth: 1 });
 
     await provider.openLibraryBrowserEntry(entries.at(-1)!);
-    entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: ["search", "moon"] });
+    entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: [{ kind: "search", query: "moon" }] });
 
     expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(3);
     expect(entries.some((entry) => entry.kind === "load-more-search-results")).toBe(false);

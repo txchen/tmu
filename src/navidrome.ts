@@ -209,18 +209,18 @@ export function navidromeConnectionStateLine(state: NavidromeConnectionState): s
 export function navidromeLocationForEntry(entry: NavidromeLibraryBrowserEntry): ProviderLocation | null {
   switch (entry.kind) {
     case "artists-root":
-      return { providerId: "navidrome", path: ["artists"] };
+      return { providerId: "navidrome", path: [{ kind: "artists" }] };
     case "artist":
-      return { providerId: "navidrome", path: ["artists", `artist:${entry.id}`] };
+      return { providerId: "navidrome", path: [{ kind: "artists" }, { kind: "artist", id: entry.id }] };
     case "album":
       return {
         providerId: "navidrome",
-        path: ["artists", `artist:${entry.artistId}`, `album:${entry.id}`],
+        path: [{ kind: "artists" }, { kind: "artist", id: entry.artistId }, { kind: "album", id: entry.id }],
       };
     case "playlists-root":
-      return { providerId: "navidrome", path: ["playlists"] };
+      return { providerId: "navidrome", path: [{ kind: "playlists" }] };
     case "playlist":
-      return { providerId: "navidrome", path: ["playlists", `playlist:${entry.id}`] };
+      return { providerId: "navidrome", path: [{ kind: "playlists" }, { kind: "playlist", id: entry.id }] };
     default:
       return null;
   }
@@ -354,8 +354,8 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     const expandedArtistId = locationSegmentId(location, "artist");
     const expandedAlbumId = locationSegmentId(location, "album");
     const expandedPlaylistId = locationSegmentId(location, "playlist");
-    const visibleSearchQuery = location.providerId === "navidrome" && location.path[0] === "search"
-      ? location.path[1]?.trim() ?? ""
+    const visibleSearchQuery = location.providerId === "navidrome"
+      ? location.path.find((segment) => segment.kind === "search")?.query.trim() ?? ""
       : "";
 
     const entries: NavidromeLibraryBrowserEntry[] = [
@@ -625,36 +625,48 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
       const count = String(Math.min(50, Math.max(1, request.limit)));
       const includesResultType = (type: ProviderSearchResult["type"]) => request.resultTypes.includes(type);
       const results: ProviderSearchResult[] = [];
-      if (includesResultType("track") || includesResultType("artist") || includesResultType("album")) {
+      if (includesResultType("track")) {
         const response = await this.requestSubsonic<{ searchResult3?: unknown }>("search3", {
           query: request.query.trim(),
-          artistCount: includesResultType("artist") ? count : "0",
-          albumCount: includesResultType("album") ? count : "0",
-          songCount: includesResultType("track") ? count : "0",
+          artistCount: "0",
+          albumCount: "0",
+          songCount: count,
         });
         if (request.signal?.aborted) return [];
         const payload = isRecord(response.searchResult3) ? response.searchResult3 : {};
-        if (includesResultType("track")) results.push(...parseTracks(payload, normalizedServerUrl(this.config.serverUrl))
+        results.push(...parseTracks(payload, normalizedServerUrl(this.config.serverUrl))
           .slice(0, request.limit)
           .map((track) => ({
             providerId: this.id, providerLabel: this.label, type: "track" as const,
             id: track.identity.stableId, label: track.title, detail: track.artist, target: track,
           })));
-        if (includesResultType("artist")) results.push(...parseSearchArtists(payload).slice(0, request.limit).map((artist) => ({
+      }
+      const query = request.query.trim().toLocaleLowerCase();
+      if (includesResultType("artist") || includesResultType("album")) {
+        const artists = await this.listArtists();
+        if (request.signal?.aborted) return [];
+        if (includesResultType("artist")) results.push(...artists
+          .filter((artist) => artist.name.toLocaleLowerCase().includes(query))
+          .slice(0, request.limit).map((artist) => ({
           providerId: this.id, providerLabel: this.label, type: "artist" as const,
           id: artist.id, label: artist.name,
           detail: artist.albumCount === undefined ? undefined : `${artist.albumCount} Albums`,
         })));
-        if (includesResultType("album")) results.push(...parseAlbums(payload).slice(0, request.limit).map((album) => ({
+        if (includesResultType("album")) {
+          const albums = (await Promise.all(artists.map((artist) => this.listArtistAlbums(artist.id)))).flat();
+          if (request.signal?.aborted) return [];
+          results.push(...albums.filter((album) => [album.name, album.artist]
+            .some((value) => value?.toLocaleLowerCase().includes(query)))
+            .slice(0, request.limit).map((album) => ({
           providerId: this.id, providerLabel: this.label, type: "album" as const,
           id: album.id, label: album.name, detail: album.artist,
           target: lazyNavidromeCollection("album", album.id, album.name),
-        })));
+          })));
+        }
       }
       if (includesResultType("playlist")) {
         const playlists = await this.listPlaylists();
         if (request.signal?.aborted) return [];
-        const query = request.query.trim().toLocaleLowerCase();
         results.push(...playlists.filter((playlist) => playlist.name.toLocaleLowerCase().includes(query))
           .slice(0, request.limit)
           .map((playlist) => ({
@@ -701,19 +713,19 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
         this.artists = [...existingArtists, artist].sort(compareArtists);
       }
       await this.listArtistAlbums(artist.id);
-      location = { providerId: NAVIDROME_PROVIDER_ID, path: ["artists", `artist:${artist.id}`] };
+      location = { providerId: NAVIDROME_PROVIDER_ID, path: [{ kind: "artists" }, { kind: "artist", id: artist.id }] };
     } else if (result.type === "album") {
       const artistId = `search-result:${result.id}`;
       const artist = { id: artistId, name: result.detail ?? "Unknown Artist" };
       this.artists = [...(this.artists ?? []).filter((candidate) => candidate.id !== artistId), artist].sort(compareArtists);
       this.artistAlbums.set(artistId, [{ id: result.id, name: result.label, artist: result.detail }]);
       await this.listAlbumTracks(result.id);
-      location = { providerId: NAVIDROME_PROVIDER_ID, path: ["artists", `artist:${artistId}`, `album:${result.id}`] };
+      location = { providerId: NAVIDROME_PROVIDER_ID, path: [{ kind: "artists" }, { kind: "artist", id: artistId }, { kind: "album", id: result.id }] };
     } else {
       const playlist = { id: result.id, name: result.label };
       this.playlists = [...(this.playlists ?? []).filter((candidate) => candidate.id !== playlist.id), playlist];
       await this.listPlaylistTracks(result.id);
-      location = { providerId: NAVIDROME_PROVIDER_ID, path: ["playlists", `playlist:${result.id}`] };
+      location = { providerId: NAVIDROME_PROVIDER_ID, path: [{ kind: "playlists" }, { kind: "playlist", id: result.id }] };
     }
     this.connectionState = {
       status: "connected",
@@ -1124,9 +1136,8 @@ function normalizePageSize(value: number | undefined): number {
 
 function locationSegmentId(location: ProviderLocation, kind: "artist" | "album" | "playlist"): string | null {
   if (location.providerId !== "navidrome") return null;
-  const prefix = `${kind}:`;
-  const segment = location.path.find((candidate) => candidate.startsWith(prefix));
-  return segment?.slice(prefix.length) || null;
+  const segment = location.path.find((candidate) => candidate.kind === kind);
+  return segment && "id" in segment ? segment.id : null;
 }
 
 function missingConfigState(config: NavidromeConfig): NavidromeConnectionState | null {

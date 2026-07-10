@@ -31,7 +31,8 @@ export type UiActionIntent = {
 export type UiRouteOperation =
   | "move-down" | "move-up" | "first" | "last"
   | "half-page-down" | "half-page-up" | "page-down" | "page-up"
-  | "open" | "back" | "dismiss" | "search-filters" | "retry" | "help-filter";
+  | "open" | "back" | "dismiss" | "search-filters" | "retry" | "help-filter"
+  | "cycle-provider-filter" | "cycle-result-type-filter";
 
 export type ActionIntent = AppIntent | UiActionIntent;
 
@@ -140,6 +141,12 @@ export function createActionRegistry(): ActionRegistry {
     routeAction("search.filters", "Search Filters", ["filter results"], [
       { key: "f", label: "f" },
     ], "search-filters", isMusicResultsContext),
+    routeAction("search.filter-provider", "Cycle Provider Filter", ["provider filter"], [
+      { key: "p", label: "p" },
+    ], "cycle-provider-filter", isMusicFilterContext, "surface"),
+    routeAction("search.filter-result-type", "Cycle Result Type Filter", ["type filter"], [
+      { key: "t", label: "t" },
+    ], "cycle-result-type-filter", isMusicFilterContext, "surface"),
     routeAction("search.retry", "Retry", ["retry failed provider"], [
       { key: "r", label: "r" },
     ], "retry", canRetryContext),
@@ -274,12 +281,6 @@ export function createActionRegistry(): ActionRegistry {
     }),
     simpleAction("player.volume-up", "Volume Up", ["louder"], "+", "+", {
       type: "playerOperation", operation: "adjust-volume", delta: 5,
-    }),
-    simpleAction("persistence.save", "Save Last Queue Snapshot", ["save queue"], "S", "S", {
-      type: "persistenceOperation", operation: "save",
-    }),
-    simpleAction("persistence.restore", "Restore Last Queue Snapshot", ["restore queue"], "R", "R", {
-      type: "persistenceOperation", operation: "restore",
     }),
     {
       id: "download.cancel",
@@ -557,6 +558,11 @@ function isListContext(context: ActionContext): boolean {
 function isMusicResultsContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
   return overlay?.kind === "music-picker" && overlay.focus === "results";
+}
+
+function isMusicFilterContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  return overlay?.kind === "music-picker" && overlay.focus === "filter";
 }
 
 function isNonTextOverlayContext(context: ActionContext): boolean {

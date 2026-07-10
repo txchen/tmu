@@ -351,7 +351,7 @@ export class AppCoordinator {
       activeTargetId: targetId,
       selectedTargetIndex: navigationTargetIndex(targetId),
       focusedPane: targetId === "queue" ? "queue" : "content",
-      providerLocation: { providerId: targetId === "queue" ? null : targetId, path: [] },
+      providerLocation: { providerId: providerIdForTarget(targetId), path: [] },
     });
     await this.persistLastSelectedTarget(targetId);
     await this.refreshEnteredTarget(targetId);
@@ -369,7 +369,7 @@ export class AppCoordinator {
       this.updateUiState({
         selectedTargetIndex,
         activeTargetId,
-        providerLocation: { providerId: activeTargetId === "queue" ? null : activeTargetId, path: [] },
+        providerLocation: { providerId: providerIdForTarget(activeTargetId), path: [] },
       });
       await this.persistLastSelectedTarget(this.uiState.activeTargetId);
       await this.refreshEnteredTarget(this.uiState.activeTargetId);
@@ -923,7 +923,7 @@ export class AppCoordinator {
       focusedPane: "content",
       activePrompt: null,
       promptInput: "",
-      providerLocation: { providerId: "local", path: [path] },
+      providerLocation: { providerId: "local", path: [{ kind: "local-directory", path }] },
     });
     await this.persistLastSelectedTarget("local");
 
@@ -1592,7 +1592,7 @@ export class AppCoordinator {
     const results = await this.runNavidromeBrowsingQuery(provider, query);
     if (!results) return;
     this.updateUiState({
-      providerLocation: { providerId: "navidrome", path: ["search", query.trim()] },
+      providerLocation: { providerId: "navidrome", path: [{ kind: "search", query: query.trim() }] },
     });
     const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
     const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
@@ -1764,6 +1764,12 @@ export class AppCoordinator {
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
     for (const listener of this.stateListeners) listener(reason);
   }
+}
+
+function providerIdForTarget(targetId: NavigationTargetId) {
+  return targetId === "local" || targetId === "navidrome" || targetId === "offline-youtube-cache"
+    ? targetId
+    : null;
 }
 
 function completedPlayThresholdSeconds(durationSeconds: number | null | undefined): number {
