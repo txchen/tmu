@@ -113,7 +113,7 @@ export class NoopPlayer implements Player {
     return () => this.listeners.delete(_listener);
   }
 
-  private updateState(state: PlayerPlaybackState): void {
+  protected updateState(state: PlayerPlaybackState): void {
     this.state = state;
     for (const listener of this.listeners) listener(this.state);
   }
@@ -195,6 +195,7 @@ export class MpvPlayer implements Player {
       idle: false,
       eof: false,
       message: undefined,
+      failureKind: undefined,
     });
     this.reschedulePositionPoll(0);
   }
@@ -381,13 +382,18 @@ export class MpvPlayer implements Player {
 
     if (message.event === "end-file") {
       this.clearPositionPoll();
+      const playbackFailed = message.reason === "error";
       this.updateState({
-        status: "idle",
+        status: playbackFailed ? "error" : "idle",
         positionSeconds: null,
         durationSeconds: null,
         idle: true,
         paused: false,
         eof: message.reason === "eof" || message.reason === undefined,
+        failureKind: playbackFailed ? "playback" : undefined,
+        message: playbackFailed
+          ? `mpv playback failed${typeof message.error === "string" ? `: ${message.error}` : ""}`
+          : undefined,
       });
     }
   }

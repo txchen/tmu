@@ -365,6 +365,19 @@ describe("MpvPlayer", () => {
     expect(player.playback.durationSeconds).toBeNull();
   });
 
+  test("classifies asynchronous mpv end-file errors as playback failures", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({ command: "mpv", ipcPath: "/tmp/tmu-test.sock", workDir: "/tmp", adapter });
+    await player.start();
+    await player.load({ kind: "file", path: "/music/broken.opus" });
+
+    adapter.ipc.emit({ event: "end-file", reason: "error", error: "loading failed" });
+
+    expect(player.playback).toMatchObject({
+      status: "error", failureKind: "playback", message: "mpv playback failed: loading failed", eof: false,
+    });
+  });
+
   test("keeps command errors recoverable and allows later commands and teardown", async () => {
     const adapter = new FakeProcessAdapter();
     const player = new MpvPlayer({

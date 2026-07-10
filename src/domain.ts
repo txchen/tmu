@@ -59,6 +59,10 @@ export type PlaybackCommandError = {
   recoverable: boolean;
 };
 
+export class PlaybackFailure extends Error {
+  override readonly name = "PlaybackFailure";
+}
+
 export type PlayerPlaybackState = {
   status: "idle" | "playing" | "paused" | "stopped" | "error";
   positionSeconds?: number | null;
@@ -69,6 +73,7 @@ export type PlayerPlaybackState = {
   volumePercent?: number | null;
   commandError?: PlaybackCommandError;
   message?: string;
+  failureKind?: "playback";
 };
 
 export type SnapshotTrack = {
