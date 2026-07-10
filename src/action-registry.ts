@@ -47,6 +47,7 @@ export type ActionDefinition = {
   readonly disabledReason: (context: ActionContext) => string | null;
   readonly createIntent: (context: ActionContext) => ActionIntent | null;
   readonly scope: "context" | "global";
+  readonly contextLayer?: "underlying" | "overlay";
 };
 
 export type ResolvedAction = {
@@ -124,7 +125,7 @@ export function createActionRegistry(): ActionRegistry {
     ], "back", isMusicResultsContext),
     routeAction("overlay.dismiss", "Dismiss Overlay", ["close"], [
       { key: "\x1b", label: "Esc" }, { key: "q", label: "q" },
-    ], "dismiss", isNonTextOverlayContext),
+    ], "dismiss", isNonTextOverlayContext, "overlay"),
     routeAction("search.filters", "Search Filters", ["filter results"], [
       { key: "f", label: "f" },
     ], "search-filters", isMusicResultsContext),
@@ -133,7 +134,7 @@ export function createActionRegistry(): ActionRegistry {
     ], "retry", canRetryContext),
     routeAction("help.filter", "Filter Help", ["search shortcuts"], [
       { key: "/", label: "/" },
-    ], "help-filter", isHelpResultsContext),
+    ], "help-filter", isHelpResultsContext, "overlay"),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -310,15 +311,9 @@ function providerSupports(context: ActionContext, operation: "refresh" | "retry"
 }
 
 export function discoveryActions(registry: ActionRegistry, context: ActionContext): ResolvedAction[] {
-  const effectiveContext = underlyingDiscoveryContext(context);
-  const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
-    .includes(context.uiState.overlays.at(-1)?.kind ?? "");
-  const helpOpen = context.uiState.overlays.at(-1)?.kind === "shortcut-help";
   return registry
-    .filter((action) => action.applies(effectiveContext)
-      || (discoveryOverlayOpen && action.id === "overlay.dismiss")
-      || (helpOpen && action.id === "help.filter"))
-    .map((action) => resolveAction(action, effectiveContext))
+    .filter((action) => action.applies(contextForAction(action, context)))
+    .map((action) => resolveAction(action, contextForAction(action, context)))
     .sort((left, right) => Number(left.scope === "global") - Number(right.scope === "global"));
 }
 
@@ -344,18 +339,11 @@ export function actionForBinding(
   key: string,
   context: ActionContext,
 ): ResolvedAction | null {
-  const effectiveContext = underlyingDiscoveryContext(context);
-  const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
-    .includes(context.uiState.overlays.at(-1)?.kind ?? "");
-  const helpOpen = context.uiState.overlays.at(-1)?.kind === "shortcut-help";
-  const candidates = helpOpen
-    ? [...registry.filter((candidate) => candidate.id === "help.filter"), ...registry]
-    : registry;
-  const action = candidates.find((candidate) => (candidate.applies(effectiveContext)
-      || (discoveryOverlayOpen && candidate.id === "overlay.dismiss")
-      || (helpOpen && candidate.id === "help.filter"))
+  const candidates = [...registry].sort((left, right) =>
+    Number(right.contextLayer === "overlay") - Number(left.contextLayer === "overlay"));
+  const action = candidates.find((candidate) => candidate.applies(contextForAction(candidate, context))
     && candidate.bindings.some((binding) => binding.key === key));
-  return action ? resolveAction(action, effectiveContext) : null;
+  return action ? resolveAction(action, contextForAction(action, context)) : null;
 }
 
 function promptAction(
@@ -451,9 +439,10 @@ function routeAction(
   bindings: readonly ActionBinding[],
   operation: UiRouteOperation,
   applies: (context: ActionContext) => boolean,
+  contextLayer: ActionDefinition["contextLayer"] = "underlying",
 ): ActionDefinition {
   return {
-    id, name, aliases, bindings, applies, scope: "context",
+    id, name, aliases, bindings, applies, scope: "context", contextLayer,
     enabled: always,
     disabledReason: neverDisabled,
     createIntent: () => ({ type: "routeUi", operation }),
@@ -542,6 +531,10 @@ function underlyingDiscoveryContext(context: ActionContext): ActionContext {
   };
 }
 
+function contextForAction(action: ActionDefinition, context: ActionContext): ActionContext {
+  return action.contextLayer === "overlay" ? context : underlyingDiscoveryContext(context);
+}
+
 function isListContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
   return overlay?.focus === "results"
@@ -555,7 +548,9 @@ function isMusicResultsContext(context: ActionContext): boolean {
 
 function isNonTextOverlayContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
-  return Boolean(overlay && overlay.focus === "results");
+  return Boolean(overlay && (overlay.focus === "results"
+    || overlay.kind === "command-palette"
+    || overlay.kind === "youtube-url"));
 }
 
 function isHelpResultsContext(context: ActionContext): boolean {
