@@ -17,7 +17,7 @@ import {
   type UiStateAction,
 } from "./ui-state";
 import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
-import { globalSearchRows, globalSearchRowProviderId } from "./global-search";
+import { globalSearchRows, globalSearchRetryProviderId } from "./global-search";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -131,6 +131,9 @@ export class RootInputRouter {
     }
 
     if (overlay && (key === "\x1b" || key === "q")) {
+      if (overlay.kind === "music-picker" && this.appState().globalSearch.query) {
+        await this.dispatchApp({ type: "globalSearch", operation: "clear" });
+      }
       this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
       return true;
     }
@@ -331,7 +334,7 @@ export class RootInputRouter {
     }
     if (key === "r") {
       const row = rows[overlay.selectedResultIndex ?? 0];
-      const providerId = globalSearchRowProviderId(row);
+      const providerId = globalSearchRetryProviderId(row);
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
       return true;
     }

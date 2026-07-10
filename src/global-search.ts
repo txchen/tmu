@@ -58,9 +58,8 @@ export function globalSearchResultAt(state: GlobalSearchState, index: number): P
   return row?.kind === "result" ? row.result : undefined;
 }
 
-export function globalSearchRowProviderId(row: GlobalSearchRow | undefined): string | undefined {
-  if (row?.kind === "provider-heading" || row?.kind === "provider-status") return row.providerId;
-  return row?.kind === "result" ? row.result.providerId : undefined;
+export function globalSearchRetryProviderId(row: GlobalSearchRow | undefined): string | undefined {
+  return row?.kind === "provider-status" ? row.providerId : undefined;
 }
 
 export function searchKnownTracks(
