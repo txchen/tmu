@@ -24,7 +24,7 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
-import { isNavidromeProvider, type NavidromeLibraryBrowserEntry } from "./navidrome";
+import { isNavidromeProvider, navidromeLocationForEntry } from "./navidrome";
 import {
   OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
   isOfflineYouTubeCacheProvider,
@@ -123,6 +123,10 @@ export class AppCoordinator {
     const snapshot = this.uiStateStore.dispatch(action);
     this.notifyStateChanged();
     return snapshot;
+  }
+
+  queueTrackIdentities() {
+    return this.queueIdentities();
   }
 
   async start(cliArgs: readonly string[]): Promise<void> {
@@ -475,7 +479,7 @@ export class AppCoordinator {
     }
 
     const index = this.uiState.selectedContentIndexByTarget.navidrome ?? 0;
-    const entry = provider.getLibraryBrowserEntries()[index];
+    const entry = provider.getLibraryBrowserEntries(this.uiState.providerLocation)[index];
     if (!entry) {
       this.appState.lastEvent = "no Navidrome Library Browser row selected";
       return;
@@ -1195,7 +1199,7 @@ export class AppCoordinator {
 
     try {
       const results = await provider.searchTracks(query);
-      const entries = provider.getLibraryBrowserEntries();
+      const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
       const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
       this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
       this.updateUiState({
@@ -1298,7 +1302,7 @@ export class AppCoordinator {
     const provider = this.appState.providers.navidrome;
     if (!isNavidromeProvider(provider)) return undefined;
 
-    const entries = provider.getLibraryBrowserEntries();
+    const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
     const index = clampIndex(this.uiState.selectedContentIndexByTarget.navidrome ?? 0, entries.length);
     const entry = entries[index];
     return entry ? provider.trackForLibraryBrowserEntry(entry) : undefined;
@@ -1312,7 +1316,9 @@ export class AppCoordinator {
   private visibleContentLength(targetId: NavigationTargetId): number {
     if (targetId === "navidrome") {
       const provider = this.providerFor(targetId);
-      if (isNavidromeProvider(provider)) return provider.getLibraryBrowserEntries().length;
+      if (isNavidromeProvider(provider)) {
+        return provider.getLibraryBrowserEntries(this.uiState.providerLocation).length;
+      }
     }
     return this.visibleTracks(targetId).length;
   }
@@ -1364,24 +1370,4 @@ function completedPlayThresholdSeconds(durationSeconds: number | null | undefine
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(240, durationSeconds / 2)
     : 240;
-}
-
-function navidromeLocationForEntry(entry: NavidromeLibraryBrowserEntry) {
-  switch (entry.kind) {
-    case "artists-root":
-      return { providerId: "navidrome" as const, path: ["artists"] };
-    case "artist":
-      return { providerId: "navidrome" as const, path: ["artists", `artist:${entry.id}`] };
-    case "album":
-      return {
-        providerId: "navidrome" as const,
-        path: ["artists", `artist:${entry.artistId}`, `album:${entry.id}`],
-      };
-    case "playlists-root":
-      return { providerId: "navidrome" as const, path: ["playlists"] };
-    case "playlist":
-      return { providerId: "navidrome" as const, path: ["playlists", `playlist:${entry.id}`] };
-    default:
-      return null;
-  }
 }

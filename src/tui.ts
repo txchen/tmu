@@ -489,7 +489,7 @@ export class TerminalTui {
   }
 
   private queueIdentities() {
-    return this.app.coordinator.appState.queue.entries.map((entry) => entry.track.identity);
+    return this.app.coordinator.queueTrackIdentities();
   }
 
   private async handlePromptKey(key: string): Promise<boolean> {

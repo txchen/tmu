@@ -4,11 +4,26 @@ import {
   NavidromeApiError,
   createDefaultTmuConfig,
   createNavidromeProvider,
+  navidromeLocationForEntry,
   navidromeServerId,
   type NavidromeConfig,
   type NavidromeFetcher,
+  type NavidromeLibraryBrowserEntry,
+  type NavidromeProvider,
+  type ProviderLocation,
   type Track,
 } from "../src/index";
+
+const navidromeRoot: ProviderLocation = { providerId: "navidrome", path: [] };
+
+async function openNavidromeEntry(
+  provider: NavidromeProvider,
+  location: ProviderLocation,
+  entry: NavidromeLibraryBrowserEntry,
+): Promise<ProviderLocation> {
+  await provider.openLibraryBrowserEntry(entry);
+  return navidromeLocationForEntry(entry) ?? location;
+}
 
 function navidromeConfig(overrides: Partial<NavidromeConfig> = {}): NavidromeConfig {
   return createDefaultTmuConfig({
@@ -311,16 +326,17 @@ describe("Navidrome Provider", () => {
 
     await provider.validateConnection();
     await provider.listArtists();
+    let location = navidromeRoot;
 
-    expect(provider.getLibraryBrowserEntries()).toEqual([
+    expect(provider.getLibraryBrowserEntries(location)).toEqual([
       { kind: "artists-root", label: "Artists", depth: 0 },
       { kind: "artist", id: "42", label: "Alpha", albumCount: 2, coverArtId: "artist-cover", depth: 1 },
       { kind: "playlists-root", label: "Playlists", depth: 0 },
       { kind: "search-root", label: "Search", depth: 0 },
     ]);
 
-    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[1]!);
-    expect(provider.getLibraryBrowserEntries()).toEqual([
+    location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[1]!);
+    expect(provider.getLibraryBrowserEntries(location)).toEqual([
       { kind: "artists-root", label: "Artists", depth: 0 },
       { kind: "artist", id: "42", label: "Alpha", albumCount: 2, coverArtId: "artist-cover", depth: 1 },
       {
@@ -337,9 +353,10 @@ describe("Navidrome Provider", () => {
       { kind: "playlists-root", label: "Playlists", depth: 0 },
       { kind: "search-root", label: "Search", depth: 0 },
     ]);
+    expect(provider.getLibraryBrowserEntries(navidromeRoot).some((entry) => entry.kind === "album")).toBe(false);
 
-    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[3]!);
-    expect(provider.getLibraryBrowserEntries().map((entry) => entry.kind)).toEqual([
+    location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[3]!);
+    expect(provider.getLibraryBrowserEntries(location).map((entry) => entry.kind)).toEqual([
       "artists-root",
       "artist",
       "album",
@@ -348,8 +365,8 @@ describe("Navidrome Provider", () => {
       "search-root",
     ]);
 
-    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[2]!);
-    expect(provider.getLibraryBrowserEntries().map((entry) => entry.kind)).toEqual([
+    location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[2]!);
+    expect(provider.getLibraryBrowserEntries(location).map((entry) => entry.kind)).toEqual([
       "artists-root",
       "artist",
       "album",
@@ -360,8 +377,8 @@ describe("Navidrome Provider", () => {
       "search-root",
     ]);
 
-    await provider.openLibraryBrowserEntry(provider.getLibraryBrowserEntries()[4]!);
-    const entries = provider.getLibraryBrowserEntries();
+    location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[4]!);
+    const entries = provider.getLibraryBrowserEntries(location);
     const trackEntries = entries.filter((entry) => entry.kind === "track");
     expect(trackEntries).toHaveLength(2);
     expect(trackEntries[0]).toMatchObject({
@@ -443,11 +460,12 @@ describe("Navidrome Provider", () => {
     });
 
     await provider.validateConnection();
-    const playlistsRoot = provider.getLibraryBrowserEntries().find((entry) => entry.kind === "playlists-root");
+    let location = navidromeRoot;
+    const playlistsRoot = provider.getLibraryBrowserEntries(location).find((entry) => entry.kind === "playlists-root");
     expect(playlistsRoot).toEqual({ kind: "playlists-root", label: "Playlists", depth: 0 });
 
-    await provider.openLibraryBrowserEntry(playlistsRoot!);
-    const playlistEntry = provider.getLibraryBrowserEntries().find((entry) => entry.kind === "playlist");
+    location = await openNavidromeEntry(provider, location, playlistsRoot!);
+    const playlistEntry = provider.getLibraryBrowserEntries(location).find((entry) => entry.kind === "playlist");
     expect(playlistEntry).toEqual({
       kind: "playlist",
       id: "10",
@@ -459,8 +477,8 @@ describe("Navidrome Provider", () => {
     });
     expect(seenRequests.find((request) => request.endpoint === "getPlaylists")?.params).not.toHaveProperty("username");
 
-    await provider.openLibraryBrowserEntry(playlistEntry!);
-    const trackEntry = provider.getLibraryBrowserEntries().find((entry) => entry.kind === "playlist-track");
+    location = await openNavidromeEntry(provider, location, playlistEntry!);
+    const trackEntry = provider.getLibraryBrowserEntries(location).find((entry) => entry.kind === "playlist-track");
     const track = trackEntry ? provider.trackForLibraryBrowserEntry(trackEntry) : undefined;
 
     expect(trackEntry).toMatchObject({
@@ -521,12 +539,12 @@ describe("Navidrome Provider", () => {
 
     await provider.validateConnection();
     expect(await provider.searchTracks("moon")).toHaveLength(2);
-    let entries = provider.getLibraryBrowserEntries();
+    let entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: ["search", "moon"] });
     expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(2);
     expect(entries.at(-1)).toEqual({ kind: "load-more-search-results", label: "Load more search results", depth: 1 });
 
     await provider.openLibraryBrowserEntry(entries.at(-1)!);
-    entries = provider.getLibraryBrowserEntries();
+    entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: ["search", "moon"] });
 
     expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(3);
     expect(entries.some((entry) => entry.kind === "load-more-search-results")).toBe(false);
