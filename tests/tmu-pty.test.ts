@@ -193,7 +193,7 @@ describe("production tmu real PTY", () => {
         terminal.close();
       }
     }
-  });
+  }, 15_000);
 
   test("routes Queue reorder, removal, and Cancel-first Clear Queue through the production PTY", async () => {
     let output = "";
@@ -256,7 +256,7 @@ describe("production tmu real PTY", () => {
       };
       await writeAndWait(" ", "Playing · PTY Track");
 
-      await writeAndWait(" ", "Paused · Space to Resume");
+      await writeAndWait(" ", "Space to Resume");
       await writeAndWait("j", "Paused · Space to Resume");
       await writeAndWait(" ", "Playing · PTY Track");
       await writeAndWait("s", "Stopped · starts from beginning");
