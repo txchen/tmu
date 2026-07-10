@@ -394,9 +394,8 @@ function providerTargetAt(
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
   if ("listVisibleTracks" in provider) {
-    return provider.playableTargetAt?.(location, index)
-      ?? provider.listVisibleTracks()[index]
-      ?? null;
+    if (provider.playableTargetAt) return provider.playableTargetAt(location, index) ?? null;
+    return provider.listVisibleTracks()[index] ?? null;
   }
   return provider.visibleTracks[index] as Track | undefined ?? null;
 }
