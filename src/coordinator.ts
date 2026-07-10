@@ -58,7 +58,7 @@ export type DependencyHealthRefresh = (
 ) => Promise<DependencyHealthState>;
 export type AppStateChangeReason = "state" | "playback";
 
-export type LegacyTuiControllerOptions = {
+export type LegacyTuiAdapterOptions = {
   appState: AppState;
   uiState: UiState;
   queue: Queue;
@@ -70,7 +70,7 @@ export type LegacyTuiControllerOptions = {
   youtubeDownloader?: YouTubeDownloader;
 };
 
-export class LegacyTuiController {
+export class LegacyTuiAdapter {
   readonly appState: AppState;
   private readonly uiStateStore: UiStateStore;
   private readonly queue: Queue;
@@ -89,7 +89,7 @@ export class LegacyTuiController {
   private completedPlayReported = false;
   private tornDown = false;
 
-  constructor(options: LegacyTuiControllerOptions) {
+  constructor(options: LegacyTuiAdapterOptions) {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
     this.queue = options.queue;
@@ -176,7 +176,8 @@ export class LegacyTuiController {
         case "providerOperation":
           if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
           else if (intent.operation === "search") await this.searchProvider(intent.providerId, intent.query);
-          else await this.openProviderPath(intent.providerId, intent.path, intent.signal);
+          else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
+          else this.cancelLocalOpen();
           return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
@@ -1541,7 +1542,7 @@ export class LegacyTuiController {
 }
 
 export class AppCoordinator {
-  constructor(private readonly application: LegacyTuiController) {}
+  constructor(private readonly application: LegacyTuiAdapter) {}
 
   get appState(): AppState {
     return this.application.appState;

@@ -480,6 +480,7 @@ describe("Navidrome Provider", () => {
     location = await openNavidromeEntry(provider, location, playlistEntry!);
     const trackEntry = provider.getLibraryBrowserEntries(location).find((entry) => entry.kind === "playlist-track");
     const track = trackEntry ? provider.trackForLibraryBrowserEntry(trackEntry) : undefined;
+    const collection = provider.musicCollectionForLibraryBrowserEntry(playlistEntry!);
 
     expect(trackEntry).toMatchObject({
       kind: "playlist-track",
@@ -500,6 +501,12 @@ describe("Navidrome Provider", () => {
       durationSeconds: 180,
       coverArtId: "track-cover",
     } satisfies Track);
+    expect(collection).toEqual({
+      kind: "music-collection",
+      id: "navidrome:playlist:10",
+      label: "Favorites",
+      tracks: track ? [track] : [],
+    });
     expect(seenRequests.map((request) => request.endpoint)).toEqual([
       "ping",
       "getPlaylists",

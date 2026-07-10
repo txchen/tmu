@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AppCoordinator,
-  LegacyTuiController,
+  LegacyTuiAdapter,
   MemoryQueue,
   NoopPlayer,
   RootInputRouter,
@@ -84,7 +84,7 @@ describe("action registry contracts", () => {
     };
     const uiState = createInitialUiState();
     uiState.selectedQueueIdentity = cinder.identity;
-    const legacy = new LegacyTuiController({
+    const legacy = new LegacyTuiAdapter({
       appState: createInitialAppState({}),
       uiState,
       queue: new MemoryQueue(),
@@ -126,7 +126,7 @@ describe("action registry contracts", () => {
       title: "Drift Signal",
       providerLabel: "Local",
     };
-    const coordinator = new LegacyTuiController({
+    const coordinator = new LegacyTuiAdapter({
       appState: createInitialAppState({}),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -170,6 +170,52 @@ describe("action registry contracts", () => {
 });
 
 describe("root input router", () => {
+  test("routes legacy provider shortcut aliases through semantic registry intents", async () => {
+    const current = context();
+    current.uiState.activeTargetId = "local";
+    current.uiState.focusedPane = "content";
+    current.appState.providers.local = {
+      id: "local",
+      label: "Local",
+      hint: "files",
+      listVisibleTracks: () => [amber],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/music/amber.flac" }),
+    };
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: (intent) => { intents.push(intent); },
+    });
+
+    await router.route("a");
+
+    expect(intents).toEqual([{ type: "playNext", target: amber }]);
+  });
+
+  test("repairs Queue selection after semantic Queue mutations", async () => {
+    const cinder = {
+      identity: { providerId: "local", stableId: "/music/cinder.flac" },
+      title: "Cinder Room",
+      providerLabel: "Local",
+    };
+    const current = context();
+    current.appState.queue.entries.push({ track: cinder, availability: { status: "available" } });
+    const ui = new UiStateStore(current.uiState);
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: () => { current.appState.queue.entries.shift(); },
+    });
+
+    await router.route("x");
+
+    expect(ui.snapshot.selectedQueueIdentity).toEqual(cinder.identity);
+  });
+
   test("gives text entry precedence over global shortcuts", async () => {
     const current = context();
     current.uiState.overlays = [{

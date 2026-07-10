@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { TmuConfig } from "./config";
-import type { PlaybackLocator, Provider, ProviderLocation, Track, TrackIdentity } from "./domain";
+import type { MusicCollection, PlaybackLocator, Provider, ProviderLocation, Track, TrackIdentity } from "./domain";
 
 const NAVIDROME_PROVIDER_ID = "navidrome";
 const SUBSONIC_RESPONSE_KEY = "subsonic-response";
@@ -110,6 +110,7 @@ export type NavidromeProvider = Provider & {
   openLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Promise<void>;
   refreshLibraryBrowser(): Promise<void>;
   trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined;
+  musicCollectionForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): MusicCollection | undefined;
   reportNowPlaying(identity: TrackIdentity): Promise<void>;
   reportCompletedPlay(identity: TrackIdentity): Promise<void>;
 };
@@ -609,6 +610,20 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     return entry.kind === "track" || entry.kind === "playlist-track" || entry.kind === "search-result"
       ? entry.track
       : undefined;
+  }
+
+  musicCollectionForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): MusicCollection | undefined {
+    if (entry.kind !== "album" && entry.kind !== "playlist") return undefined;
+    const tracks = entry.kind === "album"
+      ? this.albumTracks.get(entry.id)
+      : this.playlistTracks.get(entry.id);
+    if (!tracks) return undefined;
+    return {
+      kind: "music-collection",
+      id: `navidrome:${entry.kind}:${entry.id}`,
+      label: entry.label,
+      tracks,
+    };
   }
 
   async reportNowPlaying(identity: TrackIdentity): Promise<void> {

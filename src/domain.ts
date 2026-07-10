@@ -235,6 +235,7 @@ export type AppIntent =
   | { type: "providerOperation"; providerId: string; operation: "refresh" }
   | { type: "providerOperation"; providerId: string; operation: "search"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
+  | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
   | { type: "persistenceOperation"; operation: "save" | "restore" }
