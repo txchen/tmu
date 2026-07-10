@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { describe, expect, test } from "vitest";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -95,7 +95,7 @@ describe("Last Queue Snapshot persistence", () => {
     try {
       expect(await persistence.load()).toBeNull();
       await mkdir(dir, { recursive: true });
-      await Bun.write(file, "{not-json");
+      await writeFile(file, "{not-json");
       expect(await persistence.load()).toBeNull();
       expect((await readdir(dir)).some((name) => /^last-queue\.json\.corrupt-\d{8}T\d{6}\d{3}Z-/.test(name))).toBe(true);
       expect(persistence.drainRecoveryMessages()).toHaveLength(1);
@@ -139,7 +139,7 @@ describe("Last Queue Snapshot persistence", () => {
       const persistence = new FileLastQueueSnapshotPersistence(file);
       expect(await persistence.load()).toBeNull();
       expect(persistence.wasLastLoadQuarantined()).toBe(true);
-      expect(await Bun.file(file).exists()).toBe(true);
+      await expect(access(file)).resolves.toBeUndefined();
     } finally {
       await chmod(dir, 0o755).catch(() => undefined);
       await rm(dir, { recursive: true, force: true });

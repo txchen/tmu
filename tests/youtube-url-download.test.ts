@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { describe, expect, test } from "vitest";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,7 +139,7 @@ describe("YouTube URL Download adapter", () => {
       started.push(id);
       concurrent += 1;
       maxConcurrent = Math.max(maxConcurrent, concurrent);
-      await Bun.sleep(1);
+      await sleep(1);
       if (id === "Broken00001") {
         concurrent -= 1;
         return { exitCode: 1, stdout: "", stderr: "ERROR: unavailable" };

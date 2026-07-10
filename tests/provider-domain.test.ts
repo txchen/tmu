@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { createTmuApp } from "../src/app";
 import { createLastQueueSnapshot } from "../src/snapshot";
 import type { Provider } from "../src/domain";
