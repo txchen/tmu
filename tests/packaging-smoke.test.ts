@@ -54,6 +54,15 @@ describe("Node npm package", () => {
     expect(packageFiles.some((file) => file.startsWith("package/tests/"))).toBe(false);
   });
 
+  test("contains no Bun runtime, tooling dependency, or artifact", async () => {
+    expect(packageFiles.some((file) => /(?:^|\/)bun(?:\.lock|fig|$)/i.test(file))).toBe(false);
+    const packedPackage = await exec("tar", ["-xOf", tarball, "package/package.json"]);
+    const manifest = JSON.parse(packedPackage.stdout) as Record<string, unknown>;
+    const dependencyNames = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+      .flatMap((section) => Object.keys((manifest[section] as Record<string, string> | undefined) ?? {}));
+    expect(dependencyNames.filter((name) => name.toLowerCase().includes("bun"))).toEqual([]);
+  });
+
   test("rejects unsupported Node before application initialization", async () => {
     const preload = join(process.cwd(), "tests/fixtures/unsupported-node.cjs");
     await expect(exec(process.execPath, ["--require", preload, "dist/cli.js"], {
