@@ -8,10 +8,10 @@ import {
 import { createActionRegistry } from "./action-registry";
 import { RootInputRouter } from "./input-router";
 import { renderPlaybackProgressLine, renderShellText } from "./renderer";
-import { AppCoordinator, type AppStateChangeReason, type LegacyTuiAdapter } from "./coordinator";
+import { AppCoordinator, type AppStateChangeReason } from "./coordinator";
 
 export type RuntimeApp = {
-  coordinator: LegacyTuiAdapter;
+  coordinator: AppCoordinator;
   appCoordinator?: AppCoordinator;
 };
 
@@ -402,7 +402,7 @@ export class TerminalTui {
     scheduler.start();
     scheduler.requestImmediateRedraw();
     const coordinator = this.app.coordinator;
-    const appCoordinator = this.app.appCoordinator ?? new AppCoordinator(coordinator);
+    const appCoordinator = this.app.appCoordinator ?? coordinator;
     const rootRouter = new RootInputRouter({
       registry: createActionRegistry(),
       appState: () => coordinator.appState,
@@ -457,18 +457,7 @@ export class TerminalTui {
           continue;
         }
 
-        const intent = intentFromKey(key);
-        if (!intent) continue;
-        await this.app.coordinator.dispatch(intent);
-        if (intent.type === "quit") {
-          unsubscribe();
-          scheduler.stop();
-          rootRouter.cancelPendingSequence();
-          resizeOutput.removeListener?.("resize", handleResize);
-          this.output.write("\x1b[?25h\x1b[2J\x1b[H");
-          this.input.setRawMode(false);
-          process.exit(0);
-        }
+        // Unsupported bindings are inert; RootInputRouter is the sole production input path.
       }
     });
   }

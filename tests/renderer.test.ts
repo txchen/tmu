@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  LegacyTuiAdapter,
+  AppCoordinator,
   MemoryQueue,
   NoopPlayer,
   createDefaultDependencyHealth,
@@ -44,7 +44,7 @@ function track(providerId: string, stableId: string, title: string): Track {
 
 describe("renderShell", () => {
   test("exposes navigation targets, Provider Browsing Surface, and persistent queue/player region", async () => {
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -76,7 +76,7 @@ describe("renderShell", () => {
 
     try {
       await writeFile(file, "not real audio");
-      const coordinator = new LegacyTuiAdapter({
+      const coordinator = new AppCoordinator({
         appState: createInitialAppState(createDefaultProviders()),
         uiState: createInitialUiState(),
         queue: new MemoryQueue(),
@@ -108,7 +108,7 @@ describe("renderShell", () => {
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
     const uiState = createInitialUiState();
     uiState.focusedPane = "queue";
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState,
       queue,
@@ -153,7 +153,7 @@ describe("renderShell", () => {
     uiState.activeTargetId = "queue";
     uiState.focusedPane = "queue";
     uiState.selectedQueueIndex = 1;
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState,
       queue,
@@ -183,7 +183,7 @@ describe("renderShell", () => {
   });
 
   test("surfaces dependency health without exposing config secrets", async () => {
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders(), {
         config: {
           providers: {
