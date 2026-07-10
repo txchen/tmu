@@ -32,6 +32,9 @@ export type UiStateAction =
   | { type: "setQuery"; query: string }
   | { type: "setFilter"; filterText: string }
   | { type: "setProviderLocation"; location: ProviderLocation }
+  | { type: "setOverlayFocus"; focus: PickerOverlay["focus"] }
+  | { type: "moveOverlaySelection"; delta: number; rowCount: number; visibleRows: number }
+  | { type: "selectOverlayBoundary"; boundary: "first" | "last"; rowCount: number; visibleRows: number }
   | { type: "setScroll"; pane: FocusedPane; offset: number }
   | { type: "requestConfirmation"; kind: ConfirmationKind }
   | { type: "chooseConfirmation"; choice: "cancel" | "confirm" }
@@ -98,6 +101,11 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     overlays: [],
     selectedQueueIdentity: null,
     providerLocation: { providerId: null, path: [] },
+    providerNavigationMemory: {
+      location: { providerId: null, path: [] },
+      selectedIndex: 0,
+      scroll: 0,
+    },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
     pendingVimChord: null,
@@ -178,8 +186,43 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
   }
 
   if (action.type === "setProviderLocation") {
-    return updateTopOverlay(state, (overlay) => ({ ...overlay, providerLocation: cloneProviderLocation(action.location) }))
+    const updated = updateTopOverlay(state, (overlay) => ({
+      ...overlay,
+      providerLocation: cloneProviderLocation(action.location),
+      selectedResultIndex: 0,
+      scroll: 0,
+    }));
+    if (updated) return {
+      ...updated,
+      providerNavigationMemory: {
+        location: cloneProviderLocation(action.location), selectedIndex: 0, scroll: 0,
+      },
+    };
+    return updated
       ?? { ...state, providerLocation: cloneProviderLocation(action.location) };
+  }
+
+  if (action.type === "setOverlayFocus") {
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, focus: action.focus })) ?? state;
+  }
+
+  if (action.type === "moveOverlaySelection" || action.type === "selectOverlayBoundary") {
+    const overlay = state.overlays.at(-1);
+    if (!overlay) return state;
+    const current = overlay.selectedResultIndex ?? 0;
+    const selectedResultIndex = action.type === "moveOverlaySelection"
+      ? clampIndex(current + action.delta, action.rowCount)
+      : action.boundary === "first" ? 0 : Math.max(0, action.rowCount - 1);
+    const scroll = keepIndexVisible(overlay.scroll, selectedResultIndex, action.visibleRows, action.rowCount);
+    const updated = updateTopOverlay(state, (value) => ({ ...value, selectedResultIndex, scroll })) ?? state;
+    return overlay.kind === "music-picker" ? {
+      ...updated,
+      providerNavigationMemory: {
+        location: cloneProviderLocation(overlay.providerLocation ?? { providerId: null, path: [] }),
+        selectedIndex: selectedResultIndex,
+        scroll,
+      },
+    } : updated;
   }
 
   if (action.type === "setScroll") {
@@ -287,6 +330,17 @@ function updateTopOverlay(
 
 function cloneProviderLocation(location: ProviderLocation): ProviderLocation {
   return { providerId: location.providerId, path: [...location.path] };
+}
+
+function keepIndexVisible(scroll: number, index: number, visibleRows: number, rowCount: number): number {
+  const pageSize = Math.max(1, Math.floor(visibleRows));
+  const maximumScroll = Math.max(0, rowCount - pageSize);
+  return Math.min(maximumScroll, Math.max(Math.min(scroll, index), index - pageSize + 1));
+}
+
+function clampIndex(value: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.max(0, Math.min(length - 1, value));
 }
 
 function repairQueueSelection(

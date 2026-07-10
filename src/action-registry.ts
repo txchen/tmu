@@ -133,12 +133,12 @@ export function createActionRegistry(): ActionRegistry {
       name: "Refresh Provider",
       aliases: ["reload provider"],
       bindings: [{ key: "f", label: "f" }],
-      applies: (context) => context.uiState.activeTargetId === "navidrome",
+      applies: (context) => providerSupports(context, "refresh"),
       enabled: always,
       disabledReason: neverDisabled,
       createIntent: (context) => ({
         type: "providerOperation",
-        providerId: context.uiState.activeTargetId,
+        providerId: selectedProviderId(context) ?? context.uiState.activeTargetId,
         operation: "refresh",
       }),
     },
@@ -219,6 +219,16 @@ export function createActionRegistry(): ActionRegistry {
       { key: "\u0003", label: "Ctrl-c" },
     ], { type: "playerOperation", operation: "quit" }),
   ];
+}
+
+function selectedProviderId(context: ActionContext): string | null {
+  return context.uiState.overlays.at(-1)?.providerLocation?.providerId
+    ?? (context.uiState.activeTargetId === "queue" ? null : context.uiState.activeTargetId);
+}
+
+function providerSupports(context: ActionContext, operation: "refresh" | "retry"): boolean {
+  const providerId = selectedProviderId(context);
+  return Boolean(providerId && context.appState.providers[providerId]?.capabilities.operations.includes(operation));
 }
 
 export function discoveryActions(registry: ActionRegistry, context: ActionContext): ResolvedAction[] {

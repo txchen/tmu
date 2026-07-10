@@ -135,6 +135,47 @@ function createWavSample(durationSeconds: number): Buffer {
 const realPlaybackTest = Bun.which("mpv") ? test : test.skip;
 
 describe("production tmu real PTY", () => {
+  test("keeps Provider navigation aliases, location memory, and short-list context across PTY resize", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess } = await spawnTmu((text) => { output += text; });
+
+    try {
+      await waitForOutput(read, "Queue · 0 Tracks");
+      terminal.write("o");
+      await waitForOutput(read, "Providers");
+      expect(output).toContain("Local · files and folders");
+      expect(output).toContain("Offline YouTube Cache · downloaded YouTube audio");
+      expect(output).not.toContain("Navidrome ·");
+
+      let nextFrame = output.length;
+      terminal.write("G");
+      await Bun.sleep(30);
+      terminal.write("\r");
+      await waitForNewOutput(read, nextFrame, "offline-youtube-cache");
+      nextFrame = output.length;
+      terminal.write("q");
+      await Bun.sleep(30);
+      terminal.write("o");
+      await waitForNewOutput(read, nextFrame, "offline-youtube-cache");
+
+      nextFrame = output.length;
+      terminal.resize(70, 24);
+      await Bun.sleep(20);
+      subprocess.kill("SIGWINCH");
+      await waitForNewOutput(read, nextFrame, "offline-youtube-cache");
+      expect(output.slice(nextFrame)).toContain("No Tracks or navigation entries");
+
+      nextFrame = output.length;
+      terminal.write("h");
+      await waitForNewOutput(read, nextFrame, "Providers");
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+    }
+  });
+
   test("publishes only semantic frames, handles resize and graceful Ctrl-C, and restores the terminal", async () => {
     let output = "";
     const read = () => output;

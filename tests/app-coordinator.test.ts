@@ -50,6 +50,7 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
     id,
     label: id,
     hint: "fake provider",
+    capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
     listVisibleTracks() {
       return tracks;
     },
@@ -69,6 +70,7 @@ function cancellableLocalProvider(): Provider & {
     id: "local",
     label: "Local",
     hint: "files and folders",
+    capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
     observedSignal: null,
     listVisibleTracks() {
       return [];
@@ -113,6 +115,7 @@ function restoringLocalProvider(
     id: "local",
     label: "Local",
     hint: "files and folders",
+    capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
     resolveCalls: [],
     pathCalls: [],
     openPathCalls: [],
@@ -822,6 +825,7 @@ describe("AppCoordinator", () => {
       id: "broken-provider",
       label: "Broken Provider",
       hint: "failure seam",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
       listVisibleTracks() {
         return [brokenTrack];
       },

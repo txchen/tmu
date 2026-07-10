@@ -5,6 +5,8 @@ import {
   identityKey,
   type PlaybackLocator,
   type Provider,
+  type ProviderBrowserEntry,
+  type ProviderCapabilities,
   type Track,
   type TrackAvailability,
   type TrackIdentity,
@@ -108,6 +110,11 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
   readonly id = OFFLINE_YOUTUBE_CACHE_PROVIDER_ID;
   readonly label = OFFLINE_YOUTUBE_CACHE_PROVIDER_LABEL;
   readonly hint = "downloaded YouTube audio";
+  readonly capabilities: ProviderCapabilities = {
+    searchableResultTypes: ["track"],
+    browsableHierarchy: ["track"],
+    operations: ["refresh"],
+  };
 
   private readonly entries = new Map<string, OfflineYouTubeCacheEntry>();
 
@@ -129,6 +136,19 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
 
   listVisibleTracks(): readonly Track[] {
     return this.listCacheEntries().map((entry) => entry.track);
+  }
+
+  listBrowserEntries(): readonly ProviderBrowserEntry[] {
+    return this.listCacheEntries().map(({ track }) => ({
+      id: track.identity.stableId,
+      kind: "track",
+      label: track.title,
+      detail: track.artist,
+    }));
+  }
+
+  playableTargetAt(_location: import("./domain").ProviderLocation, index: number): Track | undefined {
+    return this.listVisibleTracks()[index];
   }
 
   listCacheEntries(): readonly OfflineYouTubeCacheEntry[] {

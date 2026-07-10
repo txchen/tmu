@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { TmuConfig } from "./config";
-import type { MusicCollection, PlaybackLocator, Provider, ProviderLocation, Track, TrackIdentity } from "./domain";
+import type { MusicCollection, PlaybackLocator, Provider, ProviderBrowserEntry, ProviderCapabilities, ProviderLocation, Track, TrackIdentity } from "./domain";
 
 const NAVIDROME_PROVIDER_ID = "navidrome";
 const SUBSONIC_RESPONSE_KEY = "subsonic-response";
@@ -221,6 +221,11 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   readonly id = NAVIDROME_PROVIDER_ID;
   readonly label = "Navidrome";
   readonly hint = "artists, albums, playlists";
+  readonly capabilities: ProviderCapabilities = {
+    searchableResultTypes: ["track", "artist", "album", "playlist"],
+    browsableHierarchy: ["artist", "album", "playlist", "track"],
+    operations: ["refresh", "retry"],
+  };
 
   private readonly config: NavidromeConfig;
   private readonly fetcher: NavidromeFetcher;
@@ -252,6 +257,31 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
 
   listVisibleTracks(): readonly Track[] {
     return [];
+  }
+
+  listBrowserEntries(location: ProviderLocation): readonly ProviderBrowserEntry[] {
+    const rows: ProviderBrowserEntry[] = [];
+    for (const entry of this.getLibraryBrowserEntries(location)) {
+      switch (entry.kind) {
+        case "artist":
+          rows.push({ id: entry.id, kind: "artist", label: entry.label });
+          break;
+        case "album":
+          rows.push({ id: entry.id, kind: "album", label: entry.label, detail: entry.artist });
+          break;
+        case "playlist":
+          rows.push({ id: entry.id, kind: "playlist", label: entry.label });
+          break;
+        case "track":
+        case "playlist-track":
+        case "search-result":
+          rows.push({ id: entry.track.identity.stableId, kind: "track", label: entry.label });
+          break;
+        default:
+          break;
+      }
+    }
+    return rows;
   }
 
   async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {

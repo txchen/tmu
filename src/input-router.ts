@@ -16,6 +16,7 @@ import {
   selectedUnavailableQueueEntry,
   type UiStateAction,
 } from "./ui-state";
+import { providerNavigationRows } from "./provider-navigation";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -72,13 +73,27 @@ export class RootInputRouter {
     const overlay = this.uiState.snapshot.overlays.at(-1);
     if (overlay && isTextEntryFocus(overlay.focus)) {
       if (key === "\x1b") {
-        this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
+        if (overlay.kind === "music-picker" && overlay.focus === "search") {
+          this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
+        } else {
+          this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
+        }
+      } else if (key === "\r" && overlay.kind === "music-picker") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
       } else if (key === "\x7f" || key === "\b") {
         this.uiState.dispatch({ type: "setQuery", query: overlay.query.slice(0, -1) });
+      } else if (key === "\x17") {
+        this.uiState.dispatch({ type: "setQuery", query: deletePreviousWord(overlay.query) });
+      } else if (key === "\x15") {
+        this.uiState.dispatch({ type: "setQuery", query: "" });
       } else if (isPrintableKey(key)) {
         this.uiState.dispatch({ type: "setQuery", query: `${overlay.query}${key}` });
       }
       return true;
+    }
+
+    if (overlay?.kind === "music-picker" && overlay.focus === "results") {
+      if (await this.routeProviderNavigation(key, overlay)) return true;
     }
 
     if (overlay && (key === "\x1b" || key === "q")) {
@@ -179,9 +194,86 @@ export class RootInputRouter {
     }
   }
 
+  private async routeProviderNavigation(
+    key: string,
+    overlay: UiState["overlays"][number],
+  ): Promise<boolean> {
+    if (key === "/") {
+      this.cancelOverlayChord();
+      this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
+      return true;
+    }
+    const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
+    const visibleRows = providerOverlayVisibleRows(this.uiState.snapshot.terminal.rows);
+    const movement = overlayMovementForKey(key, visibleRows);
+    if (movement) {
+      this.cancelOverlayChord();
+      if (movement.kind === "boundary") {
+        this.uiState.dispatch({
+          type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: rows.length, visibleRows,
+        });
+      } else {
+        this.uiState.dispatch({
+          type: "moveOverlaySelection", delta: movement.delta, rowCount: rows.length, visibleRows,
+        });
+      }
+      return true;
+    }
+    if (key === "g") {
+      const completing = Boolean(this.uiState.snapshot.pendingVimChord
+        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
+      if (completing) {
+        this.clearPendingChordTimer();
+        this.uiState.dispatch({ type: "selectOverlayBoundary", boundary: "first", rowCount: rows.length, visibleRows });
+        this.uiState.dispatch({ type: "cancelVimChord" });
+      } else {
+        this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
+        this.clearPendingChordTimer();
+        this.pendingChordTimer = this.timers.setTimeout(() => {
+          this.pendingChordTimer = null;
+          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
+        }, 751);
+      }
+      return true;
+    }
+    this.cancelOverlayChord();
+    if (key === "h" || key === "\x1b[D" || key === "\x7f" || key === "\b") {
+      const location = overlay.providerLocation ?? { providerId: null, path: [] };
+      this.uiState.dispatch({
+        type: "setProviderLocation",
+        location: location.path.length > 0
+          ? { providerId: location.providerId, path: location.path.slice(0, -1) }
+          : { providerId: null, path: [] },
+      });
+      return true;
+    }
+    if (key === "l" || key === "\x1b[C" || key === "\r") {
+      const selected = rows[overlay.selectedResultIndex ?? 0];
+      if (!selected) {
+        if (key === "\r") await this.dispatchBinding(key);
+        return true;
+      }
+      const location = overlay.providerLocation ?? { providerId: null, path: [] };
+      if (location.providerId === null) {
+        this.uiState.dispatch({ type: "setProviderLocation", location: { providerId: selected.providerId as UiState["providerLocation"]["providerId"], path: [] } });
+        return true;
+      }
+      if (selected.kind === "local-directory") {
+        this.uiState.dispatch({
+          type: "setProviderLocation",
+          location: { providerId: location.providerId, path: [...location.path, selected.id] },
+        });
+        return true;
+      }
+      if (key === "\r") await this.dispatchBinding(key);
+      return true;
+    }
+    return false;
+  }
+
   private async dispatchIntent(intent: ActionIntent): Promise<void> {
     if (intent.type === "openOverlay") {
-      this.uiState.dispatch({ type: "openOverlay", overlay: overlayForIntent(intent) });
+      this.uiState.dispatch({ type: "openOverlay", overlay: overlayForIntent(intent, this.uiState.snapshot) });
       return;
     }
     if (intent.type === "requestConfirmation") {
@@ -189,6 +281,12 @@ export class RootInputRouter {
       return;
     }
     await this.dispatchApp(intent);
+  }
+
+  private cancelOverlayChord(): void {
+    if (!this.uiState.snapshot.pendingVimChord) return;
+    this.clearPendingChordTimer();
+    this.uiState.dispatch({ type: "cancelVimChord" });
   }
 
   private async routeConfirmation(key: string): Promise<void> {
@@ -260,14 +358,42 @@ function isPrintableKey(key: string): boolean {
   return key.length === 1 && key >= " " && key !== "\x7f";
 }
 
-function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" }>) {
+function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" }>, uiState: Readonly<UiState>) {
+  const memory = uiState.providerNavigationMemory;
   return {
     kind: intent.kind,
     focus: intent.focus,
     query: "",
     selectedIdentity: null,
-    scroll: 0,
+    scroll: intent.kind === "music-picker" ? memory.scroll : 0,
+    ...(intent.kind === "music-picker" ? {
+      providerLocation: memory.location,
+      selectedResultIndex: memory.selectedIndex,
+    } : {}),
   } as const;
+}
+
+function deletePreviousWord(value: string): string {
+  return value.replace(/\s*\S+\s*$/, "");
+}
+
+function providerOverlayVisibleRows(rows: number): number {
+  return Math.max(1, Math.min(28, rows - 6));
+}
+
+function overlayMovementForKey(key: string, visibleRows: number):
+  | { kind: "relative"; delta: number }
+  | { kind: "boundary"; boundary: "first" | "last" }
+  | null {
+  if (key === "j" || key === "\x1b[B") return { kind: "relative", delta: 1 };
+  if (key === "k" || key === "\x1b[A") return { kind: "relative", delta: -1 };
+  if (key === "G" || key === "\x1b[F") return { kind: "boundary", boundary: "last" };
+  if (key === "\x1b[H") return { kind: "boundary", boundary: "first" };
+  if (key === "\x04") return { kind: "relative", delta: Math.max(1, Math.floor(visibleRows / 2)) };
+  if (key === "\x15") return { kind: "relative", delta: -Math.max(1, Math.floor(visibleRows / 2)) };
+  if (key === "\x1b[6~") return { kind: "relative", delta: visibleRows };
+  if (key === "\x1b[5~") return { kind: "relative", delta: -visibleRows };
+  return null;
 }
 
 function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppState>): number {

@@ -135,6 +135,7 @@ describe("action registry contracts", () => {
       id: "local",
       label: "Local",
       hint: "directories and Tracks",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
       listVisibleTracks: () => [amber],
       playableTargetAt: () => undefined,
       resolvePlaybackLocator: async () => ({ kind: "file", path: amber.identity.stableId }),
@@ -257,6 +258,7 @@ describe("root input router", () => {
         id: "navidrome",
         label: "Remote",
         hint: "collections",
+        capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["album", "track"], operations: [] },
         listVisibleTracks: () => [],
         playableTargetAt: () => collection,
         resolveMusicCollection: async () => {
@@ -329,6 +331,7 @@ describe("root input router", () => {
       id: "local",
       label: "Local",
       hint: "files",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
       listVisibleTracks: () => [amber],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/music/amber.flac" }),
     };
@@ -521,6 +524,74 @@ describe("root input router", () => {
 
     expect(ui.snapshot.overlays).toHaveLength(1);
     expect(ui.snapshot.overlays[0]?.kind).toBe("music-picker");
+  });
+
+  test("navigates the source-neutral Provider root with aliases and remembers process-local location", async () => {
+    const current = context();
+    current.appState.providers.local = {
+      id: "local",
+      label: "Local",
+      hint: "files and folders",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
+      listVisibleTracks: () => [amber],
+      listBrowserEntries: (location) => location.path.length === 0
+        ? [{ id: "/music/Album", kind: "local-directory", label: "Album" }]
+        : [{ id: amber.identity.stableId, kind: "track", label: amber.title }],
+      playableTargetAt: (location, index) => location.path.length > 0 && index === 0 ? amber : undefined,
+      resolvePlaybackLocator: async () => ({ kind: "file", path: amber.identity.stableId }),
+    };
+    current.appState.providers["offline-youtube-cache"] = {
+      id: "offline-youtube-cache",
+      label: "Offline YouTube Cache",
+      hint: "cached Tracks",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: ["refresh"] },
+      listVisibleTracks: () => [],
+      listBrowserEntries: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache" }),
+    };
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+      now: () => 1_000,
+    });
+
+    await router.route("o");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({
+      focus: "results", providerLocation: { providerId: null, path: [] }, selectedResultIndex: 0,
+    });
+    await router.route("\x1b[F");
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(1);
+    await router.route("\x1b[H");
+    await router.route("\r");
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: [] });
+    await router.route("l");
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: ["/music/Album"] });
+    await router.route("\r");
+    expect(intents).toEqual([{ type: "playNext", target: amber }]);
+    await router.route("q");
+    await router.route("o");
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: "local", path: ["/music/Album"] });
+    await router.route("h");
+    await router.route("\x7f");
+    expect(ui.snapshot.overlays.at(-1)?.providerLocation).toEqual({ providerId: null, path: [] });
+  });
+
+  test("opens one music picker with search focused and returns Esc to results", async () => {
+    const current = context();
+    const ui = new UiStateStore(current.uiState);
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui, dispatchApp: async () => undefined,
+    });
+
+    await router.route("/");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "music-picker", focus: "search" });
+    await router.route("ambient mix");
+    await router.route("\x1b");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "music-picker", focus: "results" });
   });
 
   test("advances and cancels the visible gg key sequence", async () => {
