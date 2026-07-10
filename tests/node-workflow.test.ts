@@ -85,7 +85,14 @@ describe("supported Node and npm workflow", () => {
 });
 
 async function filesUnder(directory: string): Promise<string[]> {
-  const nested = await Promise.all((await readdir(directory, { withFileTypes: true })).map(async (entry) => {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const nested = await Promise.all(entries.map(async (entry) => {
     const path = join(directory, entry.name);
     return entry.isDirectory() ? await filesUnder(path) : [path];
   }));
