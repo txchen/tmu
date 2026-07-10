@@ -10,6 +10,7 @@ export * from "./navidrome";
 export * from "./offline-youtube-cache";
 export * from "./player";
 export * from "./preferences";
+export * from "./provider-navigation";
 export * from "./providers";
 export * from "./queue";
 export * from "./snapshot";

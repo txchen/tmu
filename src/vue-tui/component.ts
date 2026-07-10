@@ -11,6 +11,7 @@ import { isRestoredPlayback, sameIdentity, type PickerOverlay, type QueueEntry, 
 import { RootInputRouter } from "../input-router";
 import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
+import { overlayGeometry } from "../provider-navigation";
 import {
   StatePublicationGate,
   type PublicationCause,
@@ -160,7 +161,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
       ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, settings, start, exceptionalGuidance)
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
-    overlay ? overlayView(overlay) : null,
+    overlay ? overlayView(overlay, snapshot.providerNavigationRows, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
     uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
   ]);
 }
@@ -353,11 +354,39 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
 }
 
-function overlayView(overlay: PickerOverlay) {
-  return h(Box, { flexDirection: "column", borderStyle: "single", paddingX: 1 }, () => [
+function overlayView(
+  overlay: PickerOverlay,
+  rows: PublicationSnapshot["providerNavigationRows"],
+  tier: ResponsiveTier,
+  columns: number,
+  terminalRows: number,
+) {
+  const geometry = overlayGeometry(overlay.kind, tier, columns, terminalRows);
+  const contentRows = Math.max(1, geometry.height - 5);
+  const visibleRows = overlay.kind === "music-picker"
+    ? rows.slice(overlay.scroll, overlay.scroll + contentRows)
+    : [];
+  const location = overlay.providerLocation?.providerId
+    ? `${overlay.providerLocation.providerId}${overlay.providerLocation.path.length ? ` · ${overlay.providerLocation.path.at(-1)}` : ""}`
+    : "Providers";
+  return h(Box, {
+    flexDirection: "column", borderStyle: "single", paddingX: 1, width: geometry.width, height: geometry.height,
+  }, () => [
     h(Text, { bold: true }, () => `Picker Overlay · ${overlay.kind}`),
-    h(Text, () => `Focus: ${overlay.focus}`),
-    h(Text, () => "Exclusive input · q/Esc dismisses"),
+    overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
+    overlay.kind === "music-picker" ? h(Text, { dimColor: true }, () => location) : null,
+    ...visibleRows.map((row, visibleIndex) => {
+      const index = overlay.scroll + visibleIndex;
+      const selected = index === (overlay.selectedResultIndex ?? 0);
+      const suffix = row.detail ? ` · ${row.detail}` : "";
+      return h(Text, { inverse: selected, wrap: "truncate-end" }, () => `${selected ? "›" : " "} ${row.label}${suffix}`);
+    }),
+    overlay.kind === "music-picker" && rows.length === 0
+      ? h(Text, { dimColor: true }, () => "No Tracks or navigation entries")
+      : null,
+    h(Text, { dimColor: true }, () => overlay.focus === "results"
+      ? "j/k move · l/→ open · h/← back · / search · Esc dismiss"
+      : "Enter/Esc results · Ctrl-w word · Ctrl-u clear"),
   ]);
 }
 

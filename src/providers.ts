@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { readdirSync, realpathSync, statSync } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import {
@@ -12,6 +12,8 @@ import {
   identityKey,
   type PlaybackLocator,
   type Provider,
+  type ProviderBrowserEntry,
+  type ProviderCapabilities,
   type Track,
   type TrackIdentity,
 } from "./domain";
@@ -23,6 +25,11 @@ import {
 } from "./offline-youtube-cache";
 
 const LOCAL_PROVIDER_ID = "local";
+const LOCAL_CAPABILITIES: ProviderCapabilities = {
+  searchableResultTypes: ["track"],
+  browsableHierarchy: ["local-directory", "track"],
+  operations: [],
+};
 export const DEFAULT_LOCAL_DIRECTORY_SOFT_CAP = 10_000;
 
 const COMMON_AUDIO_EXTENSIONS = new Set([
@@ -85,6 +92,9 @@ export type LocalProvider = Provider & {
 };
 
 class SkeletonProvider implements Provider {
+  readonly capabilities: ProviderCapabilities = {
+    searchableResultTypes: [], browsableHierarchy: [], operations: [],
+  };
   constructor(
     readonly id: string,
     readonly label: string,
@@ -105,6 +115,7 @@ class FileSystemLocalProvider implements LocalProvider {
   readonly id = LOCAL_PROVIDER_ID;
   readonly label = "Local";
   readonly hint = "files and folders";
+  readonly capabilities = LOCAL_CAPABILITIES;
 
   private readonly dependencyHealth: DependencyHealthState;
   private readonly ffprobeCommand: string;
@@ -130,6 +141,50 @@ class FileSystemLocalProvider implements LocalProvider {
 
   listVisibleTracks(): readonly Track[] {
     return [...this.tracks.values()];
+  }
+
+  listBrowserEntries(location: import("./domain").ProviderLocation): readonly ProviderBrowserEntry[] {
+    return this.localBrowserRows(location).map(({ entry }) => entry);
+  }
+
+  playableTargetAt(location: import("./domain").ProviderLocation, index: number): Track | undefined {
+    return this.localBrowserRows(location)[index]?.track;
+  }
+
+  private localBrowserRows(location: import("./domain").ProviderLocation): Array<{
+    entry: ProviderBrowserEntry;
+    track?: Track;
+  }> {
+    if (location.providerId !== LOCAL_PROVIDER_ID) return [];
+    const directory = location.path.at(-1) || process.cwd();
+    let names: string[];
+    try {
+      names = readdirSync(directory).sort(comparePathNames);
+    } catch {
+      return [];
+    }
+
+    const rows: Array<{ entry: ProviderBrowserEntry; track?: Track }> = [];
+    for (const name of names) {
+      if (isHiddenPathSegment(name)) continue;
+      const path = join(directory, name);
+      let pathStat;
+      try {
+        pathStat = statSync(path);
+      } catch {
+        continue;
+      }
+      if (pathStat.isDirectory()) {
+        rows.push({ entry: { id: path, kind: "local-directory", label: name, detail: path } });
+        continue;
+      }
+      if (!pathStat.isFile() || !isCommonAudioExtension(path)) continue;
+      const canonical = canonicalLocalFileFromPath(path);
+      if (!canonical) continue;
+      const track = this.acceptFile(canonical);
+      rows.push({ entry: { id: track.identity.stableId, kind: "track", label: track.title }, track });
+    }
+    return rows;
   }
 
   async createTrackFromPath(path: string): Promise<Track | undefined> {

@@ -76,6 +76,23 @@ export type MusicCollection = {
 
 export type PlayableTarget = Track | MusicCollection;
 
+export type ProviderSearchResultType = "track" | "artist" | "album" | "playlist";
+export type ProviderBrowseKind = "local-directory" | "artist" | "album" | "playlist" | "track";
+export type ProviderOperation = "refresh" | "retry";
+
+export type ProviderCapabilities = {
+  readonly searchableResultTypes: readonly ProviderSearchResultType[];
+  readonly browsableHierarchy: readonly ProviderBrowseKind[];
+  readonly operations: readonly ProviderOperation[];
+};
+
+export type ProviderBrowserEntry = {
+  readonly id: string;
+  readonly kind: ProviderBrowseKind;
+  readonly label: string;
+  readonly detail?: string;
+};
+
 export type MusicCollectionResolution =
   | { status: "resolved"; tracks: readonly Track[] }
   | { status: "cancelled" };
@@ -147,7 +164,9 @@ export type Provider = {
   id: string;
   label: string;
   hint: string;
+  capabilities: ProviderCapabilities;
   listVisibleTracks(): readonly Track[];
+  listBrowserEntries?(location: ProviderLocation): readonly ProviderBrowserEntry[];
   playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
   resolveMusicCollection?(
     collection: MusicCollection,
@@ -225,6 +244,11 @@ export type UiState = {
   overlays: readonly PickerOverlay[];
   selectedQueueIdentity: TrackIdentity | null;
   providerLocation: ProviderLocation;
+  providerNavigationMemory: {
+    location: ProviderLocation;
+    selectedIndex: number;
+    scroll: number;
+  };
   terminal: {
     columns: number;
     rows: number;
