@@ -203,20 +203,10 @@ export class RootInputRouter {
     if (overlay) return true;
 
     const identities = queueIdentities(this.appState());
-    if (uiOperation === "first" && key === "g") {
-      const completing = Boolean(this.uiState.snapshot.pendingVimChord
-        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
-      this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities });
-      this.clearPendingChordTimer();
-      if (!completing) {
-        this.pendingChordTimer = this.timers.setTimeout(() => {
-          this.pendingChordTimer = null;
-          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
-        }, 751);
-      }
-      return true;
-    }
     const visibleRows = visibleQueueRows(this.uiState.snapshot, this.appState());
+    if (this.routeVimFirstChord(uiOperation, key, () => {
+      this.uiState.dispatch({ type: "selectQueueBoundary", boundary: "first", identities, visibleRows });
+    })) return true;
     const queueFocused = this.uiState.snapshot.focusedPane === "queue"
       && this.uiState.snapshot.activeTargetId === "queue";
     const movement = queueFocused ? movementForUiOperation(uiOperation, visibleRows) : null;
@@ -376,25 +366,37 @@ export class RootInputRouter {
     visibleRows: number,
     key?: string,
   ): boolean {
-    if (uiOperation === "first" && key === "g") {
-      const completing = Boolean(this.uiState.snapshot.pendingVimChord
-        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
-      if (!completing) {
-        this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
-        this.clearPendingChordTimer();
-        this.pendingChordTimer = this.timers.setTimeout(() => {
-          this.pendingChordTimer = null;
-          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
-        }, 751);
-        return true;
-      }
-    }
+    if (this.routeVimFirstChord(uiOperation, key, () => {
+      this.uiState.dispatch({ type: "selectOverlayBoundary", boundary: "first", rowCount, visibleRows });
+    })) return true;
     const movement = movementForUiOperation(uiOperation, visibleRows);
     if (!movement) return false;
     this.cancelOverlayChord();
     this.uiState.dispatch(movement.kind === "boundary"
       ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount, visibleRows }
       : { type: "moveOverlaySelection", delta: movement.delta, rowCount, visibleRows });
+    return true;
+  }
+
+  private routeVimFirstChord(
+    uiOperation: UiRouteOperation | null,
+    key: string | undefined,
+    complete: () => void,
+  ): boolean {
+    if (uiOperation !== "first" || key !== "g") return false;
+    const completing = Boolean(this.uiState.snapshot.pendingVimChord
+      && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
+    if (completing) {
+      this.cancelOverlayChord();
+      complete();
+      return true;
+    }
+    this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
+    this.clearPendingChordTimer();
+    this.pendingChordTimer = this.timers.setTimeout(() => {
+      this.pendingChordTimer = null;
+      this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
+    }, 751);
     return true;
   }
 

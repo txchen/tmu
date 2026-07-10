@@ -224,9 +224,6 @@ export function createActionRegistry(): ActionRegistry {
         operation: "retry",
       }),
     },
-    boundAction("provider.cancel-open", "Cancel Local Open", ["cancel open"], [
-      { key: "\x1b", label: "Esc" },
-    ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
     {
       id: "player.toggle-play-pause",
       scope: "global",
@@ -586,9 +583,7 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
   const overlay = context.uiState.overlays.at(-1);
   if (overlay?.focus === "results") return selectedOverlayTarget(context);
-  const providerId = context.uiState.activeTargetId;
-  const index = context.uiState.selectedContentIndexByTarget[providerId] ?? 0;
-  return providerTargetAt(context, providerId, context.uiState.providerLocation, index);
+  return null;
 }
 
 function selectedOverlayTarget(context: ActionContext): PlayableTarget | null {

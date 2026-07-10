@@ -1,7 +1,6 @@
 import {
   clampIndex,
   identityKey,
-  navigationTargetIndex,
   sameIdentity,
   uniqueTracksByIdentity,
   type AppIntent,
@@ -12,7 +11,6 @@ import {
   type Provider,
   type Queue,
   type QueueEntry,
-  type NavigationTargetId,
   type Track,
   type PlayableTarget,
   type GlobalSearchFilter,
@@ -88,7 +86,6 @@ export class AppCoordinator {
   private readonly unsubscribeFromPlayer: () => void;
   private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
-  private activeLocalOpen: AbortController | null = null;
   private activeYouTubeDownload: AbortController | null = null;
   private activeYouTubeDownloadTask: Promise<void> | null = null;
   private activeGlobalSearch: AbortController | null = null;
@@ -175,9 +172,9 @@ export class AppCoordinator {
         case "providerOperation":
           if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
           else if (intent.operation === "retry") await this.retryProvider(intent.providerId);
-          else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
-          else if (intent.operation === "open-entry") await this.openProviderBrowserEntry(intent.providerId, intent.location, intent.index);
-          else this.cancelLocalOpen();
+          else if (intent.operation === "open-entry") {
+            await this.openProviderBrowserEntry(intent.providerId, intent.location, intent.index);
+          }
           return;
         case "globalSearch":
           if (intent.operation === "submit") {
@@ -217,8 +214,6 @@ export class AppCoordinator {
     if (this.tornDown) return;
     this.tornDown = true;
     await this.saveLastQueueSnapshot({ meaningful: false });
-    this.activeLocalOpen?.abort();
-    this.activeLocalOpen = null;
     this.activeYouTubeDownload?.abort();
     this.activeYouTubeDownload = null;
     this.unsubscribeFromPlayer();
@@ -436,14 +431,6 @@ export class AppCoordinator {
       : `Navidrome retry failed: ${state.message}`;
   }
 
-  private async openProviderPath(providerId: string, path: string, signal?: AbortSignal): Promise<void> {
-    if (providerId !== "local") {
-      this.appState.lastEvent = `${providerId} Provider cannot open paths`;
-      return;
-    }
-    await this.openLocalPathTracks(path, signal);
-  }
-
   private async openProviderBrowserEntry(
     providerId: string,
     location: import("./domain").ProviderLocation,
@@ -609,33 +596,6 @@ export class AppCoordinator {
     }
   }
 
-  private startLocalOpen(path: string): void {
-    this.activeLocalOpen?.abort();
-    const controller = new AbortController();
-    this.activeLocalOpen = controller;
-    this.appState.lastEvent = `opening Local path ${path}`;
-
-    void this.openLocalPath(path, controller.signal)
-      .catch((error) => {
-        if (this.tornDown) return;
-        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      })
-      .finally(() => {
-        if (this.activeLocalOpen === controller) this.activeLocalOpen = null;
-        this.notifyStateChanged();
-      });
-  }
-
-  private cancelLocalOpen(): void {
-    if (!this.activeLocalOpen) {
-      this.appState.lastEvent = "no active Local open";
-      return;
-    }
-
-    this.activeLocalOpen.abort();
-    this.appState.lastEvent = "cancelling Local open";
-  }
-
   private startYouTubeUrlDownload(url: string): void {
     if (this.activeYouTubeDownload) {
       this.appState.lastEvent = "YouTube download already in progress";
@@ -670,59 +630,6 @@ export class AppCoordinator {
 
     this.activeYouTubeDownload.abort();
     this.appState.lastEvent = "cancelling YouTube download and cleaning up partial files";
-  }
-
-  private async openLocalPath(path: string, signal?: AbortSignal): Promise<void> {
-    const localProvider = this.appState.providers.local;
-    if (!isLocalProvider(localProvider)) {
-      this.appState.lastEvent = "Local Provider cannot open paths";
-      return;
-    }
-
-    this.updateUiState({
-      activeTargetId: "local",
-      selectedTargetIndex: navigationTargetIndex("local"),
-      focusedPane: "content",
-      providerLocation: { providerId: "local", path: [{ kind: "local-directory", path }] },
-    });
-    const selectedEntry = await this.openLocalPathTracks(path, signal);
-    if (selectedEntry) this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(selectedEntry)));
-  }
-
-  private async openLocalPathTracks(path: string, signal?: AbortSignal): Promise<QueueEntry | undefined> {
-    const localProvider = this.appState.providers.local;
-    if (!isLocalProvider(localProvider)) {
-      this.appState.lastEvent = "Local Provider cannot open paths";
-      return undefined;
-    }
-
-    const result = await localProvider.createTracksFromOpenPath(path, {
-      signal,
-      softCap: this.appState.config.providers.local.directorySoftCap,
-    });
-    let selectedEntry: QueueEntry | undefined;
-    for (const track of result.tracks) {
-      selectedEntry = this.queue.enqueue(track);
-    }
-
-    this.syncQueueState();
-    if (result.cancelled) {
-      this.appState.lastEvent = `cancelled Local open after ${result.tracks.length} Tracks`;
-      return selectedEntry;
-    }
-
-    if (result.capped) {
-      this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue; soft cap reached`;
-      return selectedEntry;
-    }
-
-    if (result.tracks.length === 0) {
-      this.appState.lastEvent = "no Local audio files found";
-      return selectedEntry;
-    }
-
-    this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue`;
-    return selectedEntry;
   }
 
   private async startSelectedQueueEntry(): Promise<void> {
@@ -1261,10 +1168,6 @@ export class AppCoordinator {
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
-  private async refreshNavidromeLibrary(): Promise<void> {
-    if (await this.refreshNavidromeLibraryData()) this.selectContentIndex("navidrome", 0);
-  }
-
   private async refreshNavidromeLibraryData(): Promise<boolean> {
     const provider = this.appState.providers.navidrome;
     if (!isNavidromeProvider(provider)) {
@@ -1373,15 +1276,6 @@ export class AppCoordinator {
 
   private updateUiState(patch: Partial<UiState>): void {
     this.uiStateStore.dispatch({ type: "updateView", patch });
-  }
-
-  private selectContentIndex(targetId: NavigationTargetId, index: number): void {
-    this.updateUiState({
-      selectedContentIndexByTarget: {
-        ...this.uiState.selectedContentIndexByTarget,
-        [targetId]: index,
-      },
-    });
   }
 
   private selectQueueIndex(index: number): void {

@@ -290,8 +290,6 @@ export type AppState = {
 export type UiState = {
   activeTargetId: NavigationTargetId;
   focusedPane: FocusedPane;
-  selectedTargetIndex: number;
-  selectedContentIndexByTarget: Record<NavigationTargetId, number>;
   selectedQueueIndex: number;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
@@ -325,9 +323,7 @@ export type AppIntent =
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
   | { type: "providerOperation"; providerId: string; operation: "refresh" | "retry" }
-  | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
   | { type: "providerOperation"; providerId: string; operation: "open-entry"; location: ProviderLocation; index: number }
-  | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
   | { type: "globalSearch"; operation: "submit"; query: string; providerFilter: GlobalSearchFilter<GlobalSearchProviderId>; resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType> }
   | { type: "globalSearch"; operation: "retry"; providerId: GlobalSearchProviderId }
   | { type: "globalSearch"; operation: "open"; result: GlobalSearchProviderResult }
