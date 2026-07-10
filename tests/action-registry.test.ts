@@ -120,7 +120,6 @@ describe("action registry contracts", () => {
       focus: "results",
       query: "",
       selectedIdentity: null,
-      selectedPlayableTarget: null,
       scroll: 0,
     }];
 
@@ -260,7 +259,8 @@ describe("root input router", () => {
       focus: "results",
       query: "night",
       selectedIdentity: null,
-      selectedPlayableTarget: collection,
+      selectedResultIndex: 0,
+      providerLocation: { providerId: "navidrome", path: [] },
       scroll: 0,
     }];
     const queue = new MemoryQueue();
@@ -281,7 +281,7 @@ describe("root input router", () => {
     await router.route("\r");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([amber.title]);
     expect(coordinator.appState.lastEvent).toBe("Music Collection resolution cancelled");
-    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
 
     cancelResolution = false;
     await router.route("\r");
@@ -291,7 +291,7 @@ describe("root input router", () => {
       drift.title,
     ]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
-    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
 
     await router.route("\x1b[13;2u");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
@@ -300,7 +300,7 @@ describe("root input router", () => {
       drift.title,
     ]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cinder.identity);
-    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
     expect(resolutions).toBe(3);
   });
 

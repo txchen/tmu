@@ -31,7 +31,7 @@ export type PickerOverlay = {
   focus: "results" | "search" | "filter" | "choice" | "input";
   query: string;
   selectedIdentity: TrackIdentity | null;
-  selectedPlayableTarget?: PlayableTarget | null;
+  selectedResultIndex?: number;
   scroll: number;
   filterText?: string;
   providerLocation?: ProviderLocation;
