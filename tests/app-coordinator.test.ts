@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AppCoordinator } from "../src/coordinator";
-import type { PlaybackLocator, Provider, Track } from "../src/domain";
+import { PlaybackFailure, type PlaybackLocator, type Provider, type Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
@@ -24,6 +24,25 @@ class RecordingPlayer extends NoopPlayer {
 
   override async teardown(): Promise<void> {
     this.teardownCount += 1;
+  }
+}
+
+class SelectivelyFailingPlayer extends RecordingPlayer {
+  override async load(locator: PlaybackLocator): Promise<void> {
+    if (locator.kind === "file" && locator.path.includes("bad")) throw new PlaybackFailure("mpv could not play cached file");
+    await super.load(locator);
+  }
+}
+
+class PlaybackFailingPlayer extends RecordingPlayer {
+  failPlayback(message: string): void {
+    this.updateState({ status: "error", failureKind: "playback", message });
+  }
+}
+
+class CommandFailingPlayer extends RecordingPlayer {
+  override async load(): Promise<void> {
+    throw new Error("mpv IPC socket disconnected");
   }
 }
 
@@ -398,6 +417,146 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.playback).toMatchObject({
       status: "stopped", positionSeconds: 0, currentTrackIdentity: cachedTrack.identity,
     });
+  });
+
+  test("direct Play Now fails on the requested unavailable Track without substituting another Queue Track", async () => {
+    const bad = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "bad-track" }, title: "Bad" };
+    const good = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "good-track" }, title: "Good" };
+    const player = new SelectivelyFailingPlayer();
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [bad, good], searchTracks: () => [bad, good],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "addToQueue", target: good });
+    await coordinator.dispatch({ type: "playNow", target: bad });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["bad-track", "good-track"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable", reason: "mpv could not play cached file",
+    });
+    expect(player.loaded).toEqual([]);
+  });
+
+  test("Next marks an mpv-failing Track unavailable and skips it without removing it", async () => {
+    const first = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "first-track" }, title: "First" };
+    const bad = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "bad-track" }, title: "Bad" };
+    const good = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "good-track" }, title: "Good" };
+    const player = new SelectivelyFailingPlayer();
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [first, bad, good], searchTracks: () => [],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    for (const track of [first, bad, good]) await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "playNow", target: first });
+    await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
+
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(good.identity);
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["first-track", "bad-track", "good-track"]);
+    expect(coordinator.appState.queue.entries[1]?.availability.status).toBe("unavailable");
+  });
+
+  test("asynchronous mpv failure marks Current unavailable and direct Resume does not retry or substitute", async () => {
+    const player = new PlaybackFailingPlayer();
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+    const loadsBeforeFailure = player.loaded.length;
+
+    player.failPlayback("mpv playback failed: corrupt stream");
+    await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
+
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable", reason: "mpv playback failed: corrupt stream",
+    });
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(player.loaded).toHaveLength(loadsBeforeFailure);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
+  });
+
+  test("asynchronous mpv failure automatically advances past the failed Track", async () => {
+    const player = new PlaybackFailingPlayer();
+    const next = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "next-track" }, title: "Next" };
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack, next], searchTracks: () => [],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "addToQueue", target: next });
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+
+    player.failPlayback("mpv playback failed: corrupt stream");
+    await waitFor(() => coordinator.appState.playback.currentTrackIdentity?.stableId === "next-track");
+
+    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["cached-track", "next-track"]);
+  });
+
+  test("mpv command failure stays actionable without marking the Track unavailable", async () => {
+    const player = new CommandFailingPlayer();
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+
+    expect(coordinator.appState.queue.entries[0]?.availability.status).not.toBe("unavailable");
+    expect(coordinator.appState.playback).toMatchObject({ status: "error", message: "mpv IPC socket disconnected" });
+  });
+
+  test("restored Queue availability is rescanned from the current YouTube Cache", async () => {
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+      resolvePlaybackLocator: async () => { throw new Error("missing"); }, refresh: () => undefined,
+      listCacheEntries: () => [], listIncompleteEntries: () => [], findByIdentity: () => undefined,
+      deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new RecordingPlayer(),
+      snapshotPersistence: {
+        load: async () => ({
+          version: 1,
+          entries: [{ track: cachedTrack }],
+          currentIndex: 0,
+          shuffle: false,
+          repeatAll: false,
+          volume: { percent: 100, ready: false },
+          positionSeconds: 42,
+        }),
+        save: async () => undefined,
+      },
+    });
+    await coordinator.start();
+
+    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+      status: "unavailable", reason: "YouTube Cache entry is missing: cached-track",
+    });
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
   });
 });
 

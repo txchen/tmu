@@ -226,6 +226,23 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.uiState.downloader.urlInput).toBe("");
     expect(terminal.lastFrame()).toContain("Summary #2: 2 downloaded · 1 cached · 0 failed · 0 cancelled");
   });
+
+  test("Playback keeps unavailable Tracks visible with their reason", async () => {
+    const track = cachedTrack("broken-track", "Broken Track");
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.markAvailability(track.identity, { status: "unavailable", reason: "mpv playback failed: corrupt stream" });
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue, player: new NoopPlayer(),
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    expect(terminal.lastFrame()).toContain("Broken Track · YouTube Cache · unavailable: mpv playback failed: corrupt stream");
+  });
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

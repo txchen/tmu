@@ -1,6 +1,7 @@
 import {
   clampIndex,
   identityKey,
+  PlaybackFailure,
   YOUTUBE_CACHE_PROVIDER_ID,
   sameIdentity,
   type AppIntent,
@@ -113,9 +114,11 @@ export class AppCoordinator {
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       const reachedNaturalEnd = playback.status === "idle" && playback.eof === true;
       this.mergePlayerPlayback(playback);
+      const playbackFailed = playback.failureKind === "playback";
+      if (playbackFailed) this.recordCurrentTrackPlaybackFailure(playback.message);
       this.notifyStateChanged("playback");
       this.maybeCheckpointLastQueueSnapshot(playback);
-      if (reachedNaturalEnd) void this.advanceAfterNaturalEnd();
+      if (reachedNaturalEnd || playbackFailed) void this.advanceAfterTerminalPlaybackEvent();
     });
     this.syncQueueState();
   }
@@ -610,7 +613,7 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private async advanceAfterNaturalEnd(): Promise<void> {
+  private async advanceAfterTerminalPlaybackEvent(): Promise<void> {
     if (this.naturalAdvanceInFlight || this.tornDown) return;
     this.naturalAdvanceInFlight = true;
     try {
@@ -788,7 +791,8 @@ export class AppCoordinator {
       await this.player.load(locator);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.markUnavailable(entry, message);
+      if (error instanceof PlaybackFailure) this.markUnavailable(entry, message);
+      else this.recordPlayerLoadCommandFailure(message);
       return false;
     }
 
@@ -1006,7 +1010,13 @@ export class AppCoordinator {
     if (entry.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) return;
 
     const cacheEntry = provider.findByIdentity(entry.track.identity);
-    if (!cacheEntry) return;
+    if (!cacheEntry) {
+      this.queue.markAvailability(entry.track.identity, {
+        status: "unavailable",
+        reason: `YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
+      });
+      return;
+    }
     this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
   }
 
@@ -1016,6 +1026,10 @@ export class AppCoordinator {
     const current = this.currentQueueEntry();
     if (!current) {
       this.appState.lastEvent = "nothing is playing";
+      return;
+    }
+    if (current.availability.status === "unavailable") {
+      this.markUnavailable(current, current.availability.reason);
       return;
     }
 
@@ -1077,6 +1091,26 @@ export class AppCoordinator {
     };
     this.appState.appErrors.push(reason);
     this.appState.lastEvent = reason;
+    this.syncQueueState();
+  }
+
+  private recordCurrentTrackPlaybackFailure(message = "mpv playback failed"): void {
+    const current = this.currentQueueEntry();
+    if (!current) return;
+    this.queue.markAvailability(current.track.identity, { status: "unavailable", reason: message });
+    this.appState.appErrors.push(message);
+    this.appState.lastEvent = message;
+    this.syncQueueState();
+  }
+
+  private recordPlayerLoadCommandFailure(message: string): void {
+    this.appState.playback = {
+      ...this.appState.playback,
+      status: "error",
+      message,
+    };
+    this.appState.appErrors.push(message);
+    this.appState.lastEvent = message;
     this.syncQueueState();
   }
 

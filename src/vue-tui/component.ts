@@ -364,7 +364,8 @@ function playbackView(
       const selected = index === uiState.selectedQueueIndex ? ">" : " ";
       const current = index === currentIndex ? "*" : " ";
       const unavailable = entry.availability.status === "unavailable" ? "!" : " ";
-      return `${selected}${current}${unavailable} ${entry.track.title} · ${entry.track.providerLabel}`;
+      const reason = entry.availability.status === "unavailable" ? ` · unavailable: ${entry.availability.reason}` : "";
+      return `${selected}${current}${unavailable} ${entry.track.title} · ${entry.track.providerLabel}${reason}`;
     });
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () =>
     lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)));
