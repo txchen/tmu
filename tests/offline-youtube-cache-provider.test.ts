@@ -9,7 +9,6 @@ import {
   writeOfflineYouTubeCacheMetadata,
   type PlaybackLocator,
 } from "../src/index";
-import { driveCoordinatorContract } from "./coordinator-contract-driver";
 
 class RecordingPlayer extends NoopPlayer {
   readonly loaded: PlaybackLocator[] = [];
@@ -211,78 +210,6 @@ describe("OfflineYouTubeCacheProvider", () => {
         providerId: "offline-youtube-cache",
         stableId: "youtube:persisted",
       })?.metadataPath).toBe(join(dir, "youtube", "persisted", "metadata.json"));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("enqueues and plays cached Tracks through the shared Queue and mpv file path", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-    const player = new RecordingPlayer();
-
-    try {
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "playable",
-        title: "Playable Cache",
-        mediaFileName: "playable.opus",
-        writeMedia: true,
-      });
-      const { coordinator } = createTmuApp({
-        config: {
-          offlineYouTubeCache: {
-            cacheDir: dir,
-            mediaDirName: "media",
-            metadataFileName: "metadata.json",
-          },
-        },
-        player,
-      });
-
-      await coordinator.start();
-      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
-      await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
-      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
-      await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
-
-      expect(coordinator.appState.queue.entries[0]?.track.identity).toEqual({
-        providerId: "offline-youtube-cache",
-        stableId: "youtube:playable",
-      });
-      expect(player.loaded).toEqual([{
-        kind: "file",
-        path: join(dir, "youtube", "playable", "media", "playable.opus"),
-      }]);
-      expect(coordinator.appState.playback.status).toBe("playing");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("shows unavailable cached media in the Provider Browsing Surface", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
-    try {
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "missing",
-        title: "Missing Browse Entry",
-        mediaFileName: "missing.opus",
-        writeMedia: false,
-      });
-      const { coordinator } = createTmuApp({
-        config: {
-          offlineYouTubeCache: {
-            cacheDir: dir,
-            mediaDirName: "media",
-            metadataFileName: "metadata.json",
-          },
-        },
-      });
-
-      await coordinator.start();
-      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
-
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

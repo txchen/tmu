@@ -3,9 +3,15 @@ import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
 import { dispatchTerminalResize } from "./vue-tui/resize";
+import type { AppCoordinator } from "./coordinator";
 
-export async function main(): Promise<void> {
-  const runtime = await createTmuRuntime();
+export type TmuMainOptions = {
+  afterMount?: () => void;
+  runtimeFactory?: () => Promise<{ coordinator: AppCoordinator }>;
+};
+
+export async function main(options: TmuMainOptions = {}): Promise<void> {
+  const runtime = options.runtimeFactory ? await options.runtimeFactory() : await createTmuRuntime();
   const { coordinator } = runtime;
   await coordinator.start();
 
@@ -29,19 +35,24 @@ export async function main(): Promise<void> {
   const handleSigint = () => terminateFromSignal(130);
   const handleSigterm = () => terminateFromSignal(143);
   const handleSighup = () => terminateFromSignal(129);
-  const handleSigusr2 = () => {
-    process.stderr.write("Fatal error: received SIGUSR2\n");
+  const terminateFromFatal = (error: unknown) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    process.stderr.write(`Fatal error: ${message}\n`);
     terminateFromSignal(1);
   };
+  const handleUncaughtException = (error: Error) => terminateFromFatal(error);
+  const handleUnhandledRejection = (reason: unknown) => terminateFromFatal(reason);
   const installSignalHandlers = () => {
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
     process.off("SIGHUP", handleSighup);
-    process.off("SIGUSR2", handleSigusr2);
+    process.off("uncaughtException", handleUncaughtException);
+    process.off("unhandledRejection", handleUnhandledRejection);
     process.once("SIGINT", handleSigint);
     process.once("SIGTERM", handleSigterm);
     process.once("SIGHUP", handleSighup);
-    process.once("SIGUSR2", handleSigusr2);
+    process.once("uncaughtException", handleUncaughtException);
+    process.once("unhandledRejection", handleUnhandledRejection);
   };
   installSignalHandlers();
   app.mount({
@@ -50,6 +61,7 @@ export async function main(): Promise<void> {
     patchConsole: false,
   });
   installSignalHandlers();
+  if (options.afterMount) queueMicrotask(options.afterMount);
 
   try {
     await app.waitUntilExit();
@@ -58,7 +70,8 @@ export async function main(): Promise<void> {
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
     process.off("SIGHUP", handleSighup);
-    process.off("SIGUSR2", handleSigusr2);
+    process.off("uncaughtException", handleUncaughtException);
+    process.off("unhandledRejection", handleUnhandledRejection);
     app.unmount();
     await coordinator.teardown();
   }
