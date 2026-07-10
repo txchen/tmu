@@ -540,8 +540,10 @@ export class AppCoordinator {
   private async resolvePlayableTarget(target: PlayableTarget, signal?: AbortSignal): Promise<readonly Track[] | null> {
     if ("identity" in target) return [target];
     if (target.tracks !== undefined) return uniqueTracksByIdentity(target.tracks);
+    this.uiStateStore.dispatch({ type: "setOverlayMessage", message: undefined });
     if (signal?.aborted) {
       this.appState.lastEvent = "Music Collection resolution cancelled";
+      this.setPickerRecovery("Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
       return null;
     }
 
@@ -556,13 +558,21 @@ export class AppCoordinator {
       const result = await provider.resolveMusicCollection(target, { signal });
       if (result.status === "cancelled" || signal?.aborted) {
         this.appState.lastEvent = "Music Collection resolution cancelled";
+        this.setPickerRecovery("Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
         return null;
       }
       return uniqueTracksByIdentity(result.tracks);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.appState.lastEvent = `Music Collection resolution failed: ${message}`;
+      this.setPickerRecovery(`Could not load collection: ${message} · Press Enter to retry or Esc to dismiss`);
       return null;
+    }
+  }
+
+  private setPickerRecovery(message: string): void {
+    if (this.uiStateStore.snapshot.overlays.at(-1)?.kind === "music-picker") {
+      this.uiStateStore.dispatch({ type: "setOverlayMessage", message });
     }
   }
 
@@ -701,16 +711,16 @@ export class AppCoordinator {
 
   private async openGlobalSearchResult(result: ProviderSearchResult): Promise<void> {
     const provider = this.appState.providers[result.providerId];
-    if (result.type !== "artist" || !isNavidromeProvider(provider)) {
+    if (!["artist", "album", "playlist"].includes(result.type) || !isNavidromeProvider(provider)) {
       this.appState.lastEvent = "Global Search result cannot be opened";
       return;
     }
     try {
-      const location = await provider.openArtistSearchResult(result);
+      const location = await provider.openSearchResult(result);
       this.clearGlobalSearch();
       this.uiStateStore.dispatch({ type: "setQuery", query: "" });
       this.uiStateStore.dispatch({ type: "setProviderLocation", location });
-      this.appState.lastEvent = `opened Navidrome artist ${result.label}`;
+      this.appState.lastEvent = `opened Navidrome ${result.type} ${result.label}`;
     } catch (error) {
       this.appState.lastEvent = `Could not open Artist Albums: ${error instanceof Error ? error.message : String(error)} · Retry`;
     }

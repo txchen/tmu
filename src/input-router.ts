@@ -349,9 +349,11 @@ export class RootInputRouter {
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
       return true;
     }
-    if (key === "\r") {
+    if (key === "\r" || key === "l" || key === "\x1b[C") {
       const result = globalSearchResultAt(this.appState().globalSearch, overlay.selectedResultIndex ?? 0);
-      if (result?.type === "artist" && !result.target) {
+      const opensNavigation = result && ["artist", "album", "playlist"].includes(result.type)
+        && (result.type === "artist" || key !== "\r");
+      if (opensNavigation) {
         await this.dispatchApp({ type: "globalSearch", operation: "open", result });
         return true;
       }

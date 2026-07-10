@@ -482,6 +482,19 @@ describe("Navidrome Provider", () => {
 
     expect(album.status === "resolved" && album.tracks.map((track) => track.title)).toEqual(["One", "Two"]);
     expect(playlist.status === "resolved" && playlist.tracks.map((track) => track.title)).toEqual(["Second", "First"]);
+
+    const albumLocation = await provider.openSearchResult({
+      providerId: "navidrome", providerLabel: "Navidrome", type: "album",
+      id: "album", label: "Album", detail: "Artist",
+    });
+    const playlistLocation = await provider.openSearchResult({
+      providerId: "navidrome", providerLabel: "Navidrome", type: "playlist",
+      id: "playlist", label: "Playlist",
+    });
+    expect(provider.listBrowserEntries!(albumLocation).filter((row) => row.kind === "track").map((row) => row.label))
+      .toEqual(["One", "Two"]);
+    expect(provider.listBrowserEntries!(playlistLocation).filter((row) => row.kind === "track").map((row) => row.label))
+      .toEqual(["Second", "First"]);
   });
 
   test("browses read-only playlists without unsupported username filtering and exposes playlist Tracks", async () => {
