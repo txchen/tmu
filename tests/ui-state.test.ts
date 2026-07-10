@@ -6,6 +6,21 @@ const beta = { providerId: "navidrome", stableId: "beta" };
 const gamma = { providerId: "local", stableId: "gamma" };
 
 describe("UI State reducer", () => {
+  test("resets discovery selection when its search query changes", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, {
+      type: "openOverlay",
+      overlay: {
+        kind: "command-palette", focus: "search", query: "", selectedIdentity: null,
+        selectedResultIndex: 7, scroll: 5,
+      },
+    });
+
+    state = reduceUiState(state, { type: "setQuery", query: "play" });
+
+    expect(state.overlays.at(-1)).toMatchObject({ query: "play", selectedResultIndex: 0, scroll: 0 });
+  });
+
   test("classifies responsive tiers and preserves context while the terminal is too small", () => {
     let state = createInitialUiState({ columns: 120, rows: 30 });
 

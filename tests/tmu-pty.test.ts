@@ -150,6 +150,50 @@ function createWavSample(durationSeconds: number): Buffer {
 const realPlaybackTest = Bun.which("mpv") ? test : test.skip;
 
 describe("production tmu real PTY", () => {
+  test("searches Contextual Shortcut Help and invokes the Command Palette through the real PTY", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 3 Tracks");
+      terminal.write("?");
+      await waitForOutput(read, "Picker Overlay · shortcut-help");
+      expect(output).toContain("Play Next · Enter");
+      terminal.write("/");
+      terminal.write("immediately");
+      await waitForOutput(read, "Play Now · Shift+Enter");
+
+      terminal.write("\x1b");
+      terminal.write("q");
+      await Bun.sleep(50);
+      const paletteFrame = output.length;
+      terminal.write(":");
+      await waitForNewOutput(read, paletteFrame, "Picker Overlay · command-palette");
+      terminal.write("toggle shuffle");
+      await waitForNewOutput(read, paletteFrame, "Toggle Shuffle");
+      terminal.write("\r");
+      await waitForNewOutput(read, paletteFrame, "Shuffle On");
+      expect(output.slice(paletteFrame)).not.toContain("No matching actions");
+
+      await Bun.sleep(50);
+      const textPaletteFrame = output.length;
+      terminal.write(":");
+      await waitForNewOutput(read, textPaletteFrame, "Picker Overlay · command-palette");
+      terminal.write("q");
+      await waitForNewOutput(read, textPaletteFrame, "Search: q");
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("submits Global Search text and filters, then clears back to Provider context", async () => {
     let output = "";
     const read = () => output;
@@ -441,7 +485,9 @@ describe("production tmu real PTY", () => {
       await writeAndWait("+", "Vol 75%");
 
       await writeAndWait("n", "Playing · PTY Last");
-      await writeAndWait("r", "Repeat All");
+      await writeAndWait(":", "Picker Overlay · command-palette");
+      await writeAndWait("toggle repeat all", "Toggle Repeat All");
+      await writeAndWait("\r", "Repeat All");
       await writeAndWait("z", "Shuffle On");
 
       terminal.write("\u0003");

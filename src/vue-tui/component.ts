@@ -3,6 +3,7 @@ import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
 import {
   createActionRegistry,
   footerActions,
+  searchDiscoveryActions,
   type ActionRegistry,
   type ResolvedAction,
 } from "../action-registry";
@@ -60,6 +61,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.notify(publicationCause(reason));
       });
 
+      const app = useApp();
       const router = new RootInputRouter({
         registry,
         appState: () => coordinator.appState,
@@ -73,8 +75,8 @@ export function createTmuRoot(options: TmuRootOptions) {
         },
         dispatchApp: (intent) => coordinator.dispatch(intent),
         dispatchUiIntent: (intent) => coordinator.dispatch(intent),
+        requestQuit: () => app.exit(),
       });
-      const app = useApp();
       const { columns, rows } = useWindowSize();
 
       watch([columns, rows], ([nextColumns, nextRows]) => {
@@ -88,11 +90,8 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
 
       async function routeInput(key: string): Promise<void> {
-        const hadBlockingLayer = coordinator.uiState.overlays.length > 0
-          || coordinator.uiState.pendingConfirmation !== null;
         await router.route(key);
         publication.notify("input");
-        if (key === "\u0003" || (key === "q" && !hadBlockingLayer)) app.exit();
       }
 
       onScopeDispose(() => {
@@ -176,7 +175,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
       ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, settings, start, exceptionalGuidance)
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
-    overlay ? overlayView(overlay, snapshot, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
+    overlay ? overlayView(overlay, snapshot, registry, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
     uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
   ]);
 }
@@ -373,6 +372,7 @@ function formatDuration(seconds: number | null | undefined): string {
 function overlayView(
   overlay: PickerOverlay,
   snapshot: PublicationSnapshot,
+  registry: ActionRegistry,
   tier: ResponsiveTier,
   columns: number,
   terminalRows: number,
@@ -381,11 +381,17 @@ function overlayView(
   const rows = searchActive
     ? globalSearchRows(snapshot.appState.globalSearch)
     : snapshot.providerNavigationRows;
+  const discoveryRows = overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
+      ? searchDiscoveryActions(registry, {
+        appState: snapshot.appState,
+        uiState: snapshot.uiState,
+      }, overlay.query)
+    : [];
   const geometry = overlayGeometry(overlay.kind, tier, columns, terminalRows);
   const contentRows = overlayContentRows(overlay.kind, tier, columns, terminalRows);
   const visibleRows = overlay.kind === "music-picker"
     ? rows.slice(overlay.scroll, overlay.scroll + contentRows)
-    : [];
+    : discoveryRows.slice(overlay.scroll, overlay.scroll + contentRows);
   const location = overlay.providerLocation?.providerId
     ? `${overlay.providerLocation.providerId}${overlay.providerLocation.path.length ? ` · ${overlay.providerLocation.path.at(-1)}` : ""}`
     : "Providers";
@@ -400,6 +406,10 @@ function overlayView(
     top: Math.max(0, Math.floor((terminalRows - geometry.height) / 2)),
   }, () => [
     h(Text, { bold: true }, () => `Picker Overlay · ${overlay.kind}`),
+    overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
+      ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} ${overlay.kind === "shortcut-help" ? "Filter" : "Search"}: ${overlay.query}`)
+      : null,
+    overlay.kind === "youtube-url" ? h(Text, () => `> URL: ${overlay.query}`) : null,
     overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
     overlay.kind === "music-picker" ? h(Text, { inverse: overlay.focus === "filter", dimColor: overlay.focus !== "filter" }, () =>
       `Filters: Provider ${overlay.providerFilter ?? "all"} · Type ${overlay.resultTypeFilter ?? "all"}`) : null,
@@ -407,20 +417,41 @@ function overlayView(
     overlay.kind === "music-picker" && overlay.message
       ? h(Text, { wrap: "truncate-end" }, () => `! ${overlay.message}`)
       : null,
-    ...visibleRows.map((row, visibleIndex) => {
+    ...(overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
+      ? visibleRows.map((action, visibleIndex) => {
+          const resolved = action as ResolvedAction;
+          const index = overlay.scroll + visibleIndex;
+          const selected = index === (overlay.selectedResultIndex ?? 0);
+          const bindings = resolved.bindings.length ? resolved.bindings.join(", ") : "Palette only";
+          const aliases = resolved.aliases.length ? ` · aliases: ${resolved.aliases.join(", ")}` : "";
+          const disabled = resolved.enabled ? "" : ` · Disabled: ${resolved.disabledReason ?? "Unavailable"}`;
+          return h(Text, {
+            inverse: selected,
+            dimColor: !resolved.enabled,
+            wrap: "truncate-end",
+          }, () => `${selected ? "›" : " "} ${resolved.name} · ${bindings}${aliases}${disabled}`);
+        })
+      : visibleRows.map((row, visibleIndex) => {
       const index = overlay.scroll + visibleIndex;
       const selected = index === (overlay.selectedResultIndex ?? 0);
       if (searchActive) return globalSearchRowView(row as GlobalSearchRow, selected);
       const navigationRow = row as PublicationSnapshot["providerNavigationRows"][number];
       const suffix = navigationRow.detail ? ` · ${navigationRow.detail}` : "";
       return h(Text, { inverse: selected, wrap: "truncate-end" }, () => `${selected ? "›" : " "} ${navigationRow.label}${suffix}`);
-    }),
+    })),
+    (overlay.kind === "shortcut-help" || overlay.kind === "command-palette") && discoveryRows.length === 0
+      ? h(Text, { dimColor: true }, () => "No matching actions")
+      : null,
     overlay.kind === "music-picker" && rows.length === 0
       ? h(Text, { dimColor: true }, () => "No Tracks or navigation entries")
       : null,
-    h(Text, { dimColor: true }, () => overlay.focus === "results"
-      ? searchActive ? "j/k move · Enter Play Next · l/→ open · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
-      : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
+    h(Text, { dimColor: true }, () => overlay.kind === "shortcut-help"
+      ? overlay.focus === "results" ? "j/k move · / filter · q/Esc dismiss" : "Enter results · Esc results · Ctrl-w word · Ctrl-u clear"
+      : overlay.kind === "command-palette"
+        ? "Enter invoke · Esc dismiss · Ctrl-w word · Ctrl-u clear"
+        : overlay.focus === "results"
+          ? searchActive ? "j/k move · Enter Play Next · l/→ open · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
+          : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
   ]);
 }
 

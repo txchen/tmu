@@ -1,5 +1,7 @@
 import {
+  actionForId,
   actionForBinding,
+  searchDiscoveryActions,
   type ActionIntent,
   type ActionRegistry,
   type UiActionIntent,
@@ -33,6 +35,7 @@ export type RootInputRouterOptions = {
   };
   dispatchApp: (intent: AppIntent) => Promise<void> | void;
   dispatchUiIntent?: (intent: LegacyAppIntent) => Promise<void> | void;
+  requestQuit?: () => void;
   now?: () => number;
   timers?: {
     setTimeout(callback: () => void, delayMs: number): unknown;
@@ -46,6 +49,7 @@ export class RootInputRouter {
   private readonly uiState: RootInputRouterOptions["uiState"];
   private readonly dispatchApp: (intent: AppIntent) => Promise<void> | void;
   private readonly dispatchUiIntent?: (intent: LegacyAppIntent) => Promise<void> | void;
+  private readonly requestQuit?: () => void;
   private readonly now: () => number;
   private readonly timers: NonNullable<RootInputRouterOptions["timers"]>;
   private pendingChordTimer: unknown | null = null;
@@ -56,6 +60,7 @@ export class RootInputRouter {
     this.uiState = options.uiState;
     this.dispatchApp = options.dispatchApp;
     this.dispatchUiIntent = options.dispatchUiIntent;
+    this.requestQuit = options.requestQuit;
     this.now = options.now ?? Date.now;
     this.timers = options.timers ?? {
       setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
@@ -97,9 +102,17 @@ export class RootInputRouter {
       if (key === "\x1b") {
         if (overlay.kind === "music-picker" && overlay.focus === "search") {
           this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
+        } else if (overlay.kind === "shortcut-help") {
+          this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
         } else {
           this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
         }
+      } else if (key === "\r" && overlay.kind === "command-palette") {
+        await this.invokeDiscoverySelection(overlay);
+      } else if (key === "\r" && overlay.kind === "youtube-url") {
+        await this.dispatchBinding(key);
+      } else if (key === "\r" && overlay.kind === "shortcut-help") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
       } else if (key === "\r" && overlay.kind === "music-picker") {
         if (overlay.query.trim()) {
           const submission = this.dispatchApp({
@@ -131,6 +144,33 @@ export class RootInputRouter {
       return true;
     }
 
+    if (overlay?.kind === "shortcut-help" || overlay?.kind === "command-palette") {
+      const actions = this.discoveryRows(overlay.query);
+      const visibleRows = overlayContentRows(overlay.kind,
+        this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
+        this.uiState.snapshot.terminal.rows);
+      const movement = listMovementForKey(key, visibleRows);
+      if (movement) {
+        this.uiState.dispatch(movement.kind === "boundary"
+          ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
+          : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
+        return true;
+      }
+      if (overlay.kind === "shortcut-help" && key === "/") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
+        return true;
+      }
+      if (overlay.kind === "command-palette" && key === "\r") {
+        await this.invokeDiscoverySelection(overlay);
+        return true;
+      }
+    }
+
+    if (overlay && (key === "?" || key === ":")) {
+      await this.dispatchBinding(key);
+      return true;
+    }
+
     if (overlay?.kind === "music-picker" && overlay.focus === "results") {
       if (await this.routeProviderNavigation(key, overlay)) return true;
     }
@@ -155,6 +195,8 @@ export class RootInputRouter {
         this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
       } else if (key === "\x1b") this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
       else if (key === "\x7f" || key === "\b") this.uiState.dispatch({ type: "setQuery", query: query.slice(0, -1) });
+      else if (key === "\x17") this.uiState.dispatch({ type: "setQuery", query: deletePreviousWord(query) });
+      else if (key === "\x15") this.uiState.dispatch({ type: "setQuery", query: "" });
       else if (isPrintableKey(key)) this.uiState.dispatch({ type: "setQuery", query: `${query}${key}` });
       return true;
     }
@@ -385,6 +427,26 @@ export class RootInputRouter {
       return;
     }
     await this.dispatchApp(intent);
+    if (intent.type === "playerOperation" && intent.operation === "quit") this.requestQuit?.();
+  }
+
+  private discoveryRows(query: string) {
+    return searchDiscoveryActions(this.registry, {
+      appState: this.appState(), uiState: this.uiState.snapshot,
+      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
+    }, query);
+  }
+
+  private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
+    const selected = this.discoveryRows(overlay.query)[overlay.selectedResultIndex ?? 0];
+    if (!selected?.enabled) return;
+    this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
+    const action = actionForId(this.registry, selected.id, {
+      appState: this.appState(), uiState: this.uiState.snapshot,
+      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
+    });
+    if (action?.enabled && action.intent) await this.dispatchIntent(action.intent);
+    this.syncQueueSelection();
   }
 
   private cancelOverlayChord(): void {

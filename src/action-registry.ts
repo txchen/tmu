@@ -48,6 +48,7 @@ export type ResolvedAction = {
   readonly enabled: boolean;
   readonly disabledReason: string | null;
   readonly intent: ActionIntent | null;
+  readonly scope: "context" | "global";
 };
 
 export type ActionRegistry = readonly ActionDefinition[];
@@ -63,10 +64,10 @@ export function createActionRegistry(): ActionRegistry {
     uiAction("picker.open-search", "Global Search", ["find music"], "/", "/", {
       type: "openOverlay", kind: "music-picker", focus: "search",
     }),
-    uiAction("help.open", "Help", ["shortcuts"], "?", "?", {
-      type: "openOverlay", kind: "shortcut-help", focus: "search",
+    discoveryUiAction("help.open", "Help", ["shortcuts"], "?", "?", {
+      type: "openOverlay", kind: "shortcut-help", focus: "results",
     }),
-    uiAction("palette.open", "Commands", ["command palette"], ":", ":", {
+    discoveryUiAction("palette.open", "Commands", ["command palette"], ":", ":", {
       type: "openOverlay", kind: "command-palette", focus: "search",
     }),
     uiAction("download.open", "YouTube URL Download", ["download youtube"], "u", "u", {
@@ -191,7 +192,9 @@ export function createActionRegistry(): ActionRegistry {
     simpleAction("player.next", "Next Track", ["next"], "n", "n", { type: "playerOperation", operation: "next-track" }),
     simpleAction("player.previous", "Previous Track", ["previous"], "p", "p", { type: "playerOperation", operation: "previous-track" }),
     simpleAction("queue.shuffle", "Toggle Shuffle", ["shuffle"], "z", "z", { type: "playerOperation", operation: "toggle-shuffle" }),
-    simpleAction("queue.repeat-all", "Toggle Repeat All", ["repeat"], "r", "r", { type: "playerOperation", operation: "toggle-repeat-all" }),
+    paletteAction("queue.repeat-all", "Toggle Repeat All", ["repeat"], {
+      type: "playerOperation", operation: "toggle-repeat-all",
+    }),
     {
       id: "queue.clear",
       name: "Clear Queue",
@@ -249,12 +252,39 @@ function providerSupports(context: ActionContext, operation: "refresh" | "retry"
 }
 
 export function discoveryActions(registry: ActionRegistry, context: ActionContext): ResolvedAction[] {
-  return registry.filter((action) => action.applies(context)).map((action) => resolveAction(action, context));
+  const effectiveContext = underlyingDiscoveryContext(context);
+  return registry
+    .filter((action) => action.applies(effectiveContext))
+    .map((action) => resolveAction(action, effectiveContext))
+    .sort((left, right) => Number(isGlobalAction(left.id)) - Number(isGlobalAction(right.id)));
 }
 
 export const footerActions = discoveryActions;
 export const shortcutHelpActions = discoveryActions;
 export const commandPaletteActions = discoveryActions;
+
+export function searchDiscoveryActions(
+  registry: ActionRegistry,
+  context: ActionContext,
+  query: string,
+): ResolvedAction[] {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return discoveryActions(registry, context);
+  return discoveryActions(registry, context).filter((action) => {
+    const searchable = [action.name, ...action.aliases, ...action.bindings].join(" ").toLocaleLowerCase();
+    return words.every((word) => searchable.includes(word));
+  });
+}
+
+export function actionForId(
+  registry: ActionRegistry,
+  id: string,
+  context: ActionContext,
+): ResolvedAction | null {
+  const effectiveContext = underlyingDiscoveryContext(context);
+  const action = registry.find((candidate) => candidate.id === id && candidate.applies(effectiveContext));
+  return action ? resolveAction(action, effectiveContext) : null;
+}
 
 export function actionForBinding(
   registry: ActionRegistry,
@@ -277,10 +307,15 @@ function promptAction(
     name,
     aliases: [],
     bindings: [{ key: "\r", label: "Enter" }],
-    applies: (context) => context.uiState.activePrompt === prompt,
+    applies: (context) => context.uiState.activePrompt === prompt
+      || (prompt === "youtube-url" && context.uiState.overlays.at(-1)?.kind === "youtube-url"),
     enabled: always,
     disabledReason: neverDisabled,
-    createIntent: (context) => createIntent(context.uiState.promptInput),
+    createIntent: (context) => createIntent(
+      prompt === "youtube-url" && context.uiState.overlays.at(-1)?.kind === "youtube-url"
+        ? context.uiState.overlays.at(-1)?.query ?? ""
+        : context.uiState.promptInput,
+    ),
   };
 }
 
@@ -335,6 +370,15 @@ function simpleAction(
   return boundAction(id, name, aliases, [{ key, label }], intent);
 }
 
+function paletteAction(
+  id: string,
+  name: string,
+  aliases: readonly string[],
+  intent: AppIntent,
+): ActionDefinition {
+  return boundAction(id, name, aliases, [], intent);
+}
+
 function uiAction(
   id: string,
   name: string,
@@ -349,6 +393,23 @@ function uiAction(
     aliases,
     bindings: [{ key, label }],
     applies: (context) => context.uiState.activeTargetId === "queue" && context.uiState.overlays.length === 0,
+    enabled: always,
+    disabledReason: neverDisabled,
+    createIntent: () => intent,
+  };
+}
+
+function discoveryUiAction(
+  id: string,
+  name: string,
+  aliases: readonly string[],
+  key: string,
+  label: string,
+  intent: UiActionIntent,
+): ActionDefinition {
+  return {
+    id, name, aliases, bindings: [{ key, label }],
+    applies: always,
     enabled: always,
     disabledReason: neverDisabled,
     createIntent: () => intent,
@@ -384,7 +445,27 @@ function resolveAction(action: ActionDefinition, context: ActionContext): Resolv
     enabled,
     disabledReason: enabled ? null : action.disabledReason(context),
     intent: enabled ? action.createIntent(context) : null,
+    scope: isGlobalAction(action.id) ? "global" : "context",
   };
+}
+
+function underlyingDiscoveryContext(context: ActionContext): ActionContext {
+  const overlay = context.uiState.overlays.at(-1);
+  if (overlay?.kind !== "shortcut-help" && overlay?.kind !== "command-palette") return context;
+  return {
+    ...context,
+    uiState: { ...context.uiState, overlays: context.uiState.overlays.slice(0, -1) },
+  };
+}
+
+function isGlobalAction(id: string): boolean {
+  return id.startsWith("player.")
+    || id.startsWith("persistence.")
+    || id === "queue.shuffle"
+    || id === "queue.repeat-all"
+    || id === "help.open"
+    || id === "palette.open"
+    || id === "app.quit";
 }
 
 function selectedQueueTrack(context: ActionContext): Track | null {
