@@ -148,7 +148,6 @@ describe("production vue-tui", () => {
 
     coordinator.appState.downloads = { active: true, lines: ["download 42.0% · ETA 00:08"] };
     coordinator.appState.lastEvent = "downloading YouTube audio";
-    coordinator.dispatchUi({ type: "updateView", patch: {} });
     await terminal.stdin.write("u");
     expect(terminal.lastFrame()).toContain("Download in progress");
     expect(terminal.lastFrame()).toContain("download 42.0% · ETA 00:08");

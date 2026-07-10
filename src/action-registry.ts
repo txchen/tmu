@@ -12,7 +12,6 @@ import { globalSearchResultAt, globalSearchRetryProviderId, globalSearchRows } f
 export type ActionContext = {
   readonly appState: Readonly<AppState> | AppStateSnapshot;
   readonly uiState: Readonly<UiState>;
-  readonly selectedPlayableTarget?: PlayableTarget | null;
   readonly selectedProviderId?: string | null;
 };
 
@@ -87,7 +86,7 @@ export function createActionRegistry(): ActionRegistry {
       name: "YouTube URL Download",
       aliases: ["download youtube"],
       bindings: [{ key: "u", label: "u" }],
-      applies: (context) => context.uiState.activeTargetId === "queue" && context.uiState.overlays.length === 0,
+      applies: (context) => context.uiState.overlays.length === 0,
       enabled: always,
       disabledReason: neverDisabled,
       createIntent: (context) => ({
@@ -203,11 +202,10 @@ export function createActionRegistry(): ActionRegistry {
       applies: (context) => providerSupports(context, "refresh"),
       enabled: always,
       disabledReason: neverDisabled,
-      createIntent: (context) => ({
-        type: "providerOperation",
-        providerId: selectedProviderId(context) ?? context.uiState.activeTargetId,
-        operation: "refresh",
-      }),
+      createIntent: (context) => {
+        const providerId = selectedProviderId(context);
+        return providerId ? { type: "providerOperation", providerId, operation: "refresh" } : null;
+      },
     },
     {
       id: "provider.retry",
@@ -218,11 +216,10 @@ export function createActionRegistry(): ActionRegistry {
       applies: (context) => providerSupports(context, "retry"),
       enabled: always,
       disabledReason: neverDisabled,
-      createIntent: (context) => ({
-        type: "providerOperation",
-        providerId: selectedProviderId(context) ?? context.uiState.activeTargetId,
-        operation: "retry",
-      }),
+      createIntent: (context) => {
+        const providerId = selectedProviderId(context);
+        return providerId ? { type: "providerOperation", providerId, operation: "retry" } : null;
+      },
     },
     {
       id: "player.toggle-play-pause",
@@ -254,7 +251,7 @@ export function createActionRegistry(): ActionRegistry {
       name: "Clear Queue",
       aliases: ["empty queue"],
       bindings: [{ key: "c", label: "c" }],
-      applies: (context) => context.uiState.activeTargetId === "queue",
+      applies: (context) => context.uiState.overlays.length === 0,
       enabled: (context) => context.appState.queue.entries.length > 0,
       disabledReason: () => "Queue is empty",
       createIntent: () => ({ type: "requestConfirmation", kind: "clear-queue" }),
@@ -295,7 +292,7 @@ export function createActionRegistry(): ActionRegistry {
 function selectedProviderId(context: ActionContext): string | null {
   return context.selectedProviderId
     ?? context.uiState.overlays.at(-1)?.providerLocation?.providerId
-    ?? (context.uiState.activeTargetId === "queue" ? null : context.uiState.activeTargetId);
+    ?? null;
 }
 
 function providerSupports(context: ActionContext, operation: "refresh" | "retry"): boolean {
@@ -367,8 +364,7 @@ function queueTrackAction(options: {
   return {
     ...options,
     scope: "context",
-    applies: (context) => context.uiState.activeTargetId === "queue"
-      && context.uiState.overlays.length === 0,
+    applies: (context) => context.uiState.overlays.length === 0,
     enabled: (context) => selectedQueueTrack(context) !== null,
     disabledReason: (context) => selectedQueueTrack(context) ? null : "Queue is empty",
     createIntent: (context) => {
@@ -388,8 +384,7 @@ function providerTargetAction(options: {
   return {
     ...options,
     scope: "context",
-    applies: (context) => selectedProviderTarget(context) !== null
-      && (context.uiState.activeTargetId !== "queue" || selectedOverlayTarget(context) !== null),
+    applies: (context) => selectedProviderTarget(context) !== null,
     enabled: (context) => selectedProviderTarget(context) !== null,
     disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
     createIntent: (context) => {
@@ -450,7 +445,7 @@ function uiAction(
     name,
     aliases,
     bindings: [{ key, label }],
-    applies: (context) => context.uiState.activeTargetId === "queue" && context.uiState.overlays.length === 0,
+    applies: (context) => context.uiState.overlays.length === 0,
     enabled: always,
     disabledReason: neverDisabled,
     createIntent: () => intent,
@@ -535,7 +530,7 @@ function contextLayerPriority(layer: ActionDefinition["contextLayer"]): number {
 function isListContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
   return overlay?.focus === "results"
-    || (!overlay && context.uiState.activeTargetId === "queue" && context.uiState.focusedPane === "queue");
+    || !overlay;
 }
 
 function isMusicResultsContext(context: ActionContext): boolean {
@@ -580,7 +575,6 @@ function selectedQueueTrack(context: ActionContext): Track | null {
 }
 
 function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
-  if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
   const overlay = context.uiState.overlays.at(-1);
   if (overlay?.focus === "results") return selectedOverlayTarget(context);
   return null;
@@ -604,10 +598,7 @@ function providerTargetAt(
   index: number,
 ): PlayableTarget | null {
   const provider = context.appState.providers[providerId];
-  if (!provider) return null;
-  if ("listVisibleTracks" in provider) {
-    if (provider.playableTargetAt) return provider.playableTargetAt(location, index) ?? null;
-    return provider.listVisibleTracks()[index] ?? null;
-  }
-  return provider.visibleTracks[index] as Track | undefined ?? null;
+  return provider && "playableTargetAt" in provider
+    ? provider.playableTargetAt?.(location, index) ?? null
+    : null;
 }

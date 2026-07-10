@@ -1,14 +1,6 @@
 import type { RedactedTmuConfig } from "./config";
 import type { DependencyHealthState } from "./dependencies";
 
-export type NavigationTargetId =
-  | "local"
-  | "navidrome"
-  | "offline-youtube-cache"
-  | "youtube-url-download"
-  | "queue";
-
-export type FocusedPane = "targets" | "content" | "queue";
 export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
 export type ProviderId = "local" | "navidrome" | "offline-youtube-cache";
 export type GlobalSearchProviderId = ProviderId;
@@ -29,12 +21,10 @@ export type ProviderLocation = {
 export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
 
 export type FocusReturnToken = {
-  focusedPane: FocusedPane;
-  filterText: string;
   selectedQueueIdentity: TrackIdentity | null;
   selectedQueueIndex: number;
   providerLocation: ProviderLocation;
-  scrollByPane: Record<FocusedPane, number>;
+  queueScroll: number;
 };
 
 export type PickerOverlay = {
@@ -263,12 +253,6 @@ export type Queue = {
   restore(snapshot: QueueState): void;
 };
 
-export type NavigationTarget = {
-  id: NavigationTargetId;
-  label: string;
-  hint: string;
-};
-
 export type AppState = {
   config: RedactedTmuConfig;
   configPath: string;
@@ -288,11 +272,8 @@ export type AppState = {
 };
 
 export type UiState = {
-  activeTargetId: NavigationTargetId;
-  focusedPane: FocusedPane;
   selectedQueueIndex: number;
-  filterText: string;
-  scrollByPane: Record<FocusedPane, number>;
+  queueScroll: number;
   overlays: readonly PickerOverlay[];
   selectedQueueIdentity: TrackIdentity | null;
   providerLocation: ProviderLocation;
@@ -345,14 +326,6 @@ export type AppIntent =
   | { type: "playerOperation"; operation: "adjust-volume"; delta: number }
   | { type: "playerOperation"; operation: "set-volume"; percent: number; ready: boolean };
 
-export const NAVIGATION_TARGETS: readonly NavigationTarget[] = [
-  { id: "local", label: "Local", hint: "files and folders" },
-  { id: "navidrome", label: "Navidrome", hint: "artists, albums, playlists" },
-  { id: "offline-youtube-cache", label: "Offline YouTube Cache", hint: "downloaded YouTube audio" },
-  { id: "youtube-url-download", label: "YouTube URL Download", hint: "download then enqueue" },
-  { id: "queue", label: "Queue", hint: "shared playback queue" },
-];
-
 export function identityKey(identity: TrackIdentity): string {
   return `${identity.providerId}:${identity.stableId}`;
 }
@@ -376,11 +349,6 @@ export function uniqueTracksByIdentity(tracks: readonly Track[]): Track[] {
     seen.add(key);
     return true;
   });
-}
-
-export function navigationTargetIndex(targetId: NavigationTargetId): number {
-  const index = NAVIGATION_TARGETS.findIndex((target) => target.id === targetId);
-  return index === -1 ? 0 : index;
 }
 
 export function clampIndex(value: number, length: number): number {

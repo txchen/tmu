@@ -52,7 +52,6 @@ export function createTmuApp(options: TmuAppOptions = {}): {
       ffprobeCommand: config.helpers.ffprobe,
       runner: options.dependencyRunner,
       metadataTimeoutMs: config.dependencyPolicy.checkTimeoutMs,
-      directorySoftCap: config.providers.local.directorySoftCap,
     },
     navidrome: {
       config: config.providers.navidrome,

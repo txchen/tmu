@@ -7,7 +7,6 @@ import {
   createLastQueueSnapshot,
   FileLastQueueSnapshotPersistence,
   InMemoryLastQueueSnapshotPersistence,
-  isLocalProvider,
   MemoryQueue,
   type DependencyCommandRunner,
   type LastQueueSnapshot,
@@ -173,13 +172,11 @@ describe("Last Queue Snapshot persistence", () => {
 
       first = await createTmuRuntime({ configPath, dependencyRunner: runner });
       await first.coordinator.start();
-      const local = first.coordinator.appState.providers.local;
-      expect(isLocalProvider(local)).toBe(true);
-      if (!isLocalProvider(local)) throw new Error("Local Provider unavailable");
-      const seededTrack = await local.createTrackFromPath(seededFile);
-      expect(seededTrack).toBeDefined();
-      if (!seededTrack) throw new Error("Local Track unavailable");
-      await first.coordinator.dispatch({ type: "playNext", target: seededTrack });
+      await first.coordinator.dispatch({ type: "playNext", target: {
+        identity: { providerId: "local", stableId: seededFile },
+        title: "song-a.flac",
+        providerLabel: "Local",
+      } });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "set-volume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
       await first.coordinator.teardown();

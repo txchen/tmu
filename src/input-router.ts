@@ -207,9 +207,7 @@ export class RootInputRouter {
     if (this.routeVimFirstChord(uiOperation, key, () => {
       this.uiState.dispatch({ type: "selectQueueBoundary", boundary: "first", identities, visibleRows });
     })) return true;
-    const queueFocused = this.uiState.snapshot.focusedPane === "queue"
-      && this.uiState.snapshot.activeTargetId === "queue";
-    const movement = queueFocused ? movementForUiOperation(uiOperation, visibleRows) : null;
+    const movement = movementForUiOperation(uiOperation, visibleRows);
     if (movement) {
       if (movement.kind === "boundary") {
         this.uiState.dispatch({

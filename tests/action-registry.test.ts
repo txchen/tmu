@@ -27,8 +27,6 @@ function context() {
   const appState = createInitialAppState({});
   appState.queue.entries = [{ track: amber, availability: { status: "available" } }];
   const uiState = createInitialUiState();
-  uiState.activeTargetId = "queue";
-  uiState.focusedPane = "queue";
   uiState.selectedQueueIdentity = amber.identity;
   return { appState, uiState };
 }
@@ -204,7 +202,6 @@ describe("action registry contracts", () => {
   test("keeps a Provider's non-playable result authoritative", () => {
     const registry = createActionRegistry();
     const current = context();
-    current.uiState.activeTargetId = "local";
     current.appState.providers.local = {
       id: "local",
       label: "Local",
@@ -215,6 +212,10 @@ describe("action registry contracts", () => {
       playableTargetAt: () => undefined,
       resolvePlaybackLocator: async () => ({ kind: "file", path: amber.identity.stableId }),
     };
+    current.uiState.overlays = [{
+      kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "local", path: [] },
+    }];
 
     expect(actionForBinding(registry, "\r", current)).toBeNull();
     expect(actionForBinding(registry, "\x1b[13;2u", current)).toBeNull();
@@ -294,16 +295,28 @@ describe("action registry contracts", () => {
 
     const registry = createActionRegistry();
     const current = context();
-    current.uiState.activeTargetId = "local";
     const collection = {
       kind: "music-collection" as const,
       id: "night-drive",
       label: "Night Drive",
       tracks: [cinder, drift],
     };
-    expect(actionForBinding(registry, "\r", { ...current, selectedPlayableTarget: collection })?.intent)
+    current.appState.providers.local = {
+      id: "local", label: "Local", hint: "files", capabilities: {
+        searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [],
+      },
+      getNavigationRoot: () => ({ visible: true, order: 1, detail: "files" }),
+      listVisibleTracks: () => [],
+      playableTargetAt: () => collection,
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/tmp/track" }),
+    };
+    current.uiState.overlays = [{
+      kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "local", path: [] },
+    }];
+    expect(actionForBinding(registry, "\r", current)?.intent)
       .toEqual({ type: "playNext", target: collection });
-    expect(actionForBinding(registry, "\x1b[13;2u", { ...current, selectedPlayableTarget: collection })?.intent)
+    expect(actionForBinding(registry, "\x1b[13;2u", current)?.intent)
       .toEqual({ type: "playNow", target: collection });
   });
 });
@@ -346,8 +359,6 @@ describe("root input router", () => {
       },
     });
     const uiState = createInitialUiState();
-    uiState.activeTargetId = "queue";
-    uiState.focusedPane = "queue";
     uiState.providerLocation = { providerId: "navidrome", path: [] };
     uiState.overlays = [{
       kind: "music-picker",
@@ -401,8 +412,6 @@ describe("root input router", () => {
 
   test("omits superseded Provider navigation bindings from the production registry", async () => {
     const current = context();
-    current.uiState.activeTargetId = "local";
-    current.uiState.focusedPane = "content";
     current.appState.providers.local = {
       id: "local",
       label: "Local",
@@ -429,7 +438,6 @@ describe("root input router", () => {
 
   test("does not retain fallback routing beside the action registry", async () => {
     const current = context();
-    current.uiState.activeTargetId = "navidrome";
     const ui = new UiStateStore(current.uiState);
     const intents: AppIntent[] = [];
     const router = new RootInputRouter({
