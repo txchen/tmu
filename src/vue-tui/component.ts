@@ -181,6 +181,24 @@ async function routeLibrary(
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
   } else if (!coordinator.uiState.library.inputFocused && input === "/") {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: true });
+  } else if (!coordinator.uiState.library.inputFocused && (input === "j" || key.downArrow)) {
+    coordinator.dispatchUi({
+      type: "setLibrarySelection",
+      index: coordinator.uiState.library.selectedIndex + 1,
+      resultCount: tracks.length,
+    });
+  } else if (!coordinator.uiState.library.inputFocused && (input === "k" || key.upArrow)) {
+    coordinator.dispatchUi({
+      type: "setLibrarySelection",
+      index: coordinator.uiState.library.selectedIndex - 1,
+      resultCount: tracks.length,
+    });
+  } else if (!coordinator.uiState.library.inputFocused && (input === "N" || input === "a")) {
+    const track = tracks[coordinator.uiState.library.selectedIndex];
+    if (track) await coordinator.dispatch({
+      type: input === "N" ? "playNext" : "addToQueue",
+      target: track,
+    });
   } else if (key.return) {
     const track = tracks[coordinator.uiState.library.selectedIndex];
     if (track) await coordinator.dispatch({ type: "playNow", target: track });
@@ -301,7 +319,7 @@ function downloaderView(snapshot: PublicationSnapshot) {
 
 function footer(active: UiState["activeTab"]): string {
   if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
-  if (active === "library") return "Type Cache Search · Esc Actions  Enter Play Now  Ctrl+1/2/3 Tabs";
+  if (active === "library") return "Type Search · Esc Actions · j/k Move · Enter Play Now · N Play Next · a Add · ? Help";
   return "Type URL · Esc Actions  Enter Download  Ctrl+1/2/3 Tabs";
 }
 
@@ -315,7 +333,7 @@ function tabLabel(active: UiState["activeTab"]): string {
 
 function contextualHelp(active: UiState["activeTab"]): string {
   if (active === "playback") return "j/k Move · x Remove · J/K Reorder · C Clear";
-  if (active === "library") return "/ Focus Cache Search · Enter Play Now";
+  if (active === "library") return "/ Focus Cache Search · j/k Move · Enter Play Now · N Play Next · a Add to Queue";
   return "u Focus URL · Enter Submit";
 }
 

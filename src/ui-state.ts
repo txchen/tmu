@@ -17,6 +17,7 @@ export type UiStateAction =
   | { type: "switchTab"; tab: UiState["activeTab"] }
   | { type: "setLibraryQuery"; query: string }
   | { type: "setLibraryInputFocus"; focused: boolean }
+  | { type: "setLibrarySelection"; index: number; resultCount: number }
   | { type: "setDownloaderInput"; value: string }
   | { type: "setDownloaderInputFocus"; focused: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
@@ -73,6 +74,11 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return { ...state, library: { ...state.library, query: action.query, selectedIndex: 0, scroll: 0 } };
     case "setLibraryInputFocus":
       return { ...state, library: { ...state.library, inputFocused: action.focused } };
+    case "setLibrarySelection":
+      return {
+        ...state,
+        library: { ...state.library, selectedIndex: clampIndex(action.index, action.resultCount) },
+      };
     case "setDownloaderInput":
       return { ...state, downloader: { ...state.downloader, urlInput: action.value } };
     case "setDownloaderInputFocus":

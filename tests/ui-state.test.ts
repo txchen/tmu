@@ -31,4 +31,12 @@ describe("top-level tab UI state", () => {
       downloader: { urlInput: "", inputFocused: true },
     });
   });
+
+  test("moves Library selection only within the local result list", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, { type: "setLibrarySelection", index: 4, resultCount: 3 });
+    expect(state.library.selectedIndex).toBe(2);
+    state = reduceUiState(state, { type: "setLibrarySelection", index: -1, resultCount: 3 });
+    expect(state.library.selectedIndex).toBe(0);
+  });
 });

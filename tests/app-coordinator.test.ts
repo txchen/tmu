@@ -59,4 +59,48 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
     expect(player.loaded).toEqual([{ kind: "file", path: "/cache/cached-track.opus" }]);
   });
+
+  test("Add to Queue appends once without moving Current or starting playback", async () => {
+    const { coordinator, player } = harness();
+    const later: Track = {
+      identity: { providerId: "youtube-cache", stableId: "later-track" },
+      title: "Later Track",
+      providerLabel: "YouTube Cache",
+    };
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+    const loadsAfterPlayNow = player.loaded.length;
+
+    await coordinator.dispatch({ type: "addToQueue", target: later });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["cached-track", "later-track"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(player.loaded).toHaveLength(loadsAfterPlayNow);
+  });
+
+  test("Library Play Next moves an existing Track literally after Current without playing it", async () => {
+    const { coordinator, player } = harness();
+    const later: Track = {
+      identity: { providerId: "youtube-cache", stableId: "later-track" },
+      title: "Later Track",
+      providerLabel: "YouTube Cache",
+    };
+    const last: Track = {
+      identity: { providerId: "youtube-cache", stableId: "last-track" },
+      title: "Last Track",
+      providerLabel: "YouTube Cache",
+    };
+    await coordinator.dispatch({ type: "addToQueue", target: later });
+    await coordinator.dispatch({ type: "addToQueue", target: last });
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+    const loadsAfterPlayNow = player.loaded.length;
+
+    await coordinator.dispatch({ type: "playNext", target: last });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["cached-track", "last-track", "later-track"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(player.loaded).toHaveLength(loadsAfterPlayNow);
+  });
 });

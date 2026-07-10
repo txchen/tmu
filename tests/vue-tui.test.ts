@@ -77,6 +77,22 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Clear Queue permanently?");
     await terminal.stdin.write("y");
     expect(coordinator.appState.queue.entries).toEqual([]);
+
+    await terminal.stdin.write("2");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("a");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["first"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("N");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["second", "first"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
   });
 });
 
