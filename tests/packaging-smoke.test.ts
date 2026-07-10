@@ -40,7 +40,10 @@ describe("Bun npm executable", () => {
       });
       expect(await installed.exited).toBe(0);
 
-      await expectTmuExecutable([join(installDir, "bin", "tmu")], isolatedRuntimeEnv(root, installDir));
+      await expectTmuExecutable(["tmu"], {
+        ...isolatedRuntimeEnv(root, installDir),
+        PATH: `${join(installDir, "bin")}:${process.env.PATH ?? ""}`,
+      });
       await expectTmuExecutable(["bunx", "--package", tarball, "tmu"], isolatedRuntimeEnv(root, installDir));
     } finally {
       await rm(root, { recursive: true, force: true });

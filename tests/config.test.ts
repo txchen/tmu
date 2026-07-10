@@ -34,6 +34,7 @@ describe("TMU config", () => {
     expect(loaded.config.persistence.appPreferencesPath).toContain("preferences.json");
     expect(loaded.config.lowPower).toEqual({
       playbackTickMs: 1000,
+      playbackProgressMs: null,
       downloadProgressThrottleMs: 1000,
       providerProgressThrottleMs: 1000,
     });

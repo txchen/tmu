@@ -380,7 +380,7 @@ describe("root input router", () => {
     expect(resolutions).toBe(3);
   });
 
-  test("omits superseded source-rail bindings from the production registry", async () => {
+  test("omits superseded Provider navigation bindings from the production registry", async () => {
     const current = context();
     current.uiState.activeTargetId = "local";
     current.uiState.focusedPane = "content";
@@ -408,7 +408,7 @@ describe("root input router", () => {
     expect(createActionRegistry().some((action) => action.id.includes("legacy"))).toBe(false);
   });
 
-  test("does not retain source-rail fallback routing beside the action registry", async () => {
+  test("does not retain fallback routing beside the action registry", async () => {
     const current = context();
     current.uiState.activeTargetId = "navidrome";
     const ui = new UiStateStore(current.uiState);

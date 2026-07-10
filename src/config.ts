@@ -33,6 +33,7 @@ export type TmuConfig = {
   };
   lowPower: {
     playbackTickMs: number;
+    playbackProgressMs: number | null;
     downloadProgressThrottleMs: number;
     providerProgressThrottleMs: number;
   };
@@ -109,6 +110,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     },
     lowPower: {
       playbackTickMs: 1000,
+      playbackProgressMs: null,
       downloadProgressThrottleMs: 1000,
       providerProgressThrottleMs: 1000,
     },

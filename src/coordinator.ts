@@ -6,7 +6,6 @@ import {
   sameIdentity,
   uniqueTracksByIdentity,
   type AppIntent,
-  type LegacyAppIntent,
   type AppState,
   type LastQueueSnapshot,
   type Player,
@@ -157,7 +156,7 @@ export class AppCoordinator {
     this.notifyStateChanged();
   }
 
-  async dispatch(intent: AppIntent | LegacyAppIntent): Promise<void> {
+  async dispatch(intent: AppIntent): Promise<void> {
     const beforeSnapshot = this.snapshotFingerprint();
     try {
       switch (intent.type) {
@@ -203,112 +202,16 @@ export class AppCoordinator {
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
           return;
-        case "selectNavigationTarget":
-          await this.selectNavigationTarget(intent.targetId);
-          return;
-        case "moveSelection":
-          await this.moveSelection(intent.delta);
-          return;
-        case "activateSelectedContent":
-          await this.activateSelectedContent();
-          return;
-        case "cycleFocus":
-          this.cycleFocus();
-          return;
-        case "enqueueSelectedTrack":
-          await this.enqueueSelectedTrack();
-          return;
-        case "refreshNavidromeLibrary":
-          if (this.uiState.activeTargetId !== "navidrome") return;
-          await this.refreshNavidromeLibrary();
-          return;
-        case "openNavidromeSearchPrompt":
-          this.openNavidromeSearchPrompt();
-          return;
-        case "searchNavidromeTracks":
-          await this.searchNavidromeTracks(intent.query);
-          return;
-        case "openLocalPathPrompt":
-          await this.openLocalPathPrompt();
-          return;
-        case "setPromptInput":
-          this.setPromptInput(intent.value);
-          return;
-        case "submitPrompt":
-          await this.submitPrompt();
-          return;
-        case "cancelPrompt":
-          this.cancelPrompt();
-          return;
-        case "cancelLocalOpen":
-          this.cancelLocalOpen();
-          return;
-        case "cancelYouTubeDownload":
-          this.cancelYouTubeDownload();
-          return;
-        case "openLocalPath":
-          await this.openLocalPath(intent.path, intent.signal);
-          return;
-        case "startSelectedQueueEntry":
-          await this.startSelectedQueueEntry();
-          return;
-        case "removeSelectedQueueEntry":
-          await this.removeSelectedQueueEntry();
-          return;
-        case "moveSelectedQueueEntry":
-          this.moveSelectedQueueEntry(intent.delta);
-          return;
         case "clearQueue":
           await this.clearQueue();
-          return;
-        case "nextTrack":
-          await this.nextTrack();
-          return;
-        case "previousTrack":
-          await this.previousTrack();
-          return;
-        case "toggleShuffle":
-          await this.toggleShuffle();
-          return;
-        case "toggleRepeatAll":
-          await this.toggleRepeatAll();
-          return;
-        case "setVolume":
-          await this.setVolume(intent.percent, intent.ready);
-          return;
-        case "adjustVolume":
-          await this.setVolume((this.appState.volume.ready ? this.appState.volume.percent : 100) + intent.delta, true);
-          return;
-        case "seekBy":
-          await this.seekBy(intent.seconds);
-          return;
-        case "saveLastQueueSnapshot":
-          await this.saveLastQueueSnapshot({ announce: true });
-          return;
-        case "restoreLastQueueSnapshot":
-          await this.restoreLastQueueSnapshot();
-          return;
-        case "togglePlayPause":
-          await this.togglePlayPause();
-          return;
-        case "stop":
-          if (this.blockPlaybackActionIfUnavailable()) return;
-          await this.stopAndRetainCurrentTrack("stopped");
-          return;
-        case "quit":
-          this.appState.lastEvent = "quit requested";
-          await this.teardown();
           return;
       }
     } finally {
       this.notifyStateChanged();
-      const persistenceIntent = intent.type === "saveLastQueueSnapshot"
-        || intent.type === "restoreLastQueueSnapshot"
-        || intent.type === "persistenceOperation"
-        || intent.type === "quit";
-      const forceSave = intent.type === "togglePlayPause"
-        || intent.type === "stop"
-        || (intent.type === "playerOperation" && ["toggle-play-pause", "stop"].includes(intent.operation));
+      const persistenceIntent = intent.type === "persistenceOperation"
+        || (intent.type === "playerOperation" && intent.operation === "quit");
+      const forceSave = intent.type === "playerOperation"
+        && ["toggle-play-pause", "stop"].includes(intent.operation);
       if (!this.tornDown && !persistenceIntent) {
         const meaningful = beforeSnapshot !== this.snapshotFingerprint();
         if (meaningful || forceSave) await this.saveLastQueueSnapshot({ meaningful });
