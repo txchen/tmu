@@ -370,8 +370,8 @@ function selectedQueueTrack(context: ActionContext): Track | null {
 
 function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
-  const overlayTarget = selectedOverlayTarget(context);
-  if (overlayTarget) return overlayTarget;
+  const overlay = context.uiState.overlays.at(-1);
+  if (overlay?.focus === "results") return overlay.selectedPlayableTarget ?? null;
   const providerId = context.uiState.activeTargetId;
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
