@@ -1,4 +1,4 @@
-import { AppCoordinator, LegacyTuiController } from "./coordinator";
+import { AppCoordinator, LegacyTuiAdapter } from "./coordinator";
 import {
   checkDependencyHealth,
   checkHelperDependencyHealth,
@@ -42,7 +42,7 @@ export type TmuRuntimeOptions = {
 };
 
 export function createTmuApp(options: TmuAppOptions = {}): {
-  coordinator: LegacyTuiController;
+  coordinator: LegacyTuiAdapter;
   appCoordinator: AppCoordinator;
 } {
   const config = createDefaultTmuConfig(options.config);
@@ -62,7 +62,7 @@ export function createTmuApp(options: TmuAppOptions = {}): {
     },
     offlineYouTubeCache: config.offlineYouTubeCache,
   });
-  const coordinator = new LegacyTuiController({
+  const coordinator = new LegacyTuiAdapter({
     appState: createInitialAppState(providers, {
       config,
       configPath: options.configPath,
@@ -83,7 +83,7 @@ export function createTmuApp(options: TmuAppOptions = {}): {
 }
 
 export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise<{
-  coordinator: LegacyTuiController;
+  coordinator: LegacyTuiAdapter;
   appCoordinator: AppCoordinator;
   config: TmuConfig;
 }> {

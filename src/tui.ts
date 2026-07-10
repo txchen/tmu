@@ -5,12 +5,13 @@ import {
   type NavigationTargetId,
   type UiState,
 } from "./domain";
-import { RootInputRouter, createActionRegistry } from "./action-registry";
+import { createActionRegistry } from "./action-registry";
+import { RootInputRouter } from "./input-router";
 import { renderPlaybackProgressLine, renderShellText } from "./renderer";
-import { AppCoordinator, type AppStateChangeReason, type LegacyTuiController } from "./coordinator";
+import { AppCoordinator, type AppStateChangeReason, type LegacyTuiAdapter } from "./coordinator";
 
 export type RuntimeApp = {
-  coordinator: LegacyTuiController;
+  coordinator: LegacyTuiAdapter;
   appCoordinator?: AppCoordinator;
 };
 

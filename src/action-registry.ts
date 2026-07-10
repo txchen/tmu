@@ -6,7 +6,7 @@ import {
   type Track,
   type UiState,
 } from "./domain";
-import type { UiStateAction } from "./ui-state";
+import { isNavidromeProvider } from "./navidrome";
 
 export type ActionContext = {
   readonly appState: Readonly<AppState>;
@@ -88,32 +88,20 @@ export function createActionRegistry(): ActionRegistry {
       bindings: [{ key: "K", label: "K" }],
       createIntent: (track) => ({ type: "moveQueueTrack", identity: track.identity, delta: -1 }),
     }),
-    {
+    providerTargetAction({
       id: "provider.play-next",
       name: "Play Next",
       aliases: ["queue next", "add next"],
-      bindings: [{ key: "\r", label: "Enter" }],
-      applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
-      enabled: (context) => selectedProviderTarget(context) !== null,
-      disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
-      createIntent: (context) => {
-        const target = selectedProviderTarget(context);
-        return target ? { type: "playNext", target } : null;
-      },
-    },
-    {
+      bindings: [{ key: "\r", label: "Enter" }, { key: "a", label: "a" }],
+      createIntent: (target) => ({ type: "playNext", target }),
+    }),
+    providerTargetAction({
       id: "provider.play-now",
       name: "Play Now",
       aliases: ["play immediately"],
       bindings: [{ key: "\x1b[13;2u", label: "Shift+Enter" }],
-      applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
-      enabled: (context) => selectedProviderTarget(context) !== null,
-      disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
-      createIntent: (context) => {
-        const target = selectedProviderTarget(context);
-        return target ? { type: "playNow", target } : null;
-      },
-    },
+      createIntent: (target) => ({ type: "playNow", target }),
+    }),
     {
       id: "provider.refresh",
       name: "Refresh Provider",
@@ -128,6 +116,9 @@ export function createActionRegistry(): ActionRegistry {
         operation: "refresh",
       }),
     },
+    boundAction("provider.cancel-open", "Cancel Local Open", ["cancel open"], [
+      { key: "\x1b", label: "Esc" },
+    ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
     simpleAction("player.toggle-play-pause", "Play / Pause / Resume", ["play", "pause", "resume"], " ", "Space", {
       type: "playerOperation", operation: "toggle-play-pause",
     }),
@@ -190,124 +181,6 @@ export function actionForBinding(
   return action ? resolveAction(action, context) : null;
 }
 
-export type RootInputRouterOptions = {
-  registry: ActionRegistry;
-  appState: () => Readonly<AppState>;
-  uiState: {
-    readonly snapshot: Readonly<UiState>;
-    dispatch(action: UiStateAction): Readonly<UiState>;
-  };
-  dispatchApp: (intent: AppIntent) => Promise<void> | void;
-  now?: () => number;
-  timers?: {
-    setTimeout(callback: () => void, delayMs: number): unknown;
-    clearTimeout(timer: unknown): void;
-  };
-};
-
-export class RootInputRouter {
-  private readonly registry: ActionRegistry;
-  private readonly appState: () => Readonly<AppState>;
-  private readonly uiState: RootInputRouterOptions["uiState"];
-  private readonly dispatchApp: (intent: AppIntent) => Promise<void> | void;
-  private readonly now: () => number;
-  private readonly timers: NonNullable<RootInputRouterOptions["timers"]>;
-  private pendingChordTimer: unknown | null = null;
-
-  constructor(options: RootInputRouterOptions) {
-    this.registry = options.registry;
-    this.appState = options.appState;
-    this.uiState = options.uiState;
-    this.dispatchApp = options.dispatchApp;
-    this.now = options.now ?? Date.now;
-    this.timers = options.timers ?? {
-      setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
-      clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-    };
-  }
-
-  async route(key: string): Promise<boolean> {
-    if (key === "\u0003") {
-      await this.dispatchBinding(key);
-      return true;
-    }
-
-    const overlay = this.uiState.snapshot.overlays.at(-1);
-    if (overlay && isTextEntryFocus(overlay.focus)) {
-      if (key === "\x1b") {
-        this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
-      } else if (key === "\x7f" || key === "\b") {
-        this.uiState.dispatch({ type: "setQuery", query: overlay.query.slice(0, -1) });
-      } else if (isPrintableKey(key)) {
-        this.uiState.dispatch({ type: "setQuery", query: `${overlay.query}${key}` });
-      }
-      return true;
-    }
-
-    if (overlay && (key === "\x1b" || key === "q")) {
-      this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
-      return true;
-    }
-    if (overlay) return true;
-
-    if (this.uiState.snapshot.activePrompt) {
-      const query = this.uiState.snapshot.promptInput;
-      if (key === "\r") {
-        await this.dispatchBinding(key);
-        this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-      } else if (key === "\x1b") this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-      else if (key === "\x7f" || key === "\b") this.uiState.dispatch({ type: "setQuery", query: query.slice(0, -1) });
-      else if (isPrintableKey(key)) this.uiState.dispatch({ type: "setQuery", query: `${query}${key}` });
-      return true;
-    }
-
-    const identities = queueIdentities(this.appState());
-    if (key === "g") {
-      const completing = Boolean(this.uiState.snapshot.pendingVimChord
-        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
-      this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities });
-      this.clearPendingChordTimer();
-      if (!completing) {
-        this.pendingChordTimer = this.timers.setTimeout(() => {
-          this.pendingChordTimer = null;
-          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
-        }, 751);
-      }
-      return true;
-    }
-    if (this.uiState.snapshot.pendingVimChord) {
-      this.clearPendingChordTimer();
-      this.uiState.dispatch({ type: "cancelVimChord" });
-    }
-
-    const context = { appState: this.appState(), uiState: this.uiState.snapshot };
-    const action = actionForBinding(this.registry, key, context);
-    if (!action) return false;
-    if (!action.enabled || !action.intent) return true;
-    await this.dispatchApp(action.intent);
-    return true;
-  }
-
-  cancelPendingSequence(): void {
-    this.clearPendingChordTimer();
-    if (this.uiState.snapshot.pendingVimChord) this.uiState.dispatch({ type: "cancelVimChord" });
-  }
-
-  private async dispatchBinding(key: string): Promise<void> {
-    const action = actionForBinding(this.registry, key, {
-      appState: this.appState(),
-      uiState: this.uiState.snapshot,
-    });
-    if (action?.enabled && action.intent) await this.dispatchApp(action.intent);
-  }
-
-  private clearPendingChordTimer(): void {
-    if (this.pendingChordTimer === null) return;
-    this.timers.clearTimeout(this.pendingChordTimer);
-    this.pendingChordTimer = null;
-  }
-}
-
 function promptAction(
   id: string,
   name: string,
@@ -341,6 +214,25 @@ function queueTrackAction(options: {
     createIntent: (context) => {
       const track = selectedQueueTrack(context);
       return track ? options.createIntent(track) : null;
+    },
+  };
+}
+
+function providerTargetAction(options: {
+  id: string;
+  name: string;
+  aliases: readonly string[];
+  bindings: readonly ActionBinding[];
+  createIntent: (target: PlayableTarget) => AppIntent;
+}): ActionDefinition {
+  return {
+    ...options,
+    applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
+    enabled: (context) => selectedProviderTarget(context) !== null,
+    disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
+    createIntent: (context) => {
+      const target = selectedProviderTarget(context);
+      return target ? options.createIntent(target) : null;
     },
   };
 }
@@ -401,17 +293,13 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   const providerId = context.uiState.activeTargetId;
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
+  if (isNavidromeProvider(provider)) {
+    const entries = provider.getLibraryBrowserEntries(context.uiState.providerLocation);
+    const entry = entries[context.uiState.selectedContentIndexByTarget.navidrome ?? 0];
+    if (!entry) return null;
+    return provider.trackForLibraryBrowserEntry(entry)
+      ?? provider.musicCollectionForLibraryBrowserEntry?.(entry)
+      ?? null;
+  }
   return provider.listVisibleTracks()[context.uiState.selectedContentIndexByTarget[providerId] ?? 0] ?? null;
-}
-
-function queueIdentities(appState: Readonly<AppState>) {
-  return appState.queue.entries.map((entry) => entry.track.identity);
-}
-
-function isTextEntryFocus(focus: UiState["overlays"][number]["focus"]): boolean {
-  return focus === "search" || focus === "filter" || focus === "input";
-}
-
-function isPrintableKey(key: string): boolean {
-  return key.length === 1 && key >= " " && key !== "\x7f";
 }
