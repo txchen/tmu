@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun src/main.ts",
+    "prototype:tui-experience": "bun src/prototypes/tui-experience/app.ts",
     "build:linux-x64": "bun build --compile --target=bun-linux-x64-baseline --outfile=dist/tmu-linux-x64 src/main.ts",
     "smoke:linux-x64": "bun run build:linux-x64 && bun scripts/smoke-linux-x64.ts dist/tmu-linux-x64",
     "test": "bun test",

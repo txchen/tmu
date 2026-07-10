@@ -144,6 +144,10 @@ _Avoid_: unconfirmed clear, automatic advance after clear
 The Queue action that visibly randomizes only Tracks after the Current Track, preserving listening history and the Current Track. Playback follows that visible order, Play Next remains literally next, disabling Shuffle keeps the current order, and a repeated cycle reshuffles the upcoming portion.
 _Avoid_: hidden random playback order, reshuffling listening history
 
+**Next Track**:
+The playback action that starts the next playable Track in visible Queue order, skipping unavailable Tracks without removing them. Repeat All wraps through that visible order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Queue.
+_Avoid_: clearing Current Track at Queue end, silently removing unavailable Tracks
+
 **Previous Track**:
 The playback action that restarts the Current Track when playback is more than five seconds in; at five seconds or less it starts the preceding visible Queue Track. At the Queue head it restarts Current rather than clearing it.
 _Avoid_: always changing Queue rows, clearing Current at Queue head
