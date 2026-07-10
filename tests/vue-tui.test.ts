@@ -125,7 +125,7 @@ describe("production vue-tui", () => {
     const { coordinator, player } = await productionHarness();
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
 
-    expect(terminal.lastFrame()).toContain("Queue Home · wide");
+    expect(terminal.lastFrame()).toContain("Queue · 1 Tracks");
     expect(terminal.lastFrame()).toContain("Restored Track");
     expect(terminal.lastFrame()).toContain("Restored · Resume from 0:37");
     expect(player.toggles).toBe(0);
@@ -168,6 +168,7 @@ describe("production vue-tui", () => {
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 130, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("Queue · 2 Tracks");
+    expect(terminal.lastFrame()).not.toContain("Queue Home · wide");
     expect(terminal.lastFrame()).toContain("Test Artist");
     expect(terminal.lastFrame()).toContain("Test Album");
     expect(terminal.lastFrame()).toContain("Test");
@@ -185,7 +186,7 @@ describe("production vue-tui", () => {
 
     await terminal.terminal.resize(59, 24);
     await terminal.waitUntilRenderFlush();
-    expect(terminal.lastFrame()).toContain("Terminal too small · need 60×16");
+    expect(terminal.lastFrame()).toContain("Need 60×16 · state preserved");
     expect(terminal.lastFrame()).not.toContain("Picker Overlay");
     await terminal.stdin.write("j ");
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(restoredTrack.identity);
@@ -222,6 +223,10 @@ describe("production vue-tui", () => {
     expect(emptyTerminal.lastFrame()).toContain("/ Global Search");
     expect(emptyTerminal.lastFrame()).toContain("o Local music");
     expect(emptyTerminal.lastFrame()).toContain("u YouTube URL Download");
+    expect(emptyTerminal.lastFrame()).not.toContain("Enter Play Next");
+    expect(emptyTerminal.lastFrame()).not.toContain("x Remove");
+    await emptyTerminal.stdin.write("u");
+    expect(emptyTerminal.lastFrame()).toContain("Picker Overlay · youtube-url");
     emptyTerminal.unmount();
 
     const { coordinator } = await productionHarness();
@@ -271,6 +276,30 @@ describe("production vue-tui", () => {
     expect(terminal.lastFrame()).toContain("g… Go to first");
     await terminal.stdin.write("g");
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[0]?.identity);
+  });
+
+  test("shows recovery for a selected unavailable narrow row without displacing the footer", async () => {
+    const { coordinator } = await productionHarness({ tracks: [restoredTrack, secondTrack] });
+    const unavailable = coordinator.appState.queue.entries[1];
+    if (unavailable) unavailable.availability = { status: "unavailable", reason: "Navidrome sign-in expired" };
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 70, rows: 16 });
+
+    await terminal.stdin.write("j");
+    const frame = terminal.lastFrame() ?? "";
+    expect(frame).toContain("Navidrome sign-in expired · Retry");
+    expect(frame).toContain("? Help");
+    expect(frame.split("\n").at(-1)).toContain("? Help");
+  });
+
+  test("routes footer discovery keys through the shared registry and root router", async () => {
+    const { coordinator } = await productionHarness();
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 20 });
+
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Picker Overlay · shortcut-help");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write(":");
+    expect(terminal.lastFrame()).toContain("Picker Overlay · command-palette");
   });
 
   test("keeps a one-row footer with discovery routes at every supported tier", async () => {

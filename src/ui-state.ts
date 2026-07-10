@@ -64,6 +64,11 @@ export function responsiveTier(columns: number, rows: number): ResponsiveTier {
   return "narrow";
 }
 
+export function queueHomeVisibleRows(tier: ResponsiveTier, rows: number, hasExceptionalLine = false): number {
+  const reservedRows = tier === "narrow" ? 4 + Number(hasExceptionalLine) : 3;
+  return Math.max(1, rows - reservedRows);
+}
+
 export function createInitialUiState(options: InitialUiStateOptions = {}): UiState {
   const selectedContentIndexByTarget = Object.fromEntries(
     NAVIGATION_TARGETS.map((target) => [target.id, 0]),

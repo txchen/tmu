@@ -1,12 +1,18 @@
-import { actionForBinding, type ActionRegistry } from "./action-registry";
+import {
+  actionForBinding,
+  type ActionIntent,
+  type ActionRegistry,
+  type UiActionIntent,
+} from "./action-registry";
 import {
   NAVIGATION_TARGETS,
+  sameIdentity,
   type AppIntent,
   type AppState,
   type LegacyAppIntent,
   type UiState,
 } from "./domain";
-import type { UiStateAction } from "./ui-state";
+import { queueHomeVisibleRows, type UiStateAction } from "./ui-state";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -102,7 +108,7 @@ export class RootInputRouter {
       if (key === "\x1b") return true;
     }
 
-    const visibleRows = visibleQueueRows(this.uiState.snapshot);
+    const visibleRows = visibleQueueRows(this.uiState.snapshot, this.appState());
     const queueFocused = this.uiState.snapshot.focusedPane === "queue"
       && this.uiState.snapshot.activeTargetId === "queue";
     const movement = queueFocused ? queueMovementForKey(key, visibleRows) : null;
@@ -138,7 +144,7 @@ export class RootInputRouter {
       return this.registry.some((definition) => definition.bindings.some((binding) => binding.key === key));
     }
     if (!action.enabled || !action.intent) return true;
-    await this.dispatchApp(action.intent);
+    await this.dispatchIntent(action.intent);
     this.syncQueueSelection();
     return true;
   }
@@ -154,9 +160,17 @@ export class RootInputRouter {
       uiState: this.uiState.snapshot,
     });
     if (action?.enabled && action.intent) {
-      await this.dispatchApp(action.intent);
+      await this.dispatchIntent(action.intent);
       this.syncQueueSelection();
     }
+  }
+
+  private async dispatchIntent(intent: ActionIntent): Promise<void> {
+    if (intent.type === "openOverlay") {
+      this.uiState.dispatch({ type: "openOverlay", overlay: overlayForIntent(intent) });
+      return;
+    }
+    await this.dispatchApp(intent);
   }
 
   private syncQueueSelection(): void {
@@ -196,9 +210,24 @@ function isPrintableKey(key: string): boolean {
   return key.length === 1 && key >= " " && key !== "\x7f";
 }
 
-function visibleQueueRows(uiState: Readonly<UiState>): number {
-  const reservedRows = uiState.terminal.tier === "narrow" ? 4 : 3;
-  return Math.max(1, uiState.terminal.rows - reservedRows);
+function overlayForIntent(intent: UiActionIntent) {
+  return {
+    kind: intent.kind,
+    focus: intent.focus,
+    query: "",
+    selectedIdentity: null,
+    scroll: 0,
+  } as const;
+}
+
+function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppState>): number {
+  const selected = appState.queue.entries.find((entry) =>
+    sameIdentity(entry.track.identity, uiState.selectedQueueIdentity));
+  return queueHomeVisibleRows(
+    uiState.terminal.tier,
+    uiState.terminal.rows,
+    selected?.availability.status === "unavailable",
+  );
 }
 
 function queueMovementForKey(key: string, visibleRows: number):

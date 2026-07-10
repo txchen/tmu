@@ -44,7 +44,7 @@ describe("production tmu real PTY", () => {
     const { terminal, subprocess } = spawnTmu((text) => { output += text; }, ["/music/must-not-seed.flac"]);
 
     try {
-      await waitForOutput(read, "Queue Home · wide");
+      await waitForOutput(read, "Queue · 0 Tracks");
       await Bun.sleep(100);
       const idleBytes = output.length;
       await Bun.sleep(150);
@@ -59,22 +59,22 @@ describe("production tmu real PTY", () => {
       terminal.resize(70, 24);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Queue Home · narrow");
+      await waitForNewOutput(read, nextFrame, "Current: No Current Track");
       nextFrame = output.length;
       terminal.resize(50, 14);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Queue Home · terminal-too-small");
+      await waitForNewOutput(read, nextFrame, "Terminal too small");
       nextFrame = output.length;
       terminal.resize(130, 30);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Queue Home · wide");
+      await waitForNewOutput(read, nextFrame, "Playing Track");
       expect(output.slice(nextFrame)).toContain("Picker Overlay · music-picker");
 
       nextFrame = output.length;
       terminal.write("q");
-      await waitForNewOutput(read, nextFrame, "Queue Home · wide");
+      await waitForNewOutput(read, nextFrame, "Playing Track");
       expect(output.slice(nextFrame)).not.toContain("Picker Overlay · music-picker");
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
@@ -107,7 +107,7 @@ describe("production tmu real PTY", () => {
       const { terminal, subprocess } = spawnTmu((text) => { output += text; });
 
       try {
-        await waitForOutput(read, "Queue Home · wide");
+        await waitForOutput(read, "Queue · 0 Tracks");
         subprocess.kill(signal);
         expect(await subprocess.exited).toBe(exitCode);
         await waitForOutput(read, "\x1b[?1049l");

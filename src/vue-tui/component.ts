@@ -1,9 +1,15 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
-import { createActionRegistry } from "../action-registry";
+import {
+  createActionRegistry,
+  footerActions,
+  type ActionRegistry,
+  type ResolvedAction,
+} from "../action-registry";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
 import { sameIdentity, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
 import { RootInputRouter } from "../input-router";
+import { queueHomeVisibleRows } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
 import {
   StatePublicationGate,
@@ -19,6 +25,7 @@ export type TmuRootOptions = {
 
 export function createTmuRoot(options: TmuRootOptions) {
   const presentation = createPresentation(options);
+  const registry = createActionRegistry();
   return defineComponent({
     name: "TmuRoot",
     setup() {
@@ -52,7 +59,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
 
       const router = new RootInputRouter({
-        registry: createActionRegistry(),
+        registry,
         appState: () => coordinator.appState,
         uiState: {
           get snapshot() {
@@ -84,19 +91,6 @@ export function createTmuRoot(options: TmuRootOptions) {
           return;
         }
         const hadOverlay = coordinator.uiState.overlays.length > 0;
-        if (!hadOverlay && (key === "o" || key === "/" || key === "?" || key === ":")) {
-          coordinator.dispatchUi({
-            type: "openOverlay",
-            overlay: key === "?"
-              ? simpleOverlay("shortcut-help")
-              : key === ":"
-                ? simpleOverlay("command-palette")
-                : pickerOverlay(key === "/"),
-          });
-          publication.notify("input");
-          return;
-        }
-
         await router.route(key);
         publication.notify("input");
         if (key === "\u0003" || (key === "q" && !hadOverlay)) app.exit();
@@ -109,7 +103,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.stop();
       });
 
-      return () => renderTmu(snapshot.value, presentation);
+      return () => renderTmu(snapshot.value, presentation, registry);
     },
   });
 }
@@ -130,7 +124,7 @@ function createPresentation(options: TmuRootOptions): Presentation {
   };
 }
 
-function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation) {
+function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, registry: ActionRegistry) {
   const { appState, uiState } = snapshot;
   const tier = uiState.terminal.tier;
   const current = appState.queue.entries[appState.queue.currentIndex];
@@ -138,26 +132,35 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation) {
 
   if (tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
-      h(Text, { bold: true }, () => "Queue Home · terminal-too-small"),
-      h(Text, () => "Terminal too small · need 60×16 · resize to continue"),
+      h(Text, { bold: true }, () => "Terminal too small"),
+      h(Text, () => "Need 60×16 · state preserved · resize to continue"),
     ]);
   }
 
   const settings = queueSettings(appState.queue.shuffle, appState.queue.repeatAll, appState.volume);
   const queueWidth = queuePaneWidth(tier, uiState.terminal.columns);
-  const visibleRows = Math.max(1, uiState.terminal.rows - (tier === "narrow" ? 4 : 3));
+  const selectedEntry = appState.queue.entries.find((entry) => sameIdentity(entry.track.identity, uiState.selectedQueueIdentity));
+  const exceptionalGuidance = selectedEntry?.availability.status === "unavailable"
+    ? `${selectedEntry.availability.reason} · Retry`
+    : "";
+  const visibleRows = queueHomeVisibleRows(tier, uiState.terminal.rows, exceptionalGuidance.length > 0);
   const start = Math.min(uiState.scrollByPane.queue, Math.max(0, appState.queue.entries.length - visibleRows));
   const entries = appState.queue.entries.slice(start, start + visibleRows);
   const currentState = playingTrackState(current, appState.playback);
-  const footer = footerText(tier, uiState.pendingVimChord !== null, uiState.terminal.columns);
+  const footer = footerText(
+    tier,
+    uiState.pendingVimChord !== null,
+    uiState.terminal.columns,
+    footerActions(registry, { appState, uiState }),
+  );
 
   return h(Box, { flexDirection: "column", width: "100%", height: "100%" }, () => [
     h(Box, { flexDirection: "row", justifyContent: "space-between", width: "100%" }, () => [
       h(Text, { bold: true, wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
-      h(Text, { dimColor: true, wrap: "truncate-start" }, () => `Queue Home · ${tier}${tier === "narrow" ? "" : `  ${settings}`}`),
+      tier === "narrow" ? null : h(Text, { dimColor: true, wrap: "truncate-start" }, () => settings),
     ]),
     tier === "narrow"
-      ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, settings, start)
+      ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, settings, start, exceptionalGuidance)
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay) : null,
@@ -199,13 +202,14 @@ function narrowContent(
   presentation: Presentation,
   settings: string,
   start: number,
+  exceptionalGuidance: string,
 ) {
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
     h(Text, { bold: true, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => current
       ? `Current: ${current.track.title} · ${state.shortLabel} · ${settings}`
       : `Current: No Current Track · ${settings}`),
     queuePane(entries, currentIndex, uiState, queueWidth, presentation, "narrow", start),
-    state.kind === "unavailable" ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => `${state.guidance} · Retry`) : null,
+    exceptionalGuidance ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => exceptionalGuidance) : null,
   ]);
 }
 
@@ -317,14 +321,28 @@ function queueSettings(shuffle: boolean, repeatAll: boolean, volume: Publication
   return `Shuffle ${shuffle ? "On" : "Off"} · Repeat ${repeatAll ? "All" : "Off"} · Vol ${volume.ready ? `${volume.percent}%` : "—"}`;
 }
 
-function footerText(tier: ResponsiveTier, pendingG: boolean, columns: number): string {
+function footerText(
+  tier: ResponsiveTier,
+  pendingG: boolean,
+  columns: number,
+  actions: readonly ResolvedAction[],
+): string {
   if (pendingG) return truncateCell("g… Go to first  ? Help  : Commands", columns);
-  const text = tier === "narrow"
-    ? "Space Play/Resume  ? Help  : Commands"
+  const tierIds = tier === "narrow"
+    ? ["player.toggle-play-pause", "help.open", "palette.open"]
     : tier === "medium"
-      ? "Space Play/Pause/Resume  Enter Play Next  o Music  ? Help  : Commands"
-      : "Space Play/Pause/Resume  Enter Play Next  x Remove  o Music  ? Help  : Commands  q Quit";
-  return truncateCell(text, columns);
+      ? ["player.toggle-play-pause", "queue.play-next", "picker.open-navigation", "help.open", "palette.open"]
+      : ["player.toggle-play-pause", "queue.play-next", "queue.remove", "picker.open-navigation", "help.open", "palette.open", "app.quit"];
+  const enabled = new Map(actions.filter((action) => action.enabled).map((action) => [action.id, action]));
+  return truncateCell(tierIds.flatMap((id) => {
+    const action = enabled.get(id);
+    return action ? [formatFooterAction(action)] : [];
+  }).join("  "), columns);
+}
+
+function formatFooterAction(action: ResolvedAction): string {
+  const label = action.name.replaceAll(" / ", "/");
+  return `${action.bindings[0] ?? ""} ${label}`.trim();
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -339,20 +357,6 @@ function overlayView(overlay: PickerOverlay) {
     h(Text, () => `Focus: ${overlay.focus}`),
     h(Text, () => "Exclusive input · q/Esc dismisses"),
   ]);
-}
-
-function pickerOverlay(searchFocused: boolean): Omit<PickerOverlay, "returnTo"> {
-  return {
-    kind: "music-picker",
-    focus: searchFocused ? "search" : "results",
-    query: "",
-    selectedIdentity: null,
-    scroll: 0,
-  };
-}
-
-function simpleOverlay(kind: "shortcut-help" | "command-palette"): Omit<PickerOverlay, "returnTo"> {
-  return { kind, focus: "search", query: "", selectedIdentity: null, scroll: 0 };
 }
 
 function terminalKey(input: string, key: {
