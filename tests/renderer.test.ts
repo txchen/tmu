@@ -106,9 +106,11 @@ describe("renderShell", () => {
     queue.setShuffle(true);
     queue.setRepeatAll(true);
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
+    const uiState = createInitialUiState();
+    uiState.focusedPane = "queue";
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
-      uiState: createInitialUiState(),
+      uiState,
       queue,
       player: new NoopPlayer(),
     });
@@ -121,8 +123,6 @@ describe("renderShell", () => {
       message: "file no longer exists",
     };
     coordinator.appState.volume = { percent: 42, ready: true };
-    coordinator.uiState.focusedPane = "queue";
-
     const shell = renderShell(coordinator.appState, coordinator.uiState);
     const text = renderShellText(coordinator.appState, coordinator.uiState);
 
@@ -149,9 +149,13 @@ describe("renderShell", () => {
     queue.startAt(0);
     queue.markAvailability(playable.identity, { status: "available" });
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
+    const uiState = createInitialUiState();
+    uiState.activeTargetId = "queue";
+    uiState.focusedPane = "queue";
+    uiState.selectedQueueIndex = 1;
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
-      uiState: createInitialUiState(),
+      uiState,
       queue,
       player: new NoopPlayer(),
     });
@@ -163,10 +167,6 @@ describe("renderShell", () => {
       durationSeconds: 125,
     };
     coordinator.appState.volume = { percent: 80, ready: true };
-    coordinator.uiState.activeTargetId = "queue";
-    coordinator.uiState.focusedPane = "queue";
-    coordinator.uiState.selectedQueueIndex = 1;
-
     const shell = renderShell(coordinator.appState, coordinator.uiState);
     const text = renderShellText(coordinator.appState, coordinator.uiState);
 

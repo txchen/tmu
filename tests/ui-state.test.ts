@@ -74,7 +74,10 @@ describe("UI State reducer", () => {
     state = reduceUiState(state, { type: "setFocus", focusedPane: "queue" });
     state = reduceUiState(state, { type: "setQuery", query: "prior query" });
     state = reduceUiState(state, { type: "setFilter", filterText: "Tracks" });
-    state = reduceUiState(state, { type: "setProviderLocation", location: ["local", "albums"] });
+    state = reduceUiState(state, {
+      type: "setProviderLocation",
+      location: { providerId: "local", path: ["albums"] },
+    });
     state = reduceUiState(state, { type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta });
     state = reduceUiState(state, { type: "setScroll", pane: "queue", offset: 1 });
 
@@ -85,26 +88,32 @@ describe("UI State reducer", () => {
         focus: "search",
         query: "new query",
         filterText: "Albums",
-        providerLocation: ["navidrome", "artist:1"],
+        providerLocation: { providerId: "navidrome", path: ["artist:1"] },
         selectedIdentity: alpha,
         scroll: 8,
       },
     });
     state = reduceUiState(state, {
       type: "openOverlay",
-      overlay: { kind: "help", focus: "filter", query: "play", selectedIdentity: null, scroll: 3 },
+      overlay: { kind: "shortcut-help", focus: "filter", query: "play", selectedIdentity: null, scroll: 3 },
     });
     state = reduceUiState(state, { type: "dismissOverlay" });
     expect(state.overlays.at(-1)).toMatchObject({ kind: "music-picker", query: "new query", scroll: 8 });
 
-    state = reduceUiState(state, { type: "dismissOverlay" });
+    state = reduceUiState(state, {
+      type: "syncQueue",
+      identities: [beta, gamma],
+      preferredIdentity: gamma,
+    });
+    state = reduceUiState(state, { type: "dismissOverlay", queueIdentities: [beta, gamma] });
     expect(state.overlays).toEqual([]);
     expect(state.focusedPane).toBe("queue");
     expect(state.promptInput).toBe("prior query");
     expect(state.filterText).toBe("Tracks");
-    expect(state.providerLocation).toEqual(["local", "albums"]);
+    expect(state.providerLocation).toEqual({ providerId: "local", path: ["albums"] });
     expect(state.selectedQueueIdentity).toEqual(beta);
-    expect(state.scrollByPane.queue).toBe(1);
+    expect(state.selectedQueueIndex).toBe(0);
+    expect(state.scrollByPane.queue).toBe(0);
   });
 
   test("owns confirmation choice and requires an explicit confirmation", () => {

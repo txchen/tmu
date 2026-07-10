@@ -3,9 +3,11 @@ import {
   sameIdentity,
   type NavigationTargetId,
   type FocusedPane,
+  type ConfirmationKind,
+  type ProviderLocation,
   type ResponsiveTier,
   type TrackIdentity,
-  type UiOverlay,
+  type PickerOverlay,
   type UiState,
 } from "./domain";
 
@@ -23,14 +25,14 @@ export type UiStateAction =
     queueIdentities?: readonly TrackIdentity[];
     visibleQueueRows?: number;
   }
-  | { type: "openOverlay"; overlay: Omit<UiOverlay, "returnTo"> }
-  | { type: "dismissOverlay" }
+  | { type: "openOverlay"; overlay: Omit<PickerOverlay, "returnTo"> }
+  | { type: "dismissOverlay"; queueIdentities?: readonly TrackIdentity[] }
   | { type: "setFocus"; focusedPane: FocusedPane }
   | { type: "setQuery"; query: string }
   | { type: "setFilter"; filterText: string }
-  | { type: "setProviderLocation"; location: readonly string[] }
+  | { type: "setProviderLocation"; location: ProviderLocation }
   | { type: "setScroll"; pane: FocusedPane; offset: number }
-  | { type: "requestConfirmation"; kind: string }
+  | { type: "requestConfirmation"; kind: ConfirmationKind }
   | { type: "chooseConfirmation"; choice: "cancel" | "confirm" }
   | { type: "cancelConfirmation" }
   | { type: "pressVimG"; atMs: number; identities: readonly TrackIdentity[] }
@@ -69,7 +71,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     scrollByPane: { targets: 0, content: 0, queue: 0 },
     overlays: [],
     selectedQueueIdentity: null,
-    providerLocation: [],
+    providerLocation: { providerId: null, path: [] },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
     pendingVimChord: null,
@@ -107,7 +109,8 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
             query: state.promptInput,
             filterText: state.filterText,
             selectedQueueIdentity: state.selectedQueueIdentity,
-            providerLocation: [...state.providerLocation],
+            selectedQueueIndex: state.selectedQueueIndex,
+            providerLocation: cloneProviderLocation(state.providerLocation),
             scrollByPane: { ...state.scrollByPane },
           },
         },
@@ -120,16 +123,20 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     if (!dismissed) return state;
     const overlays = state.overlays.slice(0, -1);
     if (overlays.length > 0 || !dismissed.returnTo) return { ...state, overlays };
-    return {
+    const restored = {
       ...state,
       overlays,
       focusedPane: dismissed.returnTo.focusedPane,
       promptInput: dismissed.returnTo.query,
       filterText: dismissed.returnTo.filterText,
       selectedQueueIdentity: dismissed.returnTo.selectedQueueIdentity,
-      providerLocation: [...dismissed.returnTo.providerLocation],
+      selectedQueueIndex: dismissed.returnTo.selectedQueueIndex,
+      providerLocation: cloneProviderLocation(dismissed.returnTo.providerLocation),
       scrollByPane: { ...dismissed.returnTo.scrollByPane },
     };
+    return action.queueIdentities
+      ? repairQueueSelection(restored, action.queueIdentities, restored.selectedQueueIdentity)
+      : restored;
   }
 
   if (action.type === "setFocus") return { ...state, focusedPane: action.focusedPane };
@@ -145,8 +152,8 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
   }
 
   if (action.type === "setProviderLocation") {
-    return updateTopOverlay(state, (overlay) => ({ ...overlay, providerLocation: [...action.location] }))
-      ?? { ...state, providerLocation: [...action.location] };
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, providerLocation: cloneProviderLocation(action.location) }))
+      ?? { ...state, providerLocation: cloneProviderLocation(action.location) };
   }
 
   if (action.type === "setScroll") {
@@ -219,7 +226,7 @@ export class UiStateStore {
 
 function updateTopOverlay(
   state: UiState,
-  update: (overlay: UiOverlay) => UiOverlay,
+  update: (overlay: PickerOverlay) => PickerOverlay,
 ): UiState | null {
   if (state.overlays.length === 0) return null;
   const overlays = [...state.overlays];
@@ -227,6 +234,10 @@ function updateTopOverlay(
   if (!top) return null;
   overlays[overlays.length - 1] = update(top);
   return { ...state, overlays };
+}
+
+function cloneProviderLocation(location: ProviderLocation): ProviderLocation {
+  return { providerId: location.providerId, path: [...location.path] };
 }
 
 function repairQueueSelection(

@@ -82,11 +82,16 @@ export function renderShell(appState: AppState, uiState: UiState): RenderedShell
       title: "App Diagnostics",
       lines: appState.appErrors.slice(-5),
     },
-    footer: `last: ${appState.lastEvent}`,
+    footer: uiState.pendingVimChord
+      ? "pending: g (press g within 750 ms for first row)"
+      : `last: ${appState.lastEvent}`,
   };
 }
 
 export function renderShellText(appState: AppState, uiState: UiState): string {
+  if (uiState.terminal.tier === "terminal-too-small") {
+    return `TMU\n\nTerminal too small (${uiState.terminal.columns}x${uiState.terminal.rows}); resize to at least 60x16.`;
+  }
   const shell = renderShell(appState, uiState);
   const targetRail = shell.navigationTargets
     .map((target) => `${target.selected ? ">" : " "} ${target.label}`)
