@@ -1,6 +1,5 @@
 import {
   sameIdentity,
-  type FocusedPane,
   type ConfirmationKind,
   type ProviderLocation,
   type ResponsiveTier,
@@ -17,7 +16,6 @@ export type InitialUiStateOptions = {
 };
 
 export type UiStateAction =
-  | { type: "updateView"; patch: Partial<UiState> }
   | {
     type: "resize";
     columns: number;
@@ -29,10 +27,8 @@ export type UiStateAction =
   }
   | { type: "openOverlay"; overlay: Omit<PickerOverlay, "returnTo"> }
   | { type: "dismissOverlay"; queueIdentities?: readonly TrackIdentity[] }
-  | { type: "setFocus"; focusedPane: FocusedPane }
   | { type: "setQuery"; query: string }
   | { type: "setOverlayMessage"; message?: string }
-  | { type: "setFilter"; filterText: string }
   | { type: "setProviderLocation"; location: ProviderLocation }
   | { type: "setOverlayFocus"; focus: PickerOverlay["focus"] }
   | { type: "prepareSearchResults" }
@@ -41,7 +37,6 @@ export type UiStateAction =
   | { type: "setSearchResultTypeFilter"; resultType: "all" | import("./domain").GlobalSearchResultType }
   | { type: "moveOverlaySelection"; delta: number; rowCount: number; visibleRows: number }
   | { type: "selectOverlayBoundary"; boundary: "first" | "last"; rowCount: number; visibleRows: number }
-  | { type: "setScroll"; pane: FocusedPane; offset: number }
   | { type: "requestConfirmation"; kind: ConfirmationKind }
   | { type: "chooseConfirmation"; choice: "cancel" | "confirm" }
   | { type: "cancelConfirmation" }
@@ -92,11 +87,8 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
   const rows = options.rows ?? 30;
 
   return {
-    activeTargetId: "queue",
-    focusedPane: "queue",
     selectedQueueIndex: 0,
-    filterText: "",
-    scrollByPane: { targets: 0, content: 0, queue: 0 },
+    queueScroll: 0,
     overlays: [],
     selectedQueueIdentity: null,
     providerLocation: { providerId: null, path: [] },
@@ -138,8 +130,6 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
 
   if (state.terminal.tier === "terminal-too-small") return state;
 
-  if (action.type === "updateView") return { ...state, ...action.patch };
-
   if (action.type === "openOverlay") {
     return {
       ...state,
@@ -148,12 +138,10 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         {
           ...action.overlay,
           returnTo: {
-            focusedPane: state.focusedPane,
-            filterText: state.filterText,
             selectedQueueIdentity: state.selectedQueueIdentity,
             selectedQueueIndex: state.selectedQueueIndex,
             providerLocation: cloneProviderLocation(state.providerLocation),
-            scrollByPane: { ...state.scrollByPane },
+            queueScroll: state.queueScroll,
           },
         },
       ],
@@ -168,19 +156,15 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     const restored = {
       ...state,
       overlays,
-      focusedPane: dismissed.returnTo.focusedPane,
-      filterText: dismissed.returnTo.filterText,
       selectedQueueIdentity: dismissed.returnTo.selectedQueueIdentity,
       selectedQueueIndex: dismissed.returnTo.selectedQueueIndex,
       providerLocation: cloneProviderLocation(dismissed.returnTo.providerLocation),
-      scrollByPane: { ...dismissed.returnTo.scrollByPane },
+      queueScroll: dismissed.returnTo.queueScroll,
     };
     return action.queueIdentities
       ? repairQueueSelection(restored, action.queueIdentities, restored.selectedQueueIdentity)
       : restored;
   }
-
-  if (action.type === "setFocus") return { ...state, focusedPane: action.focusedPane };
 
   if (action.type === "setQuery") {
     return updateTopOverlay(state, (overlay) => ({
@@ -194,11 +178,6 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
 
   if (action.type === "setOverlayMessage") {
     return updateTopOverlay(state, (overlay) => ({ ...overlay, message: action.message })) ?? state;
-  }
-
-  if (action.type === "setFilter") {
-    return updateTopOverlay(state, (overlay) => ({ ...overlay, filterText: action.filterText }))
-      ?? { ...state, filterText: action.filterText };
   }
 
   if (action.type === "setProviderLocation") {
@@ -267,13 +246,6 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         scroll,
       },
     } : updated;
-  }
-
-  if (action.type === "setScroll") {
-    return {
-      ...state,
-      scrollByPane: { ...state.scrollByPane, [action.pane]: Math.max(0, action.offset) },
-    };
   }
 
   if (action.type === "requestConfirmation") {
@@ -398,7 +370,7 @@ function repairQueueSelection(
       ...state,
       selectedQueueIdentity: null,
       selectedQueueIndex: 0,
-      scrollByPane: { ...state.scrollByPane, queue: 0 },
+      queueScroll: 0,
     };
   }
 
@@ -417,7 +389,7 @@ function repairQueueSelection(
   const scroll = Math.min(
     maximumScroll,
     Math.max(
-      Math.min(state.scrollByPane.queue, selectedQueueIndex),
+      Math.min(state.queueScroll, selectedQueueIndex),
       selectedQueueIndex - pageSize + 1,
     ),
   );
@@ -426,6 +398,6 @@ function repairQueueSelection(
     ...state,
     selectedQueueIdentity,
     selectedQueueIndex,
-    scrollByPane: { ...state.scrollByPane, queue: scroll },
+    queueScroll: scroll,
   };
 }

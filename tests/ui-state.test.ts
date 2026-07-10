@@ -63,7 +63,7 @@ describe("UI State reducer", () => {
       visibleRows: 2,
     });
     expect(state.selectedQueueIndex).toBe(2);
-    expect(state.scrollByPane.queue).toBe(1);
+    expect(state.queueScroll).toBe(1);
 
     state = reduceUiState(state, {
       type: "syncQueue",
@@ -81,7 +81,7 @@ describe("UI State reducer", () => {
       visibleQueueRows: 1,
     });
     expect(state.selectedQueueIdentity).toEqual(alpha);
-    expect(state.scrollByPane.queue).toBe(1);
+    expect(state.queueScroll).toBe(1);
   });
 
   test("minimally repairs Provider navigation scroll when overlay geometry changes", () => {
@@ -105,15 +105,13 @@ describe("UI State reducer", () => {
 
   test("dismisses layered overlays and restores the exact prior Queue and Provider context", () => {
     let state = createInitialUiState();
-    state = reduceUiState(state, { type: "setFocus", focusedPane: "queue" });
-    state = reduceUiState(state, { type: "setQuery", query: "prior query" });
-    state = reduceUiState(state, { type: "setFilter", filterText: "Tracks" });
     state = reduceUiState(state, {
       type: "setProviderLocation",
       location: { providerId: "local", path: [{ kind: "album", id: "albums" }] },
     });
-    state = reduceUiState(state, { type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta });
-    state = reduceUiState(state, { type: "setScroll", pane: "queue", offset: 1 });
+    state = reduceUiState(state, {
+      type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta, visibleRows: 1,
+    });
 
     state = reduceUiState(state, {
       type: "openOverlay",
@@ -141,12 +139,10 @@ describe("UI State reducer", () => {
     });
     state = reduceUiState(state, { type: "dismissOverlay", queueIdentities: [beta, gamma] });
     expect(state.overlays).toEqual([]);
-    expect(state.focusedPane).toBe("queue");
-    expect(state.filterText).toBe("Tracks");
     expect(state.providerLocation).toEqual({ providerId: "local", path: [{ kind: "album", id: "albums" }] });
     expect(state.selectedQueueIdentity).toEqual(beta);
     expect(state.selectedQueueIndex).toBe(0);
-    expect(state.scrollByPane.queue).toBe(0);
+    expect(state.queueScroll).toBe(0);
   });
 
   test("owns confirmation choice and requires an explicit confirmation", () => {

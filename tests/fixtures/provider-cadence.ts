@@ -1,6 +1,6 @@
 import { AppCoordinator } from "../../src/coordinator";
 import { createDefaultTmuConfig } from "../../src/config";
-import type { LocalOpenResult, LocalProvider } from "../../src/providers";
+import type { LocalProvider } from "../../src/providers";
 import { runTmu } from "../../src/main";
 import { NoopPlayer } from "../../src/player";
 import { MemoryQueue } from "../../src/queue";
@@ -17,8 +17,6 @@ const provider: LocalProvider = {
   getNavigationRoot: () => ({ visible: true, order: 10, detail: "cadence fixture" }),
   listVisibleTracks: () => [visibleTrack],
   resolvePlaybackLocator: async () => ({ kind: "file", path: "/dev/null" }),
-  createTrackFromPath: async () => undefined,
-  createTracksFromOpenPath: async (): Promise<LocalOpenResult> => ({ tracks: [], capped: false, cancelled: false }),
   onTrackMetadataChange(nextListener) {
     listener = nextListener;
     return () => { listener = undefined; };

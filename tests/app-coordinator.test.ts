@@ -10,7 +10,6 @@ import {
   InMemoryLastQueueSnapshotPersistence,
   MemoryQueue,
   NoopPlayer,
-  NAVIGATION_TARGETS,
   createTmuApp,
   createDefaultDependencyHealth,
   createDefaultTmuConfig,
@@ -19,12 +18,9 @@ import {
   createDefaultProviders,
   createNavidromeProvider,
   writeOfflineYouTubeCacheMetadata,
-  navigationTargetIndex,
   type NavidromeFetcher,
   type DependencyCommandRequest,
   type DependencyCommandRunner,
-  type LocalOpenOptions,
-  type LocalOpenResult,
   type LastQueueSnapshot,
   type LastQueueSnapshotPersistence,
   type Player,
@@ -84,91 +80,6 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
     },
     async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
       return { kind: "file", path: `/resolved/${identity.providerId}/${identity.stableId}` };
-    },
-  };
-}
-
-function cancellableLocalProvider(): Provider & {
-  observedSignal: AbortSignal | null;
-  createTrackFromPath(path: string): Promise<Track | undefined>;
-  createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
-  onTrackMetadataChange(listener: (track: Track) => void): () => void;
-} {
-  return {
-    id: "local",
-    label: "Local",
-    hint: "files and folders",
-    capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
-    getNavigationRoot: () => ({ visible: true, order: 10, detail: "files and folders" }),
-    observedSignal: null,
-    listVisibleTracks() {
-      return [];
-    },
-    async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
-      return { kind: "file", path: identity.stableId };
-    },
-    async createTrackFromPath(_path: string): Promise<Track | undefined> {
-      return undefined;
-    },
-    async createTracksFromOpenPath(_path: string, options: LocalOpenOptions = {}): Promise<LocalOpenResult> {
-      this.observedSignal = options.signal ?? null;
-      if (!options.signal) return { tracks: [], capped: false, cancelled: false };
-      return await new Promise((resolve) => {
-        options.signal?.addEventListener("abort", () => {
-          resolve({ tracks: [], capped: false, cancelled: true });
-        }, { once: true });
-      });
-    },
-    onTrackMetadataChange(_listener: (track: Track) => void): () => void {
-      return () => undefined;
-    },
-  };
-}
-
-function restoringLocalProvider(
-  options: {
-    tracks?: Track[];
-    unavailableStableIds?: readonly string[];
-  } = {},
-): Provider & {
-  resolveCalls: TrackIdentity[];
-  pathCalls: string[];
-  openPathCalls: string[];
-  createTrackFromPath(path: string): Promise<Track | undefined>;
-  createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
-  onTrackMetadataChange(listener: (track: Track) => void): () => void;
-} {
-  const unavailable = new Set(options.unavailableStableIds ?? []);
-
-  return {
-    id: "local",
-    label: "Local",
-    hint: "files and folders",
-    capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
-    getNavigationRoot: () => ({ visible: true, order: 10, detail: "files and folders" }),
-    resolveCalls: [],
-    pathCalls: [],
-    openPathCalls: [],
-    listVisibleTracks() {
-      return options.tracks ?? [];
-    },
-    async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
-      this.resolveCalls.push(identity);
-      if (unavailable.has(identity.stableId)) {
-        throw new Error(`Local file no longer exists: ${identity.stableId}`);
-      }
-      return { kind: "file", path: identity.stableId };
-    },
-    async createTrackFromPath(path: string): Promise<Track | undefined> {
-      this.pathCalls.push(path);
-      return undefined;
-    },
-    async createTracksFromOpenPath(path: string): Promise<LocalOpenResult> {
-      this.openPathCalls.push(path);
-      return { tracks: [], capped: false, cancelled: false };
-    },
-    onTrackMetadataChange(_listener: (track: Track) => void): () => void {
-      return () => undefined;
     },
   };
 }
@@ -641,8 +552,6 @@ describe("AppCoordinator", () => {
     await coordinator.start();
 
     expect(coordinator.appState.queue.entries).toEqual([]);
-    expect(coordinator.uiState.focusedPane).toBe("queue");
-    expect(coordinator.uiState.activeTargetId).toBe("queue");
     expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
     expect(coordinator.appState).not.toBe(coordinator.uiState);
   });
@@ -658,9 +567,6 @@ describe("AppCoordinator", () => {
     });
 
     await first.start();
-    first.dispatchUi({ type: "updateView", patch: {
-      activeTargetId: "local", focusedPane: "content", providerLocation: { providerId: "local", path: [] },
-    } });
     await first.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
     await first.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
     await first.dispatch({ type: "playerOperation", operation: "set-volume", percent: 36, ready: true });
@@ -678,8 +584,6 @@ describe("AppCoordinator", () => {
     expect(second.appState.queue.shuffle).toBe(true);
     expect(second.appState.queue.repeatAll).toBe(true);
     expect(second.appState.volume).toEqual({ percent: 36, ready: true });
-    expect(second.uiState.activeTargetId).toBe("queue");
-    expect(second.uiState.focusedPane).toBe("queue");
     expect(second.uiState.providerLocation).toEqual({ providerId: null, path: [] });
   });
 
@@ -765,7 +669,6 @@ describe("AppCoordinator", () => {
       await coordinator.start();
 
       expect(coordinator.appState.queue.entries).toEqual([]);
-      expect(coordinator.uiState.activeTargetId).toBe("queue");
       expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
       expect(coordinator.appState.appErrors).toEqual(expect.arrayContaining([
         expect.stringContaining("Last Queue Snapshot was corrupted"),
@@ -871,8 +774,6 @@ describe("AppCoordinator", () => {
     for (const candidate of [amber, cinder, drift]) queue.enqueue(candidate);
     queue.startAt(0);
     const uiState = createInitialUiState();
-    uiState.activeTargetId = "queue";
-    uiState.focusedPane = "queue";
     uiState.selectedQueueIndex = 1;
     uiState.selectedQueueIdentity = cinder.identity;
     const coordinator = new AppCoordinator({
@@ -1127,15 +1028,6 @@ describe("AppCoordinator", () => {
     await waitFor(() => expect(snapshotPersistence.snapshot?.positionSeconds).toBe(0));
   });
 
-  test("keeps all issue-15 navigation targets as siblings", () => {
-    expect(NAVIGATION_TARGETS.map((target) => target.id)).toEqual([
-      "local",
-      "navidrome",
-      "offline-youtube-cache",
-      "youtube-url-download",
-      "queue",
-    ]);
-  });
 });
 
 function connectedNavidromeConfig(navidromeOverrides: NonNullable<TmuConfigInput["providers"]>["navidrome"] = {}): TmuConfigInput {

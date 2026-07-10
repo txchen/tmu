@@ -34,10 +34,6 @@ export function createTmuRoot(options: TmuRootOptions) {
     setup() {
       const { coordinator } = options;
       coordinator.dispatchUi({
-        type: "updateView",
-        patch: { activeTargetId: "queue", focusedPane: "queue" },
-      });
-      coordinator.dispatchUi({
         type: "syncQueue",
         identities: coordinator.queueTrackIdentities(),
         preferredIdentity: coordinator.appState.playback.currentTrackIdentity,
@@ -151,7 +147,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
     uiState.terminal.rows,
     exceptionalGuidance.length > 0 || diagnostic.length > 0,
   );
-  const start = Math.min(uiState.scrollByPane.queue, Math.max(0, appState.queue.entries.length - visibleRows));
+  const start = Math.min(uiState.queueScroll, Math.max(0, appState.queue.entries.length - visibleRows));
   const entries = appState.queue.entries.slice(start, start + visibleRows);
   const currentState = playingTrackState(current, appState.playback);
   const hasLayer = Boolean(overlay || uiState.pendingConfirmation);

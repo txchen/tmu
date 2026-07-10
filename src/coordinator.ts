@@ -1274,10 +1274,6 @@ export class AppCoordinator {
     this.appState.queue = this.queue.snapshot();
   }
 
-  private updateUiState(patch: Partial<UiState>): void {
-    this.uiStateStore.dispatch({ type: "updateView", patch });
-  }
-
   private selectQueueIndex(index: number): void {
     const selectedQueueIndex = clampIndex(index, this.queue.entries.length);
     this.uiStateStore.dispatch({
