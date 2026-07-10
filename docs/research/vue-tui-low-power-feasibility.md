@@ -58,7 +58,7 @@ The runtime is ESM TypeScript output with Vue and Yoga dependencies, and a local
 
 The project's declared engine is Node `>=22.18.0` ([runtime package metadata](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/runtime/package.json#L49-L82)). Its documented production workflow explicitly targets a self-contained **Node** module built with `tsdown`, keeping Node built-ins external ([production build](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/vite/README.md#L50-L76)). The project does not document or test TMU's `bun build --compile --target=bun-linux-x64-baseline` path.
 
-TMU already has tests around that Bun executable path and intentionally leaves mpv, ffprobe, and yt-dlp as external helpers. Adopting vue-tui before a compiled Linux smoke proof would turn a settled delivery constraint into architecture risk.
+TMU already has tests around that Bun executable path and intentionally leaves mpv and yt-dlp as external helpers. Adopting vue-tui before a compiled Linux smoke proof would turn a settled delivery constraint into architecture risk.
 
 ### Maturity and maintenance risk: active, impressive, not settled
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,14 @@ describe("Bun npm executable", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  test("public source surface contains no removed provider or legacy input-router modules", async () => {
+    const sourceFiles = await readdir("src");
+    const indexSource = await readFile("src/index.ts", "utf8");
+    expect(sourceFiles).not.toContain("input-router.ts");
+    expect(sourceFiles.some((name) => /navidrome|local-provider|offline-youtube/i.test(name))).toBe(false);
+    expect(indexSource).not.toContain("input-router");
+  });
 });
 
 function isolatedRuntimeEnv(root: string, installDir: string): Record<string, string | undefined> {

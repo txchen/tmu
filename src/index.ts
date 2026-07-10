@@ -1,6 +1,5 @@
 export * from "./app";
 export * from "./action-registry";
-export * from "./input-router";
 export * from "./config";
 export * from "./coordinator";
 export * from "./dependencies";
