@@ -99,6 +99,30 @@ export class RootInputRouter {
     if (this.uiState.snapshot.pendingVimChord) {
       this.clearPendingChordTimer();
       this.uiState.dispatch({ type: "cancelVimChord" });
+      if (key === "\x1b") return true;
+    }
+
+    const visibleRows = visibleQueueRows(this.uiState.snapshot);
+    const queueFocused = this.uiState.snapshot.focusedPane === "queue"
+      && this.uiState.snapshot.activeTargetId === "queue";
+    const movement = queueFocused ? queueMovementForKey(key, visibleRows) : null;
+    if (movement) {
+      if (movement.kind === "boundary") {
+        this.uiState.dispatch({
+          type: "selectQueueBoundary",
+          boundary: movement.boundary,
+          identities,
+          visibleRows,
+        });
+      } else {
+        this.uiState.dispatch({
+          type: "moveQueueSelection",
+          delta: movement.delta,
+          identities,
+          visibleRows,
+        });
+      }
+      return true;
     }
 
     const action = actionForBinding(this.registry, key, {
@@ -170,4 +194,24 @@ function isTextEntryFocus(focus: UiState["overlays"][number]["focus"]): boolean 
 
 function isPrintableKey(key: string): boolean {
   return key.length === 1 && key >= " " && key !== "\x7f";
+}
+
+function visibleQueueRows(uiState: Readonly<UiState>): number {
+  const reservedRows = uiState.terminal.tier === "narrow" ? 4 : 3;
+  return Math.max(1, uiState.terminal.rows - reservedRows);
+}
+
+function queueMovementForKey(key: string, visibleRows: number):
+  | { kind: "relative"; delta: number }
+  | { kind: "boundary"; boundary: "first" | "last" }
+  | null {
+  if (key === "j" || key === "\x1b[B") return { kind: "relative", delta: 1 };
+  if (key === "k" || key === "\x1b[A") return { kind: "relative", delta: -1 };
+  if (key === "G" || key === "\x1b[F") return { kind: "boundary", boundary: "last" };
+  if (key === "\x1b[H") return { kind: "boundary", boundary: "first" };
+  if (key === "\x04") return { kind: "relative", delta: Math.max(1, Math.floor(visibleRows / 2)) };
+  if (key === "\x15") return { kind: "relative", delta: -Math.max(1, Math.floor(visibleRows / 2)) };
+  if (key === "\x1b[6~") return { kind: "relative", delta: visibleRows };
+  if (key === "\x1b[5~") return { kind: "relative", delta: -visibleRows };
+  return null;
 }

@@ -39,6 +39,18 @@ export type UiStateAction =
   | { type: "expireVimChord"; atMs: number }
   | { type: "cancelVimChord" }
   | {
+    type: "moveQueueSelection";
+    delta: number;
+    identities: readonly TrackIdentity[];
+    visibleRows: number;
+  }
+  | {
+    type: "selectQueueBoundary";
+    boundary: "first" | "last";
+    identities: readonly TrackIdentity[];
+    visibleRows: number;
+  }
+  | {
     type: "syncQueue";
     identities: readonly TrackIdentity[];
     preferredIdentity?: TrackIdentity | null;
@@ -194,6 +206,29 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
   }
 
   if (action.type === "cancelVimChord") return { ...state, pendingVimChord: null };
+
+  if (action.type === "moveQueueSelection") {
+    const selectedQueueIndex = Math.max(
+      0,
+      Math.min(action.identities.length - 1, state.selectedQueueIndex + action.delta),
+    );
+    return repairQueueSelection(
+      { ...state, selectedQueueIndex },
+      action.identities,
+      action.identities[selectedQueueIndex] ?? null,
+      action.visibleRows,
+    );
+  }
+
+  if (action.type === "selectQueueBoundary") {
+    const selectedQueueIndex = action.boundary === "first" ? 0 : Math.max(0, action.identities.length - 1);
+    return repairQueueSelection(
+      { ...state, selectedQueueIndex },
+      action.identities,
+      action.identities[selectedQueueIndex] ?? null,
+      action.visibleRows,
+    );
+  }
 
   if (action.type === "syncQueue") {
     return repairQueueSelection(
