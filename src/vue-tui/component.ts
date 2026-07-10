@@ -9,7 +9,7 @@ import {
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
 import { sameIdentity, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
 import { RootInputRouter } from "../input-router";
-import { queueHomeVisibleRows } from "../ui-state";
+import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
 import {
   StatePublicationGate,
@@ -86,10 +86,6 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
 
       async function routeInput(key: string): Promise<void> {
-        if (coordinator.uiState.terminal.tier === "terminal-too-small" && key !== "\u0003") {
-          publication.notify("input");
-          return;
-        }
         const hadOverlay = coordinator.uiState.overlays.length > 0;
         await router.route(key);
         publication.notify("input");
@@ -139,7 +135,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
 
   const settings = queueSettings(appState.queue.shuffle, appState.queue.repeatAll, appState.volume);
   const queueWidth = queuePaneWidth(tier, uiState.terminal.columns);
-  const selectedEntry = appState.queue.entries.find((entry) => sameIdentity(entry.track.identity, uiState.selectedQueueIdentity));
+  const selectedEntry = selectedUnavailableQueueEntry(appState.queue.entries, uiState.selectedQueueIdentity);
   const exceptionalGuidance = selectedEntry?.availability.status === "unavailable"
     ? `${selectedEntry.availability.reason} · Retry`
     : "";
@@ -327,12 +323,16 @@ function footerText(
   columns: number,
   actions: readonly ResolvedAction[],
 ): string {
-  if (pendingG) return truncateCell("g… Go to first  ? Help  : Commands", columns);
+  if (pendingG) {
+    const discovery = actions.filter((action) => action.enabled
+      && (action.id === "help.open" || action.id === "palette.open"));
+    return truncateCell(["g… Go to first", ...discovery.map(formatFooterAction)].join("  "), columns);
+  }
   const tierIds = tier === "narrow"
     ? ["player.toggle-play-pause", "help.open", "palette.open"]
     : tier === "medium"
       ? ["player.toggle-play-pause", "queue.play-next", "picker.open-navigation", "help.open", "palette.open"]
-      : ["player.toggle-play-pause", "queue.play-next", "queue.remove", "picker.open-navigation", "help.open", "palette.open", "app.quit"];
+      : ["player.toggle-play-pause", "queue.play-next", "queue.remove", "picker.open-navigation", "help.open", "palette.open"];
   const enabled = new Map(actions.filter((action) => action.enabled).map((action) => [action.id, action]));
   return truncateCell(tierIds.flatMap((id) => {
     const action = enabled.get(id);

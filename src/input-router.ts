@@ -6,13 +6,16 @@ import {
 } from "./action-registry";
 import {
   NAVIGATION_TARGETS,
-  sameIdentity,
   type AppIntent,
   type AppState,
   type LegacyAppIntent,
   type UiState,
 } from "./domain";
-import { queueHomeVisibleRows, type UiStateAction } from "./ui-state";
+import {
+  queueHomeVisibleRows,
+  selectedUnavailableQueueEntry,
+  type UiStateAction,
+} from "./ui-state";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -58,6 +61,8 @@ export class RootInputRouter {
       await this.dispatchBinding(key);
       return true;
     }
+
+    if (this.uiState.snapshot.terminal.tier === "terminal-too-small") return true;
 
     const overlay = this.uiState.snapshot.overlays.at(-1);
     if (overlay && isTextEntryFocus(overlay.focus)) {
@@ -221,12 +226,11 @@ function overlayForIntent(intent: UiActionIntent) {
 }
 
 function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppState>): number {
-  const selected = appState.queue.entries.find((entry) =>
-    sameIdentity(entry.track.identity, uiState.selectedQueueIdentity));
+  const selected = selectedUnavailableQueueEntry(appState.queue.entries, uiState.selectedQueueIdentity);
   return queueHomeVisibleRows(
     uiState.terminal.tier,
     uiState.terminal.rows,
-    selected?.availability.status === "unavailable",
+    Boolean(selected),
   );
 }
 

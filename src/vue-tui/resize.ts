@@ -1,20 +1,24 @@
 import type { AppCoordinator } from "../coordinator";
-import { sameIdentity } from "../domain";
-import { queueHomeVisibleRows, responsiveTier } from "../ui-state";
+import {
+  queueHomeVisibleRows,
+  responsiveTier,
+  selectedUnavailableQueueEntry,
+} from "../ui-state";
 
 export function dispatchTerminalResize(
   coordinator: AppCoordinator,
   columns: number,
   rows: number,
 ): void {
-  const selected = coordinator.appState.queue.entries.find((entry) =>
-    sameIdentity(entry.track.identity, coordinator.uiState.selectedQueueIdentity));
-  const hasExceptionalLine = selected?.availability.status === "unavailable";
+  const selected = selectedUnavailableQueueEntry(
+    coordinator.appState.queue.entries,
+    coordinator.uiState.selectedQueueIdentity,
+  );
   coordinator.dispatchUi({
     type: "resize",
     columns,
     rows,
     queueIdentities: coordinator.queueTrackIdentities(),
-    visibleQueueRows: queueHomeVisibleRows(responsiveTier(columns, rows), rows, hasExceptionalLine),
+    visibleQueueRows: queueHomeVisibleRows(responsiveTier(columns, rows), rows, Boolean(selected)),
   });
 }
