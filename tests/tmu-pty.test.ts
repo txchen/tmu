@@ -161,6 +161,9 @@ describe("production tmu real PTY", () => {
 
     try {
       await waitForOutput(read, "Queue · 3 Tracks");
+      expect(output).toContain("Enter Play Next");
+      expect(output).toContain("? Help");
+      expect(output).toContain(": Commands");
       terminal.write("?");
       await waitForOutput(read, "Picker Overlay · shortcut-help");
       expect(output).toContain("Play Next · Enter");
@@ -176,6 +179,7 @@ describe("production tmu real PTY", () => {
       await waitForNewOutput(read, paletteFrame, "Picker Overlay · command-palette");
       terminal.write("toggle shuffle");
       await waitForNewOutput(read, paletteFrame, "Toggle Shuffle");
+      expect(output.slice(paletteFrame)).toContain("z");
       terminal.write("\r");
       await waitForNewOutput(read, paletteFrame, "Shuffle On");
       expect(output.slice(paletteFrame)).not.toContain("No matching actions");

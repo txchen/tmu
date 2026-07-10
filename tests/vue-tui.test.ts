@@ -503,7 +503,6 @@ describe("production vue-tui", () => {
     let frame = terminal.lastFrame() ?? "";
     expect(frame).toContain("Play Next");
     expect(frame).toContain("Enter");
-    expect(frame).toContain("Play / Pause / Resume");
     await terminal.stdin.write("/");
     await terminal.stdin.write("immediately");
     frame = terminal.lastFrame() ?? "";
@@ -526,6 +525,21 @@ describe("production vue-tui", () => {
     await terminal.stdin.write(":");
     await terminal.stdin.write("play next");
     expect(terminal.lastFrame()).toContain("Queue is empty");
+  });
+
+  test("moves Command Palette selection with conventional keys while keeping printable keys in its query", async () => {
+    const { coordinator } = await productionHarness();
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write(":");
+    await terminal.stdin.write("toggle");
+    expect(terminal.lastFrame()).toContain("Toggle Shuffle");
+    expect(terminal.lastFrame()).toContain("Toggle Repeat All");
+    await terminal.stdin.write("\x1b[B");
+    await terminal.stdin.write("\r");
+
+    expect(coordinator.appState.queue.repeatAll).toBe(true);
+    expect(coordinator.uiState.overlays).toEqual([]);
   });
 
   test("shows a Cancel-first Clear Queue confirmation and applies only the confirmed choice", async () => {

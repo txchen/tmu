@@ -81,6 +81,10 @@ describe("action registry contracts", () => {
       .toContain("queue.play-now");
     expect(searchDiscoveryActions(registry, current, "clear queue").map((action) => action.id))
       .toContain("queue.clear");
+    expect(actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "navigation.move-down", bindings: ["j", "Down"] }),
+      expect.objectContaining({ id: "navigation.first", bindings: ["gg", "Home"] }),
+    ]));
   });
 
   test("keeps the underlying action context while help or the palette is open", () => {
