@@ -284,7 +284,12 @@ export class RootInputRouter {
   ): Promise<boolean> {
     const searchRows = this.appState().globalSearch.query ? globalSearchRows(this.appState().globalSearch) : null;
     if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows);
-    if (key === "r" || key === "f") {
+    if (key === "f") {
+      this.cancelOverlayChord();
+      this.uiState.dispatch({ type: "setOverlayFocus", focus: "filter" });
+      return true;
+    }
+    if (key === "r") {
       this.cancelOverlayChord();
       await this.dispatchBinding(key);
       return true;
