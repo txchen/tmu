@@ -19,10 +19,11 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
-  options: { playbackTrack?: boolean } = {},
+  options: { playbackTrack?: boolean; searchTrack?: boolean } = {},
 ) {
   const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   if (options.playbackTrack) await seedPlaybackSnapshot(runtimeRoot);
+  if (options.searchTrack) await seedSearchTrack(runtimeRoot);
   const terminal = new Bun.Terminal({
     cols: 120,
     rows: 24,
@@ -111,6 +112,20 @@ async function seedPlaybackSnapshot(runtimeRoot: string): Promise<void> {
   }));
 }
 
+async function seedSearchTrack(runtimeRoot: string): Promise<void> {
+  const entryDir = `${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube/pty-search`;
+  await mkdir(`${entryDir}/media`, { recursive: true });
+  await writeFile(`${entryDir}/metadata.json`, JSON.stringify({
+    version: 1,
+    extractor: "youtube",
+    id: "pty-search",
+    title: "PTY Search Track",
+    mediaFileName: "audio.webm",
+    artist: "PTY Artist",
+  }));
+  await writeFile(`${entryDir}/media/audio.webm`, "audio");
+}
+
 function createWavSample(durationSeconds: number): Buffer {
   const sampleRate = 8_000;
   const samples = durationSeconds * sampleRate;
@@ -135,6 +150,41 @@ function createWavSample(durationSeconds: number): Buffer {
 const realPlaybackTest = Bun.which("mpv") ? test : test.skip;
 
 describe("production tmu real PTY", () => {
+  test("submits Global Search text and filters, then clears back to Provider context", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess } = await spawnTmu((text) => { output += text; }, [], { searchTrack: true });
+
+    try {
+      await waitForOutput(read, "Queue · 0 Tracks");
+      terminal.write("/");
+      await waitForOutput(read, "Search:");
+      terminal.write("\t");
+      await Bun.sleep(30);
+      terminal.write("p");
+      await waitForOutput(read, "Filters: Provider local · Type all");
+      terminal.write("p");
+      await waitForOutput(read, "Filters: Provider offline-youtube-cache · Type all");
+      terminal.write("t");
+      await waitForOutput(read, "Filters: Provider offline-youtube-cache · Type track");
+      terminal.write("\t");
+      await Bun.sleep(30);
+      terminal.write("PTY Search");
+      await waitForOutput(read, "PTY Search");
+      terminal.write("\r");
+      await waitForOutput(read, "PTY Search Track");
+      expect(output).toContain("Offline YouTube Cache");
+
+      const nextFrame = output.length;
+      terminal.write("/");
+      await Bun.sleep(30);
+      terminal.write("\x15");
+      await waitForNewOutput(read, nextFrame, "Providers");
+    } finally {
+      await stopTmu(terminal, subprocess);
+    }
+  }, 15_000);
+
   test("keeps Provider navigation aliases, location memory, and short-list context across PTY resize", async () => {
     let output = "";
     const read = () => output;

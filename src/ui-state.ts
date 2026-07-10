@@ -35,6 +35,10 @@ export type UiStateAction =
   | { type: "setFilter"; filterText: string }
   | { type: "setProviderLocation"; location: ProviderLocation }
   | { type: "setOverlayFocus"; focus: PickerOverlay["focus"] }
+  | { type: "prepareSearchResults" }
+  | { type: "restoreProviderNavigation" }
+  | { type: "setSearchProviderFilter"; providerId: "all" | string }
+  | { type: "setSearchResultTypeFilter"; resultType: "all" | import("./domain").ProviderSearchResultType }
   | { type: "moveOverlaySelection"; delta: number; rowCount: number; visibleRows: number }
   | { type: "selectOverlayBoundary"; boundary: "first" | "last"; rowCount: number; visibleRows: number }
   | { type: "setScroll"; pane: FocusedPane; offset: number }
@@ -210,12 +214,40 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         location: cloneProviderLocation(action.location), selectedIndex: 0, scroll: 0,
       },
     };
-    return updated
-      ?? { ...state, providerLocation: cloneProviderLocation(action.location) };
+    return updated ?? {
+      ...state,
+      providerLocation: cloneProviderLocation(action.location),
+      providerNavigationMemory: {
+        location: cloneProviderLocation(action.location), selectedIndex: 0, scroll: 0,
+      },
+    };
   }
 
   if (action.type === "setOverlayFocus") {
     return updateTopOverlay(state, (overlay) => ({ ...overlay, focus: action.focus })) ?? state;
+  }
+
+  if (action.type === "prepareSearchResults") {
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, focus: "results", selectedResultIndex: 0, scroll: 0 })) ?? state;
+  }
+
+  if (action.type === "restoreProviderNavigation") {
+    const memory = state.providerNavigationMemory;
+    return updateTopOverlay(state, (overlay) => ({
+      ...overlay,
+      query: "",
+      providerLocation: cloneProviderLocation(memory.location),
+      selectedResultIndex: memory.selectedIndex,
+      scroll: memory.scroll,
+    })) ?? state;
+  }
+
+  if (action.type === "setSearchProviderFilter") {
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, providerFilter: action.providerId })) ?? state;
+  }
+
+  if (action.type === "setSearchResultTypeFilter") {
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, resultTypeFilter: action.resultType })) ?? state;
   }
 
   if (action.type === "moveOverlaySelection" || action.type === "selectOverlayBoundary") {

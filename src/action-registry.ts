@@ -7,6 +7,7 @@ import {
   type UiState,
 } from "./domain";
 import type { AppStateSnapshot } from "./state-publication";
+import { globalSearchResultAt } from "./global-search";
 
 export type ActionContext = {
   readonly appState: Readonly<AppState> | AppStateSnapshot;
@@ -405,6 +406,9 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
 
 function selectedOverlayTarget(context: ActionContext): PlayableTarget | null {
   const overlay = context.uiState.overlays.at(-1);
+  if (overlay?.focus === "results" && context.appState.globalSearch.query) {
+    return globalSearchResultAt(context.appState.globalSearch, overlay.selectedResultIndex ?? 0)?.target ?? null;
+  }
   const location = overlay?.focus === "results" ? overlay.providerLocation : undefined;
   const providerId = location?.providerId;
   if (!overlay || !location || !providerId) return null;
