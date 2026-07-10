@@ -456,11 +456,7 @@ export class RootInputRouter {
     const visibleRows = overlayContentRows(overlay.kind,
       this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
       this.uiState.snapshot.terminal.rows);
-    const movement = movementForUiOperation(operation, visibleRows);
-    if (!movement) return;
-    this.uiState.dispatch(movement.kind === "boundary"
-      ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
-      : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
+    this.routeOverlayRowMovement(operation, actions.length, visibleRows);
   }
 
   private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
