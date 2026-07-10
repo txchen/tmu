@@ -342,40 +342,6 @@ export type AppIntent =
   | { type: "playerOperation"; operation: "adjust-volume"; delta: number }
   | { type: "playerOperation"; operation: "set-volume"; percent: number; ready: boolean };
 
-/** @deprecated Legacy ANSI TUI migration surface. New UI actions create AppIntent values. */
-export type LegacyAppIntent =
-  | { type: "selectNavigationTarget"; targetId: NavigationTargetId }
-  | { type: "moveSelection"; delta: number }
-  | { type: "activateSelectedContent" }
-  | { type: "cycleFocus" }
-  | { type: "enqueueSelectedTrack" }
-  | { type: "refreshNavidromeLibrary" }
-  | { type: "openNavidromeSearchPrompt" }
-  | { type: "searchNavidromeTracks"; query: string }
-  | { type: "openLocalPathPrompt" }
-  | { type: "setPromptInput"; value: string }
-  | { type: "submitPrompt" }
-  | { type: "cancelPrompt" }
-  | { type: "cancelLocalOpen" }
-  | { type: "cancelYouTubeDownload" }
-  | { type: "openLocalPath"; path: string; signal?: AbortSignal }
-  | { type: "startSelectedQueueEntry" }
-  | { type: "removeSelectedQueueEntry" }
-  | { type: "moveSelectedQueueEntry"; delta: number }
-  | { type: "clearQueue" }
-  | { type: "nextTrack" }
-  | { type: "previousTrack" }
-  | { type: "toggleShuffle" }
-  | { type: "toggleRepeatAll" }
-  | { type: "setVolume"; percent: number; ready: boolean }
-  | { type: "adjustVolume"; delta: number }
-  | { type: "seekBy"; seconds: number }
-  | { type: "saveLastQueueSnapshot" }
-  | { type: "restoreLastQueueSnapshot" }
-  | { type: "togglePlayPause" }
-  | { type: "stop" }
-  | { type: "quit" };
-
 export const NAVIGATION_TARGETS: readonly NavigationTarget[] = [
   { id: "local", label: "Local", hint: "files and folders" },
   { id: "navidrome", label: "Navidrome", hint: "artists, albums, playlists" },

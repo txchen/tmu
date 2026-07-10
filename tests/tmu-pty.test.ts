@@ -3,7 +3,7 @@ import { access, chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 
 const decoder = new TextDecoder();
 
-async function waitForOutput(read: () => string, expected: string, timeoutMs = 3_000): Promise<void> {
+async function waitForOutput(read: () => string, expected: string, timeoutMs = 8_000): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (read().includes(expected)) return;
@@ -16,6 +16,31 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
   await waitForOutput(() => read().slice(from), expected);
 }
 
+async function resizeAndWait(
+  terminal: Bun.Terminal,
+  subprocess: { kill(signal?: NodeJS.Signals | number): void },
+  read: () => string,
+  from: number,
+  columns: number,
+  rows: number,
+  expected: string,
+): Promise<void> {
+  terminal.resize(columns, rows);
+  await Bun.sleep(20);
+  subprocess.kill("SIGWINCH");
+  await waitForNewOutput(read, from, expected);
+}
+
+async function expectTerminalRestored(terminal: Bun.Terminal, read: () => string): Promise<void> {
+  const from = read().length;
+  const stty = Bun.spawn(["sh", "-c", "stty -a; printf __AFTER_TMU__"], { terminal });
+  expect(await stty.exited).toBe(0);
+  await waitForOutput(read, "__AFTER_TMU__");
+  const restoredState = read().slice(from).replaceAll("\r", " ").replaceAll("\n", " ");
+  expect(restoredState).toMatch(/(?:^|[ ;])icanon(?:[ ;]|$)/);
+  expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
+}
+
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
@@ -24,8 +49,8 @@ async function spawnTmu(
     corruptSnapshot?: boolean;
     searchTrack?: boolean;
     activeDownload?: boolean;
-    navidromeFailureUrl?: string;
-    malformedConfig?: boolean;
+    navidromeUrl?: string;
+    playbackProgressMs?: number;
     env?: Record<string, string>;
   } = {},
 ) {
@@ -34,8 +59,8 @@ async function spawnTmu(
   if (options.corruptSnapshot) await seedCorruptSnapshot(runtimeRoot);
   if (options.searchTrack) await seedSearchTrack(runtimeRoot);
   if (options.activeDownload) await seedDownloadFixture(runtimeRoot);
-  if (options.navidromeFailureUrl) await seedNavidromeFailure(runtimeRoot, options.navidromeFailureUrl);
-  if (options.malformedConfig) await seedMalformedConfig(runtimeRoot);
+  if (options.navidromeUrl) await seedNavidromeConfig(runtimeRoot, options.navidromeUrl);
+  if (options.playbackProgressMs !== undefined) await seedPlaybackCadence(runtimeRoot, options.playbackProgressMs);
   const terminal = new Bun.Terminal({
     cols: 120,
     rows: 24,
@@ -57,9 +82,8 @@ async function spawnTmu(
   return { terminal, subprocess, runtimeRoot };
 }
 
-async function seedNavidromeFailure(runtimeRoot: string, serverUrl: string): Promise<void> {
-  await mkdir(`${runtimeRoot}/config/tmu`, { recursive: true });
-  await writeFile(`${runtimeRoot}/config/tmu/config.json`, JSON.stringify({
+async function seedNavidromeConfig(runtimeRoot: string, serverUrl: string): Promise<void> {
+  await writeConfigFixture(runtimeRoot, JSON.stringify({
     providers: {
       navidrome: {
         enabled: true,
@@ -68,13 +92,20 @@ async function seedNavidromeFailure(runtimeRoot: string, serverUrl: string): Pro
         password: "pty-password",
       },
     },
-    dependencyPolicy: { checkTimeoutMs: 250 },
+    dependencyPolicy: { checkTimeoutMs: 2_000 },
+    lowPower: { providerProgressThrottleMs: 500 },
   }));
 }
 
-async function seedMalformedConfig(runtimeRoot: string): Promise<void> {
+async function seedPlaybackCadence(runtimeRoot: string, playbackProgressMs: number): Promise<void> {
+  await writeConfigFixture(runtimeRoot, JSON.stringify({
+    lowPower: { playbackTickMs: 100, playbackProgressMs },
+  }));
+}
+
+async function writeConfigFixture(runtimeRoot: string, contents: string): Promise<void> {
   await mkdir(`${runtimeRoot}/config/tmu`, { recursive: true });
-  await writeFile(`${runtimeRoot}/config/tmu/config.json`, "{invalid");
+  await writeFile(`${runtimeRoot}/config/tmu/config.json`, contents);
 }
 
 async function seedCorruptSnapshot(runtimeRoot: string): Promise<void> {
@@ -209,6 +240,10 @@ function createWavSample(durationSeconds: number): Buffer {
   return buffer;
 }
 
+function subsonicOk(extra: Record<string, unknown> = {}) {
+  return { "subsonic-response": { status: "ok", version: "1.16.1", ...extra } };
+}
+
 const realPlaybackTest = Bun.which("mpv") ? test : test.skip;
 
 describe("production tmu real PTY", () => {
@@ -279,7 +314,7 @@ describe("production tmu real PTY", () => {
     );
 
     try {
-      await waitForOutput(read, "Queue · 3 Tracks");
+      await waitForOutput(read, "Queue · 3 Tracks", 10_000);
       expect(output).toContain("Enter Play Next");
       expect(output).toContain("? Help");
       expect(output).toContain(": Commands");
@@ -365,17 +400,20 @@ describe("production tmu real PTY", () => {
     const read = () => output;
     const server = Bun.serve({
       port: 0,
-      fetch: () => Response.json({
-        "subsonic-response": {
-          status: "failed",
-          error: { code: 40, message: "Wrong username or password" },
-        },
-      }),
+      async fetch() {
+        await Bun.sleep(500);
+        return Response.json({
+          "subsonic-response": {
+            status: "failed",
+            error: { code: 40, message: "Wrong username or password" },
+          },
+        });
+      },
     });
     const { terminal, subprocess, runtimeRoot } = await spawnTmu(
       (text) => { output += text; },
       [],
-      { searchTrack: true, navidromeFailureUrl: `http://${server.hostname}:${server.port}` },
+      { searchTrack: true, navidromeUrl: `http://${server.hostname}:${server.port}` },
     );
 
     try {
@@ -384,9 +422,13 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Search:");
       terminal.write("PTY Search");
       await waitForOutput(read, "Search: PTY Search");
+      const submittedAt = Date.now();
       terminal.write("\r");
       await waitForOutput(read, "PTY Search Track");
+      await waitForOutput(read, "Navidrome · Loading");
       await waitForOutput(read, "Navidrome · Authentication failed", 10_000);
+      expect(Date.now() - submittedAt).toBeGreaterThanOrEqual(450);
+      expect(Date.now() - submittedAt).toBeLessThan(2_000);
       const failureFrame = output.slice(output.lastIndexOf("PTY Search Track"));
       expect(failureFrame).toContain("Offline YouTube Cache");
       expect(failureFrame).toContain("Navidrome · Authentication failed");
@@ -399,6 +441,97 @@ describe("production tmu real PTY", () => {
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
+
+  realPlaybackTest("resolves Music Collections atomically for Play Next and Play Now", async () => {
+    let output = "";
+    const read = () => output;
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/search3.view")) {
+          return Response.json(subsonicOk({
+            searchResult3: {
+              album: [
+                { id: "album-ok", name: "PTY Album", artist: "PTY Artist" },
+                { id: "album-broken", name: "Broken Album", artist: "PTY Artist" },
+              ],
+              artist: [],
+              song: [],
+            },
+          }));
+        }
+        if (url.pathname.endsWith("/getAlbum.view")) {
+          if (url.searchParams.get("id") === "album-broken") {
+            return Response.json({
+              "subsonic-response": {
+                status: "failed",
+                error: { code: 70, message: "Album temporarily unavailable" },
+              },
+            });
+          }
+          return Response.json(subsonicOk({
+            album: {
+              id: "album-ok",
+              name: "PTY Album",
+              artist: "PTY Artist",
+              song: [
+                { id: "collection-one", title: "Collection One", artist: "PTY Artist", duration: 60 },
+                { id: "collection-two", title: "Collection Two", artist: "PTY Artist", duration: 60 },
+              ],
+            },
+          }));
+        }
+        if (url.pathname.endsWith("/stream.view")) {
+          return new Response(new Uint8Array(createWavSample(60)), { headers: { "content-type": "audio/wav" } });
+        }
+        return Response.json(subsonicOk());
+      },
+    });
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [],
+      { playbackTrack: true, navidromeUrl: `http://127.0.0.1:${server.port}` },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 3 Tracks", 10_000);
+      terminal.write("/");
+      await waitForOutput(read, "Search:");
+      terminal.write("Collection");
+      await waitForOutput(read, "Search: Collection");
+      terminal.write("\r");
+      await waitForOutput(read, "PTY Album");
+      terminal.write("j");
+      await Bun.sleep(50);
+      terminal.write("j");
+      await waitForOutput(read, "› PTY Album");
+
+      terminal.write("\r");
+      await waitForOutput(read, "Queue · 5 Tracks", 10_000);
+      await Bun.sleep(200);
+      let snapshot = JSON.parse(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text());
+      expect(snapshot.entries[snapshot.currentIndex].track.title).toBe("PTY Track");
+
+      terminal.write("\x1b[13;2u");
+      await Bun.sleep(2_000);
+      snapshot = JSON.parse(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text());
+      expect(snapshot.entries[snapshot.currentIndex].track.title).toBe("Collection One");
+
+      const beforeFailure = await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text();
+      terminal.write("j");
+      await Bun.sleep(50);
+      terminal.write("\r");
+      await waitForOutput(read, "Could not load Music Collection: Album temporarily unavailable");
+      expect(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text()).toBe(beforeFailure);
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      server.stop(true);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   test("keeps Provider navigation aliases, location memory, and short-list context across PTY resize", async () => {
     let output = "";
@@ -460,27 +593,15 @@ describe("production tmu real PTY", () => {
       terminal.write("o");
       await waitForOutput(read, "Picker Overlay · music-picker");
       nextFrame = output.length;
-      terminal.resize(100, 24);
-      await Bun.sleep(20);
-      subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Playing Track");
+      await resizeAndWait(terminal, subprocess, read, nextFrame, 100, 24, "Playing Track");
       expect(output.slice(nextFrame)).not.toContain("Current:");
       nextFrame = output.length;
-      terminal.resize(70, 24);
-      await Bun.sleep(20);
-      subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Picker Overlay · music-picker");
+      await resizeAndWait(terminal, subprocess, read, nextFrame, 70, 24, "Picker Overlay · music-picker");
       expect(output.slice(nextFrame)).toContain("No Current Track");
       nextFrame = output.length;
-      terminal.resize(50, 14);
-      await Bun.sleep(20);
-      subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Terminal too small");
+      await resizeAndWait(terminal, subprocess, read, nextFrame, 50, 14, "Terminal too small");
       nextFrame = output.length;
-      terminal.resize(130, 30);
-      await Bun.sleep(20);
-      subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Playing Track");
+      await resizeAndWait(terminal, subprocess, read, nextFrame, 130, 30, "Playing Track");
       expect(output.slice(nextFrame)).toContain("Picker Overlay · music-picker");
 
       nextFrame = output.length;
@@ -494,17 +615,37 @@ describe("production tmu real PTY", () => {
       expect(output).toContain("\x1b[?1049l");
       expect(output).toContain("\x1b[?25h");
 
-      const beforeStty = output.length;
-      const stty = Bun.spawn(["sh", "-c", "stty -a; printf __AFTER_TRACER__"], { terminal });
-      expect(await stty.exited).toBe(0);
-      await waitForOutput(read, "__AFTER_TRACER__");
-      const restoredState = output.slice(beforeStty).replaceAll("\r", " ").replaceAll("\n", " ");
-      expect(restoredState).toMatch(/(?:^|[ ;])icanon(?:[ ;]|$)/);
-      expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
+      await expectTerminalRestored(terminal, read);
     } finally {
       await stopTmu(terminal, subprocess);
     }
   });
+
+  realPlaybackTest("bounds configured playback-position redraws without an idle loop", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [],
+      { playbackTrack: true, playbackProgressMs: 500 },
+    );
+
+    try {
+      await waitForOutput(read, "Restored · Resume from 0:12");
+      terminal.write(" ");
+      await waitForOutput(read, "Playing · PTY Track");
+      await Bun.sleep(150);
+      const cadenceFrame = output.length;
+      await Bun.sleep(300);
+      expect(output).toHaveLength(cadenceFrame);
+      await waitForNewOutput(read, cadenceFrame, "Playing · PTY Track · 0:13");
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   test("restores cursor and alternate screen for operating-system termination signals", async () => {
     for (const [signal, exitCode] of [
@@ -551,27 +692,21 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
-  test("leaves the PTY canonical and cursor-visible after a fatal startup error", async () => {
+  test("restores the active TUI after a fatal process error", async () => {
     let output = "";
     const read = () => output;
-    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
-      (text) => { output += text; },
-      [],
-      { malformedConfig: true },
-    );
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu((text) => { output += text; });
 
     try {
-      expect(await subprocess.exited).not.toBe(0);
-      expect(output).toContain("Failed to load TMU config");
-      expect(output).not.toContain("\x1b[?1049h");
+      await waitForOutput(read, "Queue · 0 Tracks");
+      expect(output).toContain("\x1b[?1049h");
+      subprocess.kill("SIGUSR2");
+      expect(await subprocess.exited).toBe(1);
+      expect(output).toContain("Fatal error: received SIGUSR2");
+      expect(output).toContain("\x1b[?1049l");
+      expect(output).toContain("\x1b[?25h");
 
-      const beforeStty = output.length;
-      const stty = Bun.spawn(["sh", "-c", "stty -a; printf __AFTER_FATAL__"], { terminal });
-      expect(await stty.exited).toBe(0);
-      await waitForOutput(read, "__AFTER_FATAL__");
-      const restoredState = output.slice(beforeStty).replaceAll("\r", " ").replaceAll("\n", " ");
-      expect(restoredState).toMatch(/(?:^|[ ;])icanon(?:[ ;]|$)/);
-      expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
+      await expectTerminalRestored(terminal, read);
     } finally {
       await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });

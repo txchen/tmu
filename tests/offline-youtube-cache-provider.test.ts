@@ -9,6 +9,7 @@ import {
   writeOfflineYouTubeCacheMetadata,
   type PlaybackLocator,
 } from "../src/index";
+import { driveCoordinatorContract } from "./coordinator-contract-driver";
 
 class RecordingPlayer extends NoopPlayer {
   readonly loaded: PlaybackLocator[] = [];
@@ -239,10 +240,10 @@ describe("OfflineYouTubeCacheProvider", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
-      await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-      await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+      await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+      await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
       expect(coordinator.appState.queue.entries[0]?.track.identity).toEqual({
         providerId: "offline-youtube-cache",
@@ -280,7 +281,7 @@ describe("OfflineYouTubeCacheProvider", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
 
     } finally {
       await rm(dir, { recursive: true, force: true });

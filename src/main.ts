@@ -29,13 +29,19 @@ export async function main(): Promise<void> {
   const handleSigint = () => terminateFromSignal(130);
   const handleSigterm = () => terminateFromSignal(143);
   const handleSighup = () => terminateFromSignal(129);
+  const handleSigusr2 = () => {
+    process.stderr.write("Fatal error: received SIGUSR2\n");
+    terminateFromSignal(1);
+  };
   const installSignalHandlers = () => {
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
     process.off("SIGHUP", handleSighup);
+    process.off("SIGUSR2", handleSigusr2);
     process.once("SIGINT", handleSigint);
     process.once("SIGTERM", handleSigterm);
     process.once("SIGHUP", handleSighup);
+    process.once("SIGUSR2", handleSigusr2);
   };
   installSignalHandlers();
   app.mount({
@@ -52,6 +58,7 @@ export async function main(): Promise<void> {
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
     process.off("SIGHUP", handleSighup);
+    process.off("SIGUSR2", handleSigusr2);
     app.unmount();
     await coordinator.teardown();
   }

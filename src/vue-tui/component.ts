@@ -47,7 +47,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       const publication = new StatePublicationGate({
         readState: () => ({ appState: coordinator.appState, uiState: coordinator.uiState }),
         cadence: {
-          playbackCadenceMs: null,
+          playbackCadenceMs: cadence.playbackProgressMs,
           downloadProgressMs: cadence.downloadProgressThrottleMs,
           providerProgressMs: cadence.providerProgressThrottleMs,
         },
@@ -322,7 +322,10 @@ function playingTrackState(current: QueueEntry | undefined, playback: Publicatio
       : playback.message ?? "Playback failed";
     return { kind: "unavailable", headline: `Unavailable · ${current.track.title}`, shortLabel: "Unavailable", guidance: reason };
   }
-  if (playback.status === "playing") return { kind: "playing", headline: `Playing · ${current.track.title}`, shortLabel: "Playing", guidance: "" };
+  if (playback.status === "playing") {
+    const position = typeof playback.positionSeconds === "number" ? ` · ${formatDuration(playback.positionSeconds)}` : "";
+    return { kind: "playing", headline: `Playing · ${current.track.title}${position}`, shortLabel: "Playing", guidance: "" };
+  }
   if (playback.status === "stopped") return { kind: "stopped", headline: `Stopped · starts from beginning`, shortLabel: "Stopped", guidance: "Space to Play from the beginning" };
   if (isRestoredPlayback(playback)) {
     const position = formatDuration(playback.positionSeconds ?? 0);

@@ -38,6 +38,7 @@ import {
   type YouTubeDownloadOptions,
   type YouTubeDownloadResult,
 } from "../src/index";
+import { driveCoordinatorContract } from "./coordinator-contract-driver";
 
 class RecordingSnapshotPersistence implements LastQueueSnapshotPersistence {
   readonly saves: LastQueueSnapshot[] = [];
@@ -385,7 +386,7 @@ describe("AppCoordinator", () => {
     queue.startAt(1);
     coordinator.appState.playback.currentTrackIdentity = b.identity;
 
-    await coordinator.dispatch({ type: "playNext", target: a });
+    await driveCoordinatorContract(coordinator, { type: "playNext", target: a });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["B", "A", "C"]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
@@ -409,7 +410,7 @@ describe("AppCoordinator", () => {
     queue.startAt(1);
     coordinator.appState.playback.currentTrackIdentity = b.identity;
 
-    await coordinator.dispatch({
+    await driveCoordinatorContract(coordinator, {
       type: "playNow",
       target: { kind: "music-collection", id: "set", label: "Set", tracks: [c, d, c] },
     });
@@ -437,7 +438,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.dispatch({ type: "playNow", target: requested });
+    await driveCoordinatorContract(coordinator, { type: "playNow", target: requested });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([former, requested]);
     expect(coordinator.appState.queue.currentIndex).toBe(1);
@@ -471,7 +472,7 @@ describe("AppCoordinator", () => {
       player: new NoopPlayer(),
     });
 
-    await coordinator.dispatch({
+    await driveCoordinatorContract(coordinator, {
       type: "playNext",
       target: {
         kind: "music-collection",
@@ -518,7 +519,7 @@ describe("AppCoordinator", () => {
       resolve: { providerId: "remote", operation: "playlist-tracks" as const, collectionId: "set" },
     };
 
-    await coordinator.dispatch({ type: "playNext", target });
+    await driveCoordinatorContract(coordinator, { type: "playNext", target });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
     expect(coordinator.uiState.overlays[0]).toMatchObject({
       ...uiState.overlays[0], message: expect.stringContaining("Press Enter to retry"),
@@ -526,7 +527,7 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.lastEvent).toContain("Provider is offline");
 
     outcome = "cancel";
-    await coordinator.dispatch({ type: "playNow", target });
+    await driveCoordinatorContract(coordinator, { type: "playNow", target });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
     expect(coordinator.uiState.overlays[0]).toMatchObject({
       ...uiState.overlays[0], message: expect.stringContaining("cancelled"),
@@ -552,7 +553,7 @@ describe("AppCoordinator", () => {
       queue, player: new NoopPlayer(),
     });
 
-    await coordinator.dispatch({ type: "playNext", target: {
+    await driveCoordinatorContract(coordinator, { type: "playNext", target: {
       kind: "music-collection", id: "navidrome:album:album", label: "Album",
       resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
     } });
@@ -560,7 +561,7 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Current", "One", "Two"]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
 
-    await coordinator.dispatch({ type: "playNow", target: {
+    await driveCoordinatorContract(coordinator, { type: "playNow", target: {
       kind: "music-collection", id: "navidrome:album:album", label: "Album",
       resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
     } });
@@ -586,7 +587,7 @@ describe("AppCoordinator", () => {
       appState: createInitialAppState({ navidrome }), uiState, queue, player: new NoopPlayer(),
     });
 
-    await coordinator.dispatch({ type: "playNext", target: {
+    await driveCoordinatorContract(coordinator, { type: "playNext", target: {
       kind: "music-collection", id: "navidrome:album:album", label: "Album",
       resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
     } });
@@ -615,7 +616,7 @@ describe("AppCoordinator", () => {
       appState: createInitialAppState({ navidrome }), uiState, queue: new MemoryQueue(), player: new NoopPlayer(),
     });
 
-    await coordinator.dispatch({ type: "globalSearch", operation: "open", result: {
+    await driveCoordinatorContract(coordinator, { type: "globalSearch", operation: "open", result: {
       providerId: "navidrome", providerLabel: "Navidrome", type: "artist", id: "artist", label: "Artist",
     } });
 
@@ -663,8 +664,8 @@ describe("AppCoordinator", () => {
       });
 
       await first.start();
-      await first.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-      await first.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(first, { type: "selectNavigationTarget", targetId: "navidrome" });
+      await driveCoordinatorContract(first, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
 
       const second = new AppCoordinator({
         appState: createInitialAppState({
@@ -698,9 +699,9 @@ describe("AppCoordinator", () => {
     });
 
     await first.start();
-    await first.dispatch({ type: "toggleShuffle" });
-    await first.dispatch({ type: "toggleRepeatAll" });
-    await first.dispatch({ type: "setVolume", percent: 36, ready: true });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "toggle-shuffle" });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "toggle-repeat-all" });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "set-volume", percent: 36, ready: true });
 
     const second = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
@@ -833,7 +834,7 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "openLocalPath", path: album });
+      await driveCoordinatorContract(coordinator, { type: "providerOperation", providerId: "local", operation: "open-path", path: album });
 
       expect(coordinator.uiState.activeTargetId).toBe("local");
       expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual([
@@ -860,7 +861,7 @@ describe("AppCoordinator", () => {
       const { coordinator } = createTmuApp();
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "openLocalPath", path: dir, signal: controller.signal });
+      await driveCoordinatorContract(coordinator, { type: "providerOperation", providerId: "local", operation: "open-path", path: dir, signal: controller.signal });
 
       expect(coordinator.appState.queue.entries).toEqual([]);
       expect(coordinator.appState.lastEvent).toBe("cancelled Local open after 0 Tracks");
@@ -873,8 +874,8 @@ describe("AppCoordinator", () => {
     const { coordinator } = createTmuApp();
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "openLocalPathPrompt" });
-    await coordinator.dispatch({ type: "setPromptInput", value: "/music/album" });
+    await driveCoordinatorContract(coordinator, { type: "openLocalPathPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "/music/album" });
 
     expect(coordinator.uiState.activeTargetId).toBe("local");
     expect(coordinator.uiState.focusedPane).toBe("content");
@@ -892,14 +893,14 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "openLocalPathPrompt" });
-    await coordinator.dispatch({ type: "setPromptInput", value: "/music/huge" });
-    await coordinator.dispatch({ type: "submitPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "openLocalPathPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "/music/huge" });
+    await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
 
     await waitFor(() => {
       expect(local.observedSignal).not.toBeNull();
     });
-    await coordinator.dispatch({ type: "cancelLocalOpen" });
+    await driveCoordinatorContract(coordinator, { type: "providerOperation", providerId: "local", operation: "cancel-open" });
 
     await waitFor(() => {
       expect(coordinator.appState.lastEvent).toBe("cancelled Local open after 0 Tracks");
@@ -921,8 +922,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
 
     expect(coordinator.uiState.activeTargetId).toBe("navidrome");
     expect(coordinator.uiState.focusedPane).toBe("content");
@@ -943,10 +944,10 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity)).toEqual([
       { providerId: "local", stableId: "/music/amber.flac" },
@@ -982,8 +983,8 @@ describe("AppCoordinator", () => {
 
     await coordinator.start();
     queue.enqueue(brokenTrack);
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([]);
     expect(coordinator.appState.queue.entries).toHaveLength(1);
@@ -1053,13 +1054,13 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "activateSelectedContent" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "activateSelectedContent" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "activateSelectedContent" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "activateSelectedContent" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
     expect(coordinator.appState.queue.entries).toHaveLength(1);
     expect(coordinator.appState.queue.entries[0]?.track).toEqual({
@@ -1076,8 +1077,8 @@ describe("AppCoordinator", () => {
     });
     expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
 
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toHaveLength(1);
     expect(player.loaded[0]?.kind).toBe("url");
@@ -1107,7 +1108,7 @@ describe("AppCoordinator", () => {
       player: new RecordingPlayer(),
     });
 
-    await coordinator.dispatch({ type: "providerOperation", providerId: "navidrome", operation: "retry" });
+    await driveCoordinatorContract(coordinator, { type: "providerOperation", providerId: "navidrome", operation: "retry" });
 
     expect(provider.getConnectionState().status).toBe("connected");
     expect(coordinator.appState.lastEvent).toBe("Navidrome connection restored");
@@ -1133,8 +1134,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toHaveLength(1);
     expect(player.loaded[0]).toMatchObject({ kind: "url" });
@@ -1147,7 +1148,7 @@ describe("AppCoordinator", () => {
       reason: "mpv error: load failed",
     });
 
-    await coordinator.dispatch({ type: "saveLastQueueSnapshot" });
+    await driveCoordinatorContract(coordinator, { type: "persistenceOperation", operation: "save" });
     const snapshot = await snapshotPersistence.load();
 
     expect(snapshot?.entries[0]).toEqual({
@@ -1201,13 +1202,13 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "activateSelectedContent" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "activateSelectedContent" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "activateSelectedContent" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "activateSelectedContent" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([{
       identity: {
@@ -1250,11 +1251,11 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "openNavidromeSearchPrompt" });
-    await coordinator.dispatch({ type: "setPromptInput", value: "found" });
-    await coordinator.dispatch({ type: "submitPrompt" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "openNavidromeSearchPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "found" });
+    await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
     expect(seenSearchParams).toHaveLength(1);
     expect(seenSearchParams[0]).toMatchObject({
@@ -1296,8 +1297,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     await waitFor(() => {
       expect(seenScrobbles).toContainEqual(expect.objectContaining({ id: "track-1", submission: "false" }));
@@ -1330,8 +1331,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
     player.emitPlaybackState({ status: "playing", positionSeconds: 149, durationSeconds: 300 });
     await Bun.sleep(10);
     expect(seenScrobbles.filter((params) => params.submission === "true")).toEqual([]);
@@ -1368,8 +1369,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
     player.emitPlaybackState({ status: "playing", positionSeconds: 90, durationSeconds: 120 });
     await Bun.sleep(10);
 
@@ -1396,8 +1397,8 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     await waitFor(() => {
       expect(coordinator.appState.appErrors).toContain("Navidrome reporting failed: request failed for scrobble: scrobble network failed");
@@ -1432,11 +1433,11 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
 
-    await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
+    await driveCoordinatorContract(coordinator, { type: "refreshNavidromeLibrary" });
     coordinator.dispatchUi({
       type: "updateView",
       patch: {
@@ -1444,7 +1445,7 @@ describe("AppCoordinator", () => {
       },
     });
     const uiBeforeSemanticRefresh = structuredClone(coordinator.uiState);
-    await coordinator.dispatch({ type: "providerOperation", providerId: "navidrome", operation: "refresh" });
+    await driveCoordinatorContract(coordinator, { type: "providerOperation", providerId: "navidrome", operation: "refresh" });
     expect(coordinator.uiState).toEqual(uiBeforeSemanticRefresh);
     expect(seenEndpoints).toEqual(["ping", "getArtists", "ping", "ping", "getArtists", "ping", "getArtists"]);
   });
@@ -1461,7 +1462,7 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
+    await driveCoordinatorContract(coordinator, { type: "refreshNavidromeLibrary" });
 
     expect(coordinator.uiState.activeTargetId).toBe("local");
     expect(seenEndpoints).toEqual([]);
@@ -1480,16 +1481,16 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "togglePlayPause" });
-    await coordinator.dispatch({ type: "togglePlayPause" });
-    await coordinator.dispatch({ type: "seekBy", seconds: 15 });
-    await coordinator.dispatch({ type: "setVolume", percent: 73, ready: true });
-    await coordinator.dispatch({ type: "adjustVolume", delta: 40 });
-    await coordinator.dispatch({ type: "stop" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "seek", seconds: 15 });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "set-volume", percent: 73, ready: true });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "adjust-volume", delta: 40 });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "stop" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(player.toggles).toBe(2);
@@ -1513,16 +1514,16 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "seekBy", seconds: 5 });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "seek", seconds: 5 });
 
     expect(coordinator.appState.lastEvent).toBe("mpv error: seek failed");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(localTrack.identity);
 
-    await coordinator.dispatch({ type: "stop" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "stop" });
 
     expect(player.stops).toBe(1);
     expect(coordinator.appState.playback.status).toBe("stopped");
@@ -1541,11 +1542,11 @@ describe("AppCoordinator", () => {
     });
 
     await stopCoordinator.start();
-    await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await stopCoordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await stopCoordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await stopCoordinator.dispatch({ type: "stop" });
+    await driveCoordinatorContract(stopCoordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(stopCoordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(stopCoordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(stopCoordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(stopCoordinator, { type: "playerOperation", operation: "stop" });
 
     expect(stopCoordinator.appState.lastEvent).toBe("mpv error: stop failed");
 
@@ -1560,7 +1561,7 @@ describe("AppCoordinator", () => {
     });
 
     await volumeCoordinator.start();
-    await volumeCoordinator.dispatch({ type: "setVolume", percent: 71, ready: true });
+    await driveCoordinatorContract(volumeCoordinator, { type: "playerOperation", operation: "set-volume", percent: 71, ready: true });
 
     expect(volumeCoordinator.appState.lastEvent).toBe("mpv error: volume failed");
     expect(volumeCoordinator.appState.volume).toEqual({ percent: 100, ready: false });
@@ -1579,10 +1580,10 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.lastEvent).toBe("mpv error: load failed");
@@ -1612,13 +1613,13 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "moveSelection", delta: -1 });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: -1 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(coordinator.appState.lastEvent).toBe("mpv error: first load failed");
     expect(coordinator.appState.queue.entries.map((entry) => entry.availability)).toEqual([
@@ -1626,7 +1627,7 @@ describe("AppCoordinator", () => {
       { status: "unknown" },
     ]);
 
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
 
     expect(player.loaded).toEqual([
       { kind: "file", path: "/resolved/local//music/first.flac" },
@@ -1656,16 +1657,16 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "moveSelection", delta: -2 });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: -2 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
 
     expect(player.loaded).toEqual([
       { kind: "file", path: "/resolved/local//music/first.flac" },
@@ -1719,7 +1720,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.dispatch({ type: "quit" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "quit" });
     await coordinator.teardown();
 
     expect(player.teardowns).toBe(1);
@@ -1762,19 +1763,19 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
     expect(coordinator.uiState.activeTargetId).toBe("queue");
     expect(coordinator.uiState.focusedPane).toBe("queue");
 
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "moveSelectedQueueEntry", delta: -2 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelectedQueueEntry", delta: -2 });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
       "Drift Signal",
       "Amber Path",
@@ -1782,28 +1783,28 @@ describe("AppCoordinator", () => {
     ]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
 
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
 
-    await coordinator.dispatch({ type: "toggleRepeatAll" });
-    await coordinator.dispatch({ type: "nextTrack" });
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-repeat-all" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(drift.identity);
 
-    await coordinator.dispatch({ type: "toggleShuffle" });
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-shuffle" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
 
-    await coordinator.dispatch({ type: "previousTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "previous-track" });
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(drift.identity);
 
-    await coordinator.dispatch({ type: "removeSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "removeSelectedQueueEntry" });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
       "Amber Path",
       "Cinder Room",
     ]);
 
-    await coordinator.dispatch({ type: "clearQueue" });
+    await driveCoordinatorContract(coordinator, { type: "clearQueue" });
     expect(coordinator.appState.queue.entries).toEqual([]);
     expect(coordinator.appState.queue.currentIndex).toBe(-1);
     expect(coordinator.appState.queue.shuffle).toBe(true);
@@ -1829,7 +1830,7 @@ describe("AppCoordinator", () => {
       player: new RecordingPlayer(),
     });
 
-    await coordinator.dispatch({ type: "removeQueueTrack", identity: cinder.identity });
+    await driveCoordinatorContract(coordinator, { type: "removeQueueTrack", identity: cinder.identity });
 
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(drift.identity);
     expect(coordinator.uiState.selectedQueueIndex).toBe(1);
@@ -1853,7 +1854,7 @@ describe("AppCoordinator", () => {
       player: new RecordingPlayer(),
     });
 
-    await coordinator.dispatch({ type: "removeQueueTrack", identity: cinder.identity });
+    await driveCoordinatorContract(coordinator, { type: "removeQueueTrack", identity: cinder.identity });
 
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(amber.identity);
     expect(coordinator.uiState.selectedQueueIndex).toBe(0);
@@ -1873,7 +1874,7 @@ describe("AppCoordinator", () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({ appState, uiState, queue, player });
 
-    await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
+    await driveCoordinatorContract(coordinator, { type: "removeQueueTrack", identity: amber.identity });
 
     expect(player.stops).toBe(1);
     expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
@@ -1898,7 +1899,7 @@ describe("AppCoordinator", () => {
       player: new FailingStopPlayer(),
     });
 
-    await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
+    await driveCoordinatorContract(coordinator, { type: "removeQueueTrack", identity: amber.identity });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber", "Cinder"]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
@@ -1921,7 +1922,7 @@ describe("AppCoordinator", () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({ appState, uiState, queue, player });
 
-    await coordinator.dispatch({ type: "moveQueueTrack", identity: cinder.identity, delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "moveQueueTrack", identity: cinder.identity, delta: 1 });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber", "Drift", "Cinder"]);
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(cinder.identity);
@@ -1947,7 +1948,7 @@ describe("AppCoordinator", () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({ appState, uiState, queue, player });
 
-    await coordinator.dispatch({ type: "clearQueue" });
+    await driveCoordinatorContract(coordinator, { type: "clearQueue" });
 
     expect(player.stops).toBe(1);
     expect(coordinator.appState.queue.entries).toEqual([]);
@@ -1973,7 +1974,7 @@ describe("AppCoordinator", () => {
       player: new FailingStopPlayer(),
     });
 
-    await coordinator.dispatch({ type: "clearQueue" });
+    await driveCoordinatorContract(coordinator, { type: "clearQueue" });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber"]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
@@ -1998,23 +1999,23 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
 
     expect(coordinator.uiState.activeTargetId).toBe("queue");
     expect(coordinator.uiState.focusedPane).toBe("queue");
 
-    await coordinator.dispatch({ type: "moveSelection", delta: -1 });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "togglePlayPause" });
-    await coordinator.dispatch({ type: "seekBy", seconds: 15 });
-    await coordinator.dispatch({ type: "setVolume", percent: 55, ready: true });
-    await coordinator.dispatch({ type: "toggleShuffle" });
-    await coordinator.dispatch({ type: "toggleRepeatAll" });
-    await coordinator.dispatch({ type: "stop" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: -1 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "seek", seconds: 15 });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "set-volume", percent: 55, ready: true });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-shuffle" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-repeat-all" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "stop" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/music/playable.flac" }]);
     expect(player.toggles).toBe(1);
@@ -2030,8 +2031,8 @@ describe("AppCoordinator", () => {
       currentTrackIdentity: playable.identity,
     });
 
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/music/playable.flac" }]);
     expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
@@ -2054,13 +2055,13 @@ describe("AppCoordinator", () => {
     });
 
     await first.start();
-    await first.dispatch({ type: "enqueueSelectedTrack" });
-    await first.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await first.dispatch({ type: "startSelectedQueueEntry" });
-    await first.dispatch({ type: "toggleShuffle" });
-    await first.dispatch({ type: "toggleRepeatAll" });
-    await first.dispatch({ type: "setVolume", percent: 64, ready: true });
-    await first.dispatch({ type: "saveLastQueueSnapshot" });
+    await driveCoordinatorContract(first, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(first, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(first, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "toggle-shuffle" });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "toggle-repeat-all" });
+    await driveCoordinatorContract(first, { type: "playerOperation", operation: "set-volume", percent: 64, ready: true });
+    await driveCoordinatorContract(first, { type: "persistenceOperation", operation: "save" });
 
     const second = new AppCoordinator({
       appState: createInitialAppState({
@@ -2073,7 +2074,7 @@ describe("AppCoordinator", () => {
     });
 
     await second.start();
-    await second.dispatch({ type: "restoreLastQueueSnapshot" });
+    await driveCoordinatorContract(second, { type: "persistenceOperation", operation: "restore" });
 
     expect(second.appState.queue).toEqual({
       entries: [
@@ -2125,7 +2126,7 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.volume).toEqual({ percent: 63, ready: true });
     expect(player.volumes).toEqual([63]);
 
-    await coordinator.dispatch({ type: "togglePlayPause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/current.flac" }]);
     expect(player.seeks).toEqual([37]);
   });
@@ -2142,7 +2143,7 @@ describe("AppCoordinator", () => {
     await coordinator.start();
     persistence.quarantined = true;
 
-    await coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
+    await driveCoordinatorContract(coordinator, { type: "persistenceOperation", operation: "restore" });
     await coordinator.teardown();
 
     expect(persistence.saves).toEqual([]);
@@ -2164,12 +2165,12 @@ describe("AppCoordinator", () => {
     await coordinator.start();
 
     persistence.failWrites = 1;
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "playNext", target: item });
     expect(coordinator.appState.queue.entries).toHaveLength(1);
     expect(coordinator.appState.appErrors.at(-1)).toContain("Could not save Last Queue Snapshot");
 
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
     const savesAfterStart = persistence.saves.length;
     player.emitPlaybackState({ status: "playing", positionSeconds: 10 });
     await waitFor(() => expect(persistence.saves.length).toBe(savesAfterStart + 1));
@@ -2181,7 +2182,7 @@ describe("AppCoordinator", () => {
     player.emitPlaybackState({ status: "playing", positionSeconds: 40 });
     await waitFor(() => expect(persistence.saves.at(-1)?.positionSeconds).toBe(40));
     const beforePause = persistence.saves.length;
-    await coordinator.dispatch({ type: "togglePlayPause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
     expect(persistence.saves.length).toBeGreaterThan(beforePause);
 
     const beforeQuit = persistence.saves.length;
@@ -2233,8 +2234,8 @@ describe("AppCoordinator", () => {
     });
     expect(coordinator.appState.queue.entries[1]?.availability).toEqual({ status: "available" });
 
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([]);
     expect(coordinator.appState.queue.entries).toHaveLength(2);
@@ -2262,16 +2263,16 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "moveSelection", delta: 1 });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "moveSelection", delta: -2 });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "nextTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 1 });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: -2 });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "next-track" });
 
     expect(player.loaded).toEqual([
       { kind: "file", path: "/music/first.flac" },
@@ -2302,7 +2303,7 @@ describe("AppCoordinator", () => {
 
     for (const queued of [first, missing, last]) queue.enqueue(queued);
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file missing" });
-    await coordinator.dispatch({ type: "playNow", target: first });
+    await driveCoordinatorContract(coordinator, { type: "playNow", target: first });
 
     player.emitPlaybackState({ status: "idle", idle: true, eof: true });
     await waitFor(() => expect(coordinator.appState.playback.currentTrackIdentity).toEqual(last.identity));
@@ -2347,8 +2348,8 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
-      await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+      await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
       expect(coordinator.appState.queue.entries[0]).toMatchObject({
         track: {
@@ -2358,8 +2359,8 @@ describe("AppCoordinator", () => {
         availability: { status: "unavailable", reason: "Cached media file is missing" },
       });
 
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-      await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+      await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
       expect(coordinator.appState.queue.entries).toHaveLength(1);
       expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
@@ -2394,13 +2395,13 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-    await coordinator.dispatch({ type: "togglePlayPause" });
-    await coordinator.dispatch({ type: "seekBy", seconds: 10 });
-    await coordinator.dispatch({ type: "setVolume", percent: 41, ready: true });
-    await coordinator.dispatch({ type: "stop" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "toggle-play-pause" });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "seek", seconds: 10 });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "set-volume", percent: 41, ready: true });
+    await driveCoordinatorContract(coordinator, { type: "playerOperation", operation: "stop" });
 
     expect(player.loaded).toEqual([]);
     expect(player.toggles).toBe(0);
@@ -2439,9 +2440,9 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/amber.flac" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
@@ -2471,11 +2472,11 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
     expect(refreshes).toEqual(["yt-dlp"]);
     expect(coordinator.uiState.activePrompt).toBeNull();
 
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
     expect(refreshes).toEqual(["yt-dlp", "yt-dlp"]);
     expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
@@ -2499,7 +2500,7 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "moveSelection", delta: 3 });
+    await driveCoordinatorContract(coordinator, { type: "moveSelection", delta: 3 });
 
     expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
     expect(refreshes).toEqual(["yt-dlp"]);
@@ -2532,12 +2533,12 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
-    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "local" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "navidrome" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
+    await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.providerId)).toEqual([
       "local",
@@ -2545,8 +2546,8 @@ describe("AppCoordinator", () => {
       "offline-youtube-cache",
     ]);
 
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
-    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "queue" });
+    await driveCoordinatorContract(coordinator, { type: "startSelectedQueueEntry" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/offline-youtube-cache/youtube:abc123" }]);
     expect(coordinator.appState.playback.status).toBe("playing");
@@ -2604,9 +2605,9 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://music.youtube.com/watch?v=AbC123" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://music.youtube.com/watch?v=AbC123" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
 
       await waitFor(() => {
         expect(coordinator.appState.queue.entries).toHaveLength(1);
@@ -2707,9 +2708,9 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Missing123" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=Missing123" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
 
       await waitFor(() => {
         expect(coordinator.appState.queue.entries).toHaveLength(1);
@@ -2784,9 +2785,9 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=First" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=First" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
       await waitFor(() => {
         expect(coordinator.appState.downloads).toEqual({
           active: true,
@@ -2794,9 +2795,9 @@ describe("AppCoordinator", () => {
         });
       });
 
-      await coordinator.dispatch({ type: "enqueueSelectedTrack" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Second" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "enqueueSelectedTrack" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=Second" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
 
       expect(downloaderCalls).toHaveLength(1);
       expect(coordinator.appState.lastEvent).toBe("YouTube download already in progress");
@@ -2865,14 +2866,14 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelMe" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelMe" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
       await waitFor(() => {
         expect(observedSignal).not.toBeUndefined();
       });
 
-      await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+      await driveCoordinatorContract(coordinator, { type: "downloadOperation", operation: "cancel" });
 
       await waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
@@ -2936,14 +2937,14 @@ describe("AppCoordinator", () => {
       });
 
       await coordinator.start();
-      await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-      await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelSuccess" });
-      await coordinator.dispatch({ type: "submitPrompt" });
+      await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+      await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelSuccess" });
+      await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
       await waitFor(() => {
         expect(observedSignal).not.toBeUndefined();
       });
 
-      await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+      await driveCoordinatorContract(coordinator, { type: "downloadOperation", operation: "cancel" });
 
       await waitFor(() => {
         expect(coordinator.appState.downloads.active).toBe(false);
@@ -2982,14 +2983,14 @@ describe("AppCoordinator", () => {
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-    await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelIdentify" });
-    await coordinator.dispatch({ type: "submitPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelIdentify" });
+    await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
     await waitFor(() => {
       expect(observedSignal).not.toBeUndefined();
     });
 
-    await coordinator.dispatch({ type: "cancelYouTubeDownload" });
+    await driveCoordinatorContract(coordinator, { type: "downloadOperation", operation: "cancel" });
 
     await waitFor(() => {
       expect(observedSignal?.aborted).toBe(true);
@@ -3012,9 +3013,9 @@ describe("AppCoordinator", () => {
     const { coordinator } = createTmuApp({ dependencyRunner: runner });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
-    await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=BotCheck" });
-    await coordinator.dispatch({ type: "submitPrompt" });
+    await driveCoordinatorContract(coordinator, { type: "selectNavigationTarget", targetId: "youtube-url-download" });
+    await driveCoordinatorContract(coordinator, { type: "setPromptInput", value: "https://www.youtube.com/watch?v=BotCheck" });
+    await driveCoordinatorContract(coordinator, { type: "submitPrompt" });
 
     await waitFor(() => {
       expect(coordinator.appState.lastEvent).toBe(
