@@ -86,10 +86,11 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
 
       async function routeInput(key: string): Promise<void> {
-        const hadOverlay = coordinator.uiState.overlays.length > 0;
+        const hadBlockingLayer = coordinator.uiState.overlays.length > 0
+          || coordinator.uiState.pendingConfirmation !== null;
         await router.route(key);
         publication.notify("input");
-        if (key === "\u0003" || (key === "q" && !hadOverlay)) app.exit();
+        if (key === "\u0003" || (key === "q" && !hadBlockingLayer)) app.exit();
       }
 
       onScopeDispose(() => {
@@ -160,6 +161,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay) : null,
+    uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
   ]);
 }
 
@@ -359,9 +361,19 @@ function overlayView(overlay: PickerOverlay) {
   ]);
 }
 
+function confirmationView(choice: "cancel" | "confirm") {
+  return h(Box, { flexDirection: "column", borderStyle: "single", paddingX: 1 }, () => [
+    h(Text, { bold: true }, () => "Clear Queue?"),
+    h(Text, () => "Stop playback, clear Current Track, and remove every Track."),
+    h(Text, { inverse: choice === "cancel" }, () => choice === "cancel" ? "[Cancel]  Clear" : "Cancel  [Clear]"),
+    h(Text, { dimColor: true }, () => "h/l or ←/→ · Tab changes · Enter activates · y yes · n/Esc/q cancel"),
+  ]);
+}
+
 function terminalKey(input: string, key: {
   ctrl: boolean; escape: boolean; return: boolean; upArrow: boolean; downArrow: boolean;
-  home: boolean; end: boolean; pageUp: boolean; pageDown: boolean;
+  leftArrow: boolean; rightArrow: boolean; home: boolean; end: boolean; pageUp: boolean; pageDown: boolean;
+  tab: boolean; delete: boolean;
 }): string {
   if (key.ctrl && input === "c") return "\u0003";
   if (key.ctrl && input === "d") return "\x04";
@@ -370,10 +382,14 @@ function terminalKey(input: string, key: {
   if (key.return) return "\r";
   if (key.upArrow) return "\x1b[A";
   if (key.downArrow) return "\x1b[B";
+  if (key.rightArrow) return "\x1b[C";
+  if (key.leftArrow) return "\x1b[D";
   if (key.home) return "\x1b[H";
   if (key.end) return "\x1b[F";
   if (key.pageUp) return "\x1b[5~";
   if (key.pageDown) return "\x1b[6~";
+  if (key.tab) return "\t";
+  if (key.delete) return "\x1b[3~";
   return input;
 }
 

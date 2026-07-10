@@ -403,6 +403,69 @@ describe("production vue-tui", () => {
     expect(terminal.lastFrame()).toContain("Picker Overlay · command-palette");
   });
 
+  test("shows a Cancel-first Clear Queue confirmation and applies only the confirmed choice", async () => {
+    const { coordinator, player } = await productionHarness({ tracks: [restoredTrack, secondTrack] });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write("c");
+    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("[Cancel]");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    expect(player.stops).toBe(0);
+
+    await terminal.stdin.write("c");
+    await terminal.stdin.write("q");
+    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    expect(terminal.lastFrame()).toContain("Queue · 2 Tracks");
+
+    await terminal.stdin.write("c");
+    await terminal.stdin.write("\t");
+    expect(terminal.lastFrame()).toContain("[Clear]");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toBeNull();
+    expect(coordinator.uiState.selectedQueueIdentity).toBeNull();
+    expect(player.stops).toBe(1);
+  });
+
+  test("keeps Track-identity selection and Current Track stable through Queue reorder and removal", async () => {
+    const thirdTrack: Track = {
+      identity: { providerId: "test", stableId: "third-track" },
+      title: "Third Track",
+      providerLabel: "Test",
+    };
+    const { coordinator, player } = await productionHarness({
+      tracks: [restoredTrack, secondTrack, thirdTrack],
+    });
+    coordinator.appState.playback = { status: "playing", currentTrackIdentity: restoredTrack.identity };
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("J");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      "Restored Track",
+      "Third Track",
+      secondTrack.title,
+    ]);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(secondTrack.identity);
+    expect(coordinator.uiState.selectedQueueIndex).toBe(2);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
+    expect(player.stops).toBe(0);
+
+    await terminal.stdin.write("x");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(thirdTrack.identity);
+    expect(player.stops).toBe(0);
+
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("x");
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.playback.currentTrackIdentity).toBeNull();
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(thirdTrack.identity);
+  });
+
   test("keeps a one-row footer with discovery routes at every supported tier", async () => {
     const { coordinator } = await productionHarness();
     for (const columns of [130, 100, 70]) {
