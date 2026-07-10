@@ -196,6 +196,31 @@ describe("root input router", () => {
     expect(intents).toEqual([]);
   });
 
+  test("keeps Provider navigation inside the one root router", async () => {
+    const current = context();
+    current.uiState.activeTargetId = "navidrome";
+    const ui = new UiStateStore(current.uiState);
+    const intents: string[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: () => undefined,
+      dispatchUiIntent: (intent) => { intents.push(intent.type); },
+    });
+
+    for (const key of ["\t", "\x1b[B", "2", "o", "/", "\r"]) await router.route(key);
+
+    expect(intents).toEqual([
+      "cycleFocus",
+      "moveSelection",
+      "selectNavigationTarget",
+      "openLocalPathPrompt",
+      "openNavidromeSearchPrompt",
+      "activateSelectedContent",
+    ]);
+  });
+
   test("repairs Queue selection after semantic Queue mutations", async () => {
     const cinder = {
       identity: { providerId: "local", stableId: "/music/cinder.flac" },

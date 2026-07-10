@@ -581,14 +581,7 @@ export class AppCoordinator {
       this.appState.lastEvent = `${providerId} Provider does not support search`;
       return;
     }
-    try {
-      const results = await provider.searchTracks(query);
-      this.appState.lastEvent = results.length === 0
-        ? `Navidrome search found no Tracks for ${query.trim()}`
-        : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
-    } catch (error) {
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-    }
+    await this.runNavidromeBrowsingQuery(provider, query);
   }
 
   private async openProviderPath(providerId: string, path: string, signal?: AbortSignal): Promise<void> {
@@ -1359,19 +1352,29 @@ export class AppCoordinator {
     }
     this.updateUiState({ focusedPane: "content" });
 
+    const results = await this.runNavidromeBrowsingQuery(provider, query);
+    if (!results) return;
+    this.updateUiState({
+      providerLocation: { providerId: "navidrome", path: ["search", query.trim()] },
+    });
+    const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
+    const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
+    this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
+  }
+
+  private async runNavidromeBrowsingQuery(
+    provider: import("./navidrome").NavidromeProvider,
+    query: string,
+  ): Promise<readonly Track[] | undefined> {
     try {
       const results = await provider.searchTracks(query);
-      this.updateUiState({
-        providerLocation: { providerId: "navidrome", path: ["search", query.trim()] },
-      });
-      const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
-      const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
-      this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
       this.appState.lastEvent = results.length === 0
         ? `Navidrome search found no Tracks for ${query.trim()}`
         : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
+      return results;
     } catch (error) {
       this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      return undefined;
     }
   }
 
