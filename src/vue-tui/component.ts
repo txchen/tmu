@@ -74,7 +74,6 @@ export function createTmuRoot(options: TmuRootOptions) {
           },
         },
         dispatchApp: (intent) => coordinator.dispatch(intent),
-        dispatchUiIntent: (intent) => coordinator.dispatch(intent),
         requestQuit: () => app.exit(),
       });
       const { columns, rows } = useWindowSize();
@@ -114,7 +113,9 @@ type Presentation = {
 
 function createPresentation(options: TmuRootOptions): Presentation {
   const measure = options.measureCellWidth ?? Bun.stringWidth;
-  const unicode = ["›", "●", "!"].every((marker) => measure(marker) === 1);
+  const locale = process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG;
+  const unicodeEnvironment = locale !== "C" && locale !== "POSIX" && process.env.TERM !== "dumb";
+  const unicode = unicodeEnvironment && ["›", "●", "!"].every((marker) => measure(marker) === 1);
   return {
     markers: unicode
       ? { selected: "›", current: "●", unavailable: "!" }

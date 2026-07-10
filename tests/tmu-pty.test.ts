@@ -19,13 +19,23 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
-  options: { playbackTrack?: boolean; corruptSnapshot?: boolean; searchTrack?: boolean; activeDownload?: boolean } = {},
+  options: {
+    playbackTrack?: boolean;
+    corruptSnapshot?: boolean;
+    searchTrack?: boolean;
+    activeDownload?: boolean;
+    navidromeFailureUrl?: string;
+    malformedConfig?: boolean;
+    env?: Record<string, string>;
+  } = {},
 ) {
   const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   if (options.playbackTrack) await seedPlaybackSnapshot(runtimeRoot);
   if (options.corruptSnapshot) await seedCorruptSnapshot(runtimeRoot);
   if (options.searchTrack) await seedSearchTrack(runtimeRoot);
   if (options.activeDownload) await seedDownloadFixture(runtimeRoot);
+  if (options.navidromeFailureUrl) await seedNavidromeFailure(runtimeRoot, options.navidromeFailureUrl);
+  if (options.malformedConfig) await seedMalformedConfig(runtimeRoot);
   const terminal = new Bun.Terminal({
     cols: 120,
     rows: 24,
@@ -40,10 +50,31 @@ async function spawnTmu(
       XDG_CONFIG_HOME: `${runtimeRoot}/config`,
       XDG_STATE_HOME: `${runtimeRoot}/state`,
       XDG_CACHE_HOME: `${runtimeRoot}/cache`,
+      ...options.env,
     },
     terminal,
   });
   return { terminal, subprocess, runtimeRoot };
+}
+
+async function seedNavidromeFailure(runtimeRoot: string, serverUrl: string): Promise<void> {
+  await mkdir(`${runtimeRoot}/config/tmu`, { recursive: true });
+  await writeFile(`${runtimeRoot}/config/tmu/config.json`, JSON.stringify({
+    providers: {
+      navidrome: {
+        enabled: true,
+        serverUrl,
+        username: "pty-user",
+        password: "pty-password",
+      },
+    },
+    dependencyPolicy: { checkTimeoutMs: 250 },
+  }));
+}
+
+async function seedMalformedConfig(runtimeRoot: string): Promise<void> {
+  await mkdir(`${runtimeRoot}/config/tmu`, { recursive: true });
+  await writeFile(`${runtimeRoot}/config/tmu/config.json`, "{invalid");
 }
 
 async function seedCorruptSnapshot(runtimeRoot: string): Promise<void> {
@@ -329,6 +360,46 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
+  test("keeps successful Global Search results usable when Navidrome fails", async () => {
+    let output = "";
+    const read = () => output;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({
+        "subsonic-response": {
+          status: "failed",
+          error: { code: 40, message: "Wrong username or password" },
+        },
+      }),
+    });
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { searchTrack: true, navidromeFailureUrl: `http://${server.hostname}:${server.port}` },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 0 Tracks");
+      terminal.write("/");
+      await waitForOutput(read, "Search:");
+      terminal.write("PTY Search");
+      await waitForOutput(read, "Search: PTY Search");
+      terminal.write("\r");
+      await waitForOutput(read, "PTY Search Track");
+      await waitForOutput(read, "Navidrome · Authentication failed", 10_000);
+      const failureFrame = output.slice(output.lastIndexOf("PTY Search Track"));
+      expect(failureFrame).toContain("Offline YouTube Cache");
+      expect(failureFrame).toContain("Navidrome · Authentication failed");
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      server.stop(true);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("keeps Provider navigation aliases, location memory, and short-list context across PTY resize", async () => {
     let output = "";
     const read = () => output;
@@ -389,10 +460,17 @@ describe("production tmu real PTY", () => {
       terminal.write("o");
       await waitForOutput(read, "Picker Overlay · music-picker");
       nextFrame = output.length;
+      terminal.resize(100, 24);
+      await Bun.sleep(20);
+      subprocess.kill("SIGWINCH");
+      await waitForNewOutput(read, nextFrame, "Playing Track");
+      expect(output.slice(nextFrame)).not.toContain("Current:");
+      nextFrame = output.length;
       terminal.resize(70, 24);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
       await waitForNewOutput(read, nextFrame, "Picker Overlay · music-picker");
+      expect(output.slice(nextFrame)).toContain("No Current Track");
       nextFrame = output.length;
       terminal.resize(50, 14);
       await Bun.sleep(20);
@@ -451,6 +529,55 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
+  test("uses the complete ASCII marker set for a non-Unicode runtime locale", async () => {
+    let output = "";
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true, env: { LC_ALL: "C", LANG: "C" } },
+    );
+
+    try {
+      await waitForOutput(() => output, "Queue · 3 Tracks");
+      expect(output).toContain("> *");
+      expect(output).not.toContain("›");
+      expect(output).not.toContain("●");
+      expect(output).not.toMatch(/\x1b\[(?:3[0-7]|9[0-7])m/);
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("leaves the PTY canonical and cursor-visible after a fatal startup error", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { malformedConfig: true },
+    );
+
+    try {
+      expect(await subprocess.exited).not.toBe(0);
+      expect(output).toContain("Failed to load TMU config");
+      expect(output).not.toContain("\x1b[?1049h");
+
+      const beforeStty = output.length;
+      const stty = Bun.spawn(["sh", "-c", "stty -a; printf __AFTER_FATAL__"], { terminal });
+      expect(await stty.exited).toBe(0);
+      await waitForOutput(read, "__AFTER_FATAL__");
+      const restoredState = output.slice(beforeStty).replaceAll("\r", " ").replaceAll("\n", " ");
+      expect(restoredState).toMatch(/(?:^|[ ;])icanon(?:[ ;]|$)/);
+      expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("keeps YouTube downloads running behind overlays and confirms cancellation and graceful quit", async () => {
     let output = "";
     const read = () => output;
@@ -466,6 +593,10 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "https://youtu.be/PtyDownload");
       terminal.write("\r");
       await waitForOutput(read, "download 5.0%");
+      const initialProgress = output.length;
+      await Bun.sleep(300);
+      expect(output.slice(initialProgress)).not.toContain("download 25.0%");
+      await waitForNewOutput(read, initialProgress, "download 25.0%");
 
       let nextFrame = output.length;
       terminal.write("\x1b");
@@ -667,7 +798,9 @@ describe("production tmu real PTY", () => {
 
       await writeAndWait("+", "Vol 75%");
 
+      const unavailableTraversal = output.length;
       await writeAndWait("n", "Playing · PTY Last");
+      expect(output.slice(unavailableTraversal)).not.toContain("Playing · PTY Missing");
       await writeAndWait(":", "Picker Overlay · command-palette");
       await writeAndWait("toggle repeat all", "Toggle Repeat All");
       await writeAndWait("\r", "Repeat All");

@@ -17,6 +17,7 @@ describe("Bun npm executable", () => {
     expect(pkg.bin).toEqual({ tmu: "src/main.ts" });
     expect(pkg.scripts?.["build:linux-x64"]).toBeUndefined();
     expect(pkg.scripts?.["smoke:linux-x64"]).toBeUndefined();
+    expect(Object.keys(pkg.scripts ?? {}).every((name) => !name.includes("prototype"))).toBe(true);
     expect(pkg.dependencies?.["@vue-tui/runtime"]).toBe("0.0.3");
     expect(pkg.dependencies?.vue).toBe("3.5.39");
     expect(pkg.devDependencies?.["@vue-tui/runtime"]).toBeUndefined();
