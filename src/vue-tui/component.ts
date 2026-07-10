@@ -144,7 +144,12 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
   const exceptionalGuidance = selectedEntry?.availability.status === "unavailable"
     ? `${selectedEntry.availability.reason} · Retry`
     : "";
-  const visibleRows = queueHomeVisibleRows(tier, uiState.terminal.rows, exceptionalGuidance.length > 0);
+  const diagnostic = appState.appErrors.at(-1) ?? "";
+  const visibleRows = queueHomeVisibleRows(
+    tier,
+    uiState.terminal.rows,
+    exceptionalGuidance.length > 0 || diagnostic.length > 0,
+  );
   const start = Math.min(uiState.scrollByPane.queue, Math.max(0, appState.queue.entries.length - visibleRows));
   const entries = appState.queue.entries.slice(start, start + visibleRows);
   const currentState = playingTrackState(current, appState.playback);
@@ -174,6 +179,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
     tier === "narrow"
       ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, settings, start, exceptionalGuidance)
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
+    diagnostic ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => `! ${diagnostic}`) : null,
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay, snapshot, registry, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
     uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.kind, uiState.pendingConfirmation.choice) : null,

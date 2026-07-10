@@ -193,6 +193,8 @@ export type LastQueueSnapshot = {
   shuffle: boolean;
   repeatAll: boolean;
   volume: VolumeState;
+  /** Last resumable position for Current Track. Missing in legacy version-1 files means zero. */
+  positionSeconds?: number;
 };
 
 export type PlaybackState = PlayerPlaybackState & {

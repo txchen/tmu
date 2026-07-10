@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 
 const decoder = new TextDecoder();
 
@@ -19,10 +19,11 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
-  options: { playbackTrack?: boolean; searchTrack?: boolean; activeDownload?: boolean } = {},
+  options: { playbackTrack?: boolean; corruptSnapshot?: boolean; searchTrack?: boolean; activeDownload?: boolean } = {},
 ) {
   const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   if (options.playbackTrack) await seedPlaybackSnapshot(runtimeRoot);
+  if (options.corruptSnapshot) await seedCorruptSnapshot(runtimeRoot);
   if (options.searchTrack) await seedSearchTrack(runtimeRoot);
   if (options.activeDownload) await seedDownloadFixture(runtimeRoot);
   const terminal = new Bun.Terminal({
@@ -43,6 +44,12 @@ async function spawnTmu(
     terminal,
   });
   return { terminal, subprocess, runtimeRoot };
+}
+
+async function seedCorruptSnapshot(runtimeRoot: string): Promise<void> {
+  const stateDir = `${runtimeRoot}/state/tmu`;
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(`${stateDir}/last-queue.json`, "{invalid");
 }
 
 async function seedDownloadFixture(runtimeRoot: string): Promise<void> {
@@ -106,6 +113,7 @@ async function seedPlaybackSnapshot(runtimeRoot: string): Promise<void> {
           title: "PTY Track",
           providerLabel: "Local",
           durationSeconds: 60,
+          playbackLocator: { kind: "url", url: "https://example.test/secret-token" },
         },
         availability: { status: "unknown" },
       },
@@ -131,6 +139,7 @@ async function seedPlaybackSnapshot(runtimeRoot: string): Promise<void> {
     shuffle: false,
     repeatAll: false,
     volume: { percent: 70, ready: true },
+    positionSeconds: 12,
   }));
 }
 
@@ -172,6 +181,63 @@ function createWavSample(durationSeconds: number): Buffer {
 const realPlaybackTest = Bun.which("mpv") ? test : test.skip;
 
 describe("production tmu real PTY", () => {
+  test("restores a resumable Current Track without autoplay and retries a failed snapshot save", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true },
+    );
+    const stateDir = `${runtimeRoot}/state/tmu`;
+
+    try {
+      await waitForOutput(read, "Restored · Resume from 0:12");
+      const idleFrame = output.length;
+      await Bun.sleep(100);
+      expect(output.slice(idleFrame)).not.toContain("Playing · PTY Track");
+
+      await chmod(stateDir, 0o555);
+      terminal.write("z");
+      await waitForOutput(read, "Could not save Last Queue");
+      expect(subprocess.exitCode).toBeNull();
+
+      await chmod(stateDir, 0o755);
+      terminal.write("+");
+      await waitForOutput(read, "Vol 75%");
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+      const saved = JSON.parse(await Bun.file(`${stateDir}/last-queue.json`).text());
+      expect(saved).toMatchObject({ positionSeconds: 12, shuffle: true, repeatAll: false, volume: { percent: 75 } });
+      expect(JSON.stringify(saved)).not.toContain("secret-token");
+    } finally {
+      await chmod(stateDir, 0o755).catch(() => undefined);
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("quarantines an invalid production snapshot once and does not replace it on quit", async () => {
+    let output = "";
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { corruptSnapshot: true },
+    );
+    const stateDir = `${runtimeRoot}/state/tmu`;
+    try {
+      await waitForOutput(() => output, "Last Queue Snapshot was corrupted");
+      expect((await readdir(stateDir)).filter((name) => name.includes(".corrupt-"))).toHaveLength(1);
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+      expect(await Bun.file(`${stateDir}/last-queue.json`).exists()).toBe(false);
+      expect((await readdir(stateDir)).filter((name) => name.includes(".corrupt-"))).toHaveLength(1);
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("searches Contextual Shortcut Help and invokes the Command Palette through the real PTY", async () => {
     let output = "";
     const read = () => output;
@@ -574,7 +640,7 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
-  realPlaybackTest("routes Current Track controls through real production PTY key input", async () => {
+  realPlaybackTest("routes explicit Resume and Current Track controls through real production PTY key input", async () => {
     let output = "";
     const read = () => output;
     const { terminal, subprocess, runtimeRoot } = await spawnTmu(
@@ -584,7 +650,7 @@ describe("production tmu real PTY", () => {
     );
 
     try {
-      await waitForOutput(read, "Queue · 3 Tracks");
+      await waitForOutput(read, "Restored · Resume from 0:12");
       const writeAndWait = async (key: string, expected: string) => {
         const nextFrame = output.length;
         terminal.write(key);
