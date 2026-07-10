@@ -25,6 +25,8 @@ import {
   type DependencyCommandRunner,
   type LocalOpenOptions,
   type LocalOpenResult,
+  type LastQueueSnapshot,
+  type LastQueueSnapshotPersistence,
   type Player,
   type PlayerPlaybackState,
   type PlaybackLocator,
@@ -36,6 +38,31 @@ import {
   type YouTubeDownloadOptions,
   type YouTubeDownloadResult,
 } from "../src/index";
+
+class RecordingSnapshotPersistence implements LastQueueSnapshotPersistence {
+  readonly saves: LastQueueSnapshot[] = [];
+  snapshot: LastQueueSnapshot | null = null;
+  failWrites = 0;
+  quarantined = false;
+
+  async load(): Promise<LastQueueSnapshot | null> {
+    return this.snapshot;
+  }
+
+  async save(snapshot: LastQueueSnapshot): Promise<void> {
+    if (this.failWrites > 0) {
+      this.failWrites -= 1;
+      throw new Error("disk is read-only");
+    }
+    this.snapshot = structuredClone(snapshot);
+    this.saves.push(structuredClone(snapshot));
+  }
+
+
+  wasLastLoadQuarantined(): boolean {
+    return this.quarantined;
+  }
+}
 
 function track(providerId: string, stableId: string, title: string): Track {
   return {
@@ -774,10 +801,10 @@ describe("AppCoordinator", () => {
       expect(coordinator.appState.queue.entries).toEqual([]);
       expect(coordinator.uiState.activeTargetId).toBe("local");
       expect(coordinator.appState.lastEvent).toContain("opened Local");
-      expect(coordinator.appState.appErrors).toEqual([
-        expect.stringContaining("Ignored corrupted Last Queue Snapshot"),
+      expect(coordinator.appState.appErrors).toEqual(expect.arrayContaining([
+        expect.stringContaining("Last Queue Snapshot was corrupted"),
         expect.stringContaining("Ignored corrupted app preferences"),
-      ]);
+      ]));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -2063,6 +2090,105 @@ describe("AppCoordinator", () => {
     expect(second.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
   });
 
+  test("atomically restores Current Track and position for explicit Resume without autoplay and selects Current", async () => {
+    const first = track("local", "/music/first.flac", "First");
+    const current = track("local", "/music/current.flac", "Current");
+    const persistence = new RecordingSnapshotPersistence();
+    persistence.snapshot = {
+      version: 1,
+      entries: [first, current].map((item) => ({ track: item, availability: { status: "available" as const } })),
+      currentIndex: 1,
+      positionSeconds: 37,
+      shuffle: true,
+      repeatAll: true,
+      volume: { percent: 63, ready: true },
+    };
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local", [first, current]) }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+      snapshotPersistence: persistence,
+    });
+
+    await coordinator.start();
+
+    expect(player.loaded).toEqual([]);
+    expect(coordinator.appState.playback).toEqual({
+      status: "paused",
+      positionSeconds: 37,
+      currentTrackIdentity: current.identity,
+    });
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(current.identity);
+    expect(coordinator.appState.queue).toMatchObject({ currentIndex: 1, shuffle: true, repeatAll: true });
+    expect(coordinator.appState.volume).toEqual({ percent: 63, ready: true });
+    expect(player.volumes).toEqual([63]);
+
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local//music/current.flac" }]);
+    expect(player.seeks).toEqual([37]);
+  });
+
+  test("manual invalid restore also suppresses quit replacement until a meaningful change", async () => {
+    const persistence = new RecordingSnapshotPersistence();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local") }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+      snapshotPersistence: persistence,
+    });
+    await coordinator.start();
+    persistence.quarantined = true;
+
+    await coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
+    await coordinator.teardown();
+
+    expect(persistence.saves).toEqual([]);
+  });
+
+  test("bounds playback checkpoints, saves pause and quit, and retries actionable write failures", async () => {
+    const item = track("local", "/music/checkpoint.flac", "Checkpoint");
+    const persistence = new RecordingSnapshotPersistence();
+    const player = new ManualPlaybackPlayer();
+    let now = 1_000;
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local", [item]) }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+      snapshotPersistence: persistence,
+      now: () => now,
+    });
+    await coordinator.start();
+
+    persistence.failWrites = 1;
+    await coordinator.dispatch({ type: "enqueueSelectedTrack" });
+    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    expect(coordinator.appState.appErrors.at(-1)).toContain("Could not save Last Queue Snapshot");
+
+    await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
+    await coordinator.dispatch({ type: "startSelectedQueueEntry" });
+    const savesAfterStart = persistence.saves.length;
+    player.emitPlaybackState({ status: "playing", positionSeconds: 10 });
+    await waitFor(() => expect(persistence.saves.length).toBe(savesAfterStart + 1));
+    player.emitPlaybackState({ status: "playing", positionSeconds: 20 });
+    await Bun.sleep(10);
+    expect(persistence.saves).toHaveLength(savesAfterStart + 1);
+
+    now += 30_000;
+    player.emitPlaybackState({ status: "playing", positionSeconds: 40 });
+    await waitFor(() => expect(persistence.saves.at(-1)?.positionSeconds).toBe(40));
+    const beforePause = persistence.saves.length;
+    await coordinator.dispatch({ type: "togglePlayPause" });
+    expect(persistence.saves.length).toBeGreaterThan(beforePause);
+
+    const beforeQuit = persistence.saves.length;
+    await expect(coordinator.teardown()).resolves.toBeUndefined();
+    expect(persistence.saves.length).toBeGreaterThan(beforeQuit);
+  });
+
   test("marks missing restored Local Tracks unavailable without rescanning local paths", async () => {
     const missing = track("local", "/music/missing.flac", "Missing File");
     const present = track("local", "/music/present.flac", "Present File");
@@ -2165,11 +2291,13 @@ describe("AppCoordinator", () => {
     const last = track("local", "/music/last.flac", "Last File");
     const queue = new MemoryQueue();
     const player = new ManualPlaybackPlayer();
+    const snapshotPersistence = new RecordingSnapshotPersistence();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ local: fakeProvider("local", [first, missing, last]) }),
       uiState: createInitialUiState(),
       queue,
       player,
+      snapshotPersistence,
     });
 
     for (const queued of [first, missing, last]) queue.enqueue(queued);
@@ -2178,6 +2306,7 @@ describe("AppCoordinator", () => {
 
     player.emitPlaybackState({ status: "idle", idle: true, eof: true });
     await waitFor(() => expect(coordinator.appState.playback.currentTrackIdentity).toEqual(last.identity));
+    await waitFor(() => expect(snapshotPersistence.snapshot?.currentIndex).toBe(2));
     expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
       status: "unavailable",
       reason: "file missing",
@@ -2189,6 +2318,7 @@ describe("AppCoordinator", () => {
       positionSeconds: 0,
       currentTrackIdentity: last.identity,
     }));
+    await waitFor(() => expect(snapshotPersistence.snapshot?.positionSeconds).toBe(0));
   });
 
   test("keeps Offline YouTube Cache missing-media failures visible in the Queue", async () => {

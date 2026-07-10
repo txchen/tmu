@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -30,6 +30,7 @@ function snapshot(): LastQueueSnapshot {
     shuffle: true,
     repeatAll: false,
     volume: { percent: 88, ready: true },
+    positionSeconds: 42,
   };
 }
 
@@ -97,7 +98,51 @@ describe("Last Queue Snapshot persistence", () => {
       await mkdir(dir, { recursive: true });
       await Bun.write(file, "{not-json");
       expect(await persistence.load()).toBeNull();
+      expect((await readdir(dir)).some((name) => /^last-queue\.json\.corrupt-\d{8}T\d{6}\d{3}Z-/.test(name))).toBe(true);
+      expect(persistence.drainRecoveryMessages()).toHaveLength(1);
+      expect(persistence.drainRecoveryMessages()).toEqual([]);
+      const nextLaunch = new FileLastQueueSnapshotPersistence(file);
+      expect(await nextLaunch.load()).toBeNull();
+      expect(nextLaunch.wasLastLoadQuarantined()).toBe(true);
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("quarantines unsupported and partially invalid snapshots instead of accepting partial state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-snapshot-invalid-"));
+    const file = join(dir, "last-queue.json");
+
+    try {
+      for (const invalid of [
+        { ...snapshot(), version: 2 },
+        { ...snapshot(), currentIndex: 4 },
+        { ...snapshot(), volume: { percent: 101, ready: true } },
+        { ...snapshot(), positionSeconds: -1 },
+      ]) {
+        await writeFile(file, JSON.stringify(invalid));
+        const persistence = new FileLastQueueSnapshotPersistence(file);
+        expect(await persistence.load()).toBeNull();
+        expect(persistence.wasLastLoadQuarantined()).toBe(true);
+      }
+      expect((await readdir(dir)).filter((name) => name.includes(".corrupt-"))).toHaveLength(4);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("blocks replacement after invalid data even when the corrupt file cannot be moved", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-snapshot-unmovable-"));
+    const file = join(dir, "last-queue.json");
+    try {
+      await writeFile(file, "{invalid");
+      await chmod(dir, 0o555);
+      const persistence = new FileLastQueueSnapshotPersistence(file);
+      expect(await persistence.load()).toBeNull();
+      expect(persistence.wasLastLoadQuarantined()).toBe(true);
+      expect(await Bun.file(file).exists()).toBe(true);
+    } finally {
+      await chmod(dir, 0o755).catch(() => undefined);
       await rm(dir, { recursive: true, force: true });
     }
   });
