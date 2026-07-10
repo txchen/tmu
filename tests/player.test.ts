@@ -120,6 +120,32 @@ describe("MpvPlayer", () => {
     "audio-pitch-correction": "no",
   };
 
+  test("stays dormant until playback and applies a staged volume when starting", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+    adapter.ipc.onCommand = (command) => {
+      if (command[0] === "quit") adapter.process.exit(0);
+    };
+
+    await player.setVolume(42);
+    expect(adapter.started).toEqual([]);
+
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+
+    expect(adapter.started).toHaveLength(1);
+    expect(adapter.ipc.sent.at(-2)).toEqual({ command: ["set_property", "volume", 42], request_id: 6 });
+    expect(adapter.ipc.sent.at(-1)).toEqual({
+      command: ["loadfile", "/music/amber.flac", "replace", -1, localFilePlaybackOptions],
+      request_id: 7,
+    });
+    await player.teardown();
+  });
+
   test("starts one long-lived audio-only idle mpv process and observes properties", async () => {
     const adapter = new FakeProcessAdapter();
     const player = new MpvPlayer({

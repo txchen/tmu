@@ -1,6 +1,5 @@
 import { AppCoordinator } from "./coordinator";
 import {
-  checkDependencyHealth,
   checkHelperDependencyHealth,
   createDefaultDependencyHealth,
   type DependencyCommandRunner,
@@ -71,11 +70,9 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
   config: TmuConfig;
 }> {
   const loaded = await loadTmuConfig({ path: options.configPath });
-  let dependencyHealth = await checkDependencyHealth(loaded.config, {
-    runner: options.dependencyRunner,
-  });
   const shouldStartPlayer = options.startPlayer ?? true;
-  const player = dependencyHealth.playback.enabled && shouldStartPlayer
+  const dependencyHealth = createDefaultDependencyHealth();
+  const player = shouldStartPlayer
     ? new MpvPlayer({
       command: loaded.config.helpers.mpv,
       ipcPath: join(tmpdir(), `tmu-mpv-${process.pid}-${Date.now()}.sock`),
@@ -85,22 +82,6 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       positionPollMs: loaded.config.lowPower.playbackTickMs,
     })
     : new NoopPlayer();
-
-  if (dependencyHealth.playback.enabled && shouldStartPlayer) {
-    try {
-      await player.start();
-    } catch (error) {
-      await player.teardown().catch(() => undefined);
-      const message = error instanceof Error ? error.message : String(error);
-      dependencyHealth = {
-        ...dependencyHealth,
-        playback: {
-          enabled: false,
-          message: `Playback disabled: ${message}`,
-        },
-      };
-    }
-  }
 
   return {
     ...createTmuApp({

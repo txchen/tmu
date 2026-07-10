@@ -192,6 +192,23 @@ describe("Last Queue Snapshot persistence", () => {
     }
   });
 
+  test("runtime creation does not check helpers eagerly", async () => {
+    const checked: string[] = [];
+    const runtime = await createTmuRuntime({
+      startPlayer: false,
+      dependencyRunner: async ({ helper }) => {
+        checked.push(helper);
+        return { exitCode: 0, stdout: `${helper} 1.0\n`, stderr: "" };
+      },
+    });
+
+    try {
+      expect(checked).toEqual([]);
+    } finally {
+      await runtime.coordinator.teardown();
+    }
+  });
+
   test("runtime opens on Playback and restores the full Last Queue Snapshot without autoplay", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-full-restore-"));
     const configPath = join(dir, "config.json");

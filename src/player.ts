@@ -186,6 +186,19 @@ export class MpvPlayer implements Player {
   }
 
   async load(locator: PlaybackLocator): Promise<void> {
+    if (!this.process || !this.ipc) {
+      const volume = this.state.volumePercent;
+      try {
+        await this.start();
+      } catch (error) {
+        await this.teardown().catch(() => undefined);
+        throw error;
+      }
+      if (volume !== null && volume !== this.state.volumePercent) {
+        await this.command(["set_property", "volume", volume]);
+        this.updateState({ volumePercent: volume });
+      }
+    }
     await this.command(this.loadCommand(locator));
     this.updateState({
       status: "playing",
@@ -246,6 +259,10 @@ export class MpvPlayer implements Player {
 
   async setVolume(percent: number): Promise<PlayerPlaybackState> {
     const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    if (!this.process || !this.ipc) {
+      this.updateState({ volumePercent: clamped });
+      return this.state;
+    }
     await this.command(["set_property", "volume", clamped]);
     this.updateState({
       volumePercent: clamped,
@@ -577,10 +594,17 @@ export class MpvPlayer implements Player {
   }
 
   private async waitForProcessExit(process: MpvProcessHandle, timeoutMs: number): Promise<boolean> {
-    return await Promise.race([
-      process.exited.then(() => true).catch(() => true),
-      Bun.sleep(timeoutMs).then(() => false),
-    ]);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        process.exited.then(() => true).catch(() => true),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
   }
 }
 
