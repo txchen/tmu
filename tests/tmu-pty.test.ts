@@ -43,6 +43,28 @@ async function spawnTmu(
   return { terminal, subprocess, runtimeRoot };
 }
 
+async function stopTmu(
+  terminal: Bun.Terminal,
+  subprocess: {
+    readonly exitCode: number | null;
+    readonly exited: Promise<number>;
+    kill(signal?: NodeJS.Signals | number): void;
+  },
+): Promise<void> {
+  if (subprocess.exitCode === null) {
+    terminal.write("\u0003");
+    const graceful = await Promise.race([
+      subprocess.exited.then(() => true),
+      Bun.sleep(3_000).then(() => false),
+    ]);
+    if (!graceful) {
+      subprocess.kill("SIGKILL");
+      await subprocess.exited;
+    }
+  }
+  terminal.close();
+}
+
 async function seedPlaybackSnapshot(runtimeRoot: string): Promise<void> {
   const mediaPath = `${runtimeRoot}/media/pty-track.wav`;
   const lastMediaPath = `${runtimeRoot}/media/pty-last.wav`;
@@ -166,8 +188,7 @@ describe("production tmu real PTY", () => {
       expect(restoredState).toMatch(/(?:^|[ ;])icanon(?:[ ;]|$)/);
       expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
     } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      await stopTmu(terminal, subprocess);
     }
   });
 
@@ -184,13 +205,12 @@ describe("production tmu real PTY", () => {
       try {
         await waitForOutput(read, "Queue · 0 Tracks");
         subprocess.kill(signal);
-        expect(await subprocess.exited).toBe(exitCode);
         await waitForOutput(read, "\x1b[?1049l");
+        expect(await subprocess.exited).toBe(exitCode);
         expect(subprocess.signalCode).toBeNull();
         expect(output).toContain("\x1b[?25h");
       } finally {
-        if (subprocess.exitCode === null) subprocess.kill();
-        terminal.close();
+        await stopTmu(terminal, subprocess);
       }
     }
   }, 15_000);
@@ -231,8 +251,7 @@ describe("production tmu real PTY", () => {
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
     } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
@@ -262,8 +281,7 @@ describe("production tmu real PTY", () => {
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
     } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
@@ -292,8 +310,7 @@ describe("production tmu real PTY", () => {
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
     } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
@@ -317,7 +334,7 @@ describe("production tmu real PTY", () => {
       };
       await writeAndWait(" ", "Playing · PTY Track");
 
-      await writeAndWait(" ", "Space to Resume");
+      await writeAndWait(" ", "Paused · Space to Resume");
       await writeAndWait("j", "Paused · Space to Resume");
       await writeAndWait(" ", "Playing · PTY Track");
       await writeAndWait("s", "Stopped · starts from beginning");
@@ -332,8 +349,7 @@ describe("production tmu real PTY", () => {
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
     } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);

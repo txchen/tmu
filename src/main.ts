@@ -18,11 +18,6 @@ export async function main(): Promise<void> {
     );
   };
   process.on("SIGWINCH", handleBunPtyResize);
-  app.mount({
-    alternateScreen: true,
-    interactive: true,
-    patchConsole: false,
-  });
 
   let terminating = false;
   const terminateFromSignal = (exitCode: number) => {
@@ -34,9 +29,21 @@ export async function main(): Promise<void> {
   const handleSigint = () => terminateFromSignal(130);
   const handleSigterm = () => terminateFromSignal(143);
   const handleSighup = () => terminateFromSignal(129);
-  process.once("SIGINT", handleSigint);
-  process.once("SIGTERM", handleSigterm);
-  process.once("SIGHUP", handleSighup);
+  const installSignalHandlers = () => {
+    process.off("SIGINT", handleSigint);
+    process.off("SIGTERM", handleSigterm);
+    process.off("SIGHUP", handleSighup);
+    process.once("SIGINT", handleSigint);
+    process.once("SIGTERM", handleSigterm);
+    process.once("SIGHUP", handleSighup);
+  };
+  installSignalHandlers();
+  app.mount({
+    alternateScreen: true,
+    interactive: true,
+    patchConsole: false,
+  });
+  installSignalHandlers();
 
   try {
     await app.waitUntilExit();
