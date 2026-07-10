@@ -367,9 +367,10 @@ describe("production tmu real PTY", () => {
       expect(output).toContain("Enter Play Next");
       expect(output).toContain("? Help");
       expect(output).toContain(": Commands");
+      const helpFrame = output.length;
       terminal.write("?");
-      await waitForOutput(read, "Picker Overlay · shortcut-help");
-      expect(output).toContain("Play Next · Enter");
+      await waitForNewOutput(read, helpFrame, "Picker Overlay · shortcut-help");
+      await waitForNewOutput(read, helpFrame, "Play Next · Enter");
       terminal.write("/");
       terminal.write("immediately");
       await waitForOutput(read, "Play Now · Shift+Enter");
