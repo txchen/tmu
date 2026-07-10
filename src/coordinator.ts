@@ -572,13 +572,13 @@ export class AppCoordinator {
       this.appState.lastEvent = `${providerId} Provider does not support refresh`;
       return;
     }
-    await this.refreshNavidromeLibrary();
+    await this.refreshNavidromeLibraryData();
   }
 
   private async queryProviderBrowsingSurface(providerId: string, query: string): Promise<void> {
     const provider = this.appState.providers[providerId];
     if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
-      this.appState.lastEvent = `${providerId} Provider does not support search`;
+      this.appState.lastEvent = `${providerId} Provider Browsing Surface does not support queries`;
       return;
     }
     await this.runNavidromeBrowsingQuery(provider, query);
@@ -1313,27 +1313,31 @@ export class AppCoordinator {
   }
 
   private async refreshNavidromeLibrary(): Promise<void> {
+    if (await this.refreshNavidromeLibraryData()) this.selectContentIndex("navidrome", 0);
+  }
+
+  private async refreshNavidromeLibraryData(): Promise<boolean> {
     const provider = this.appState.providers.navidrome;
     if (!isNavidromeProvider(provider)) {
       this.appState.lastEvent = "Navidrome Library Browser is unavailable";
-      return;
+      return false;
     }
 
     const state = await provider.validateConnection();
     if (state.status !== "connected") {
       this.appState.lastEvent = state.message;
-      return;
+      return false;
     }
 
     try {
       await provider.refreshLibraryBrowser();
     } catch (error) {
       this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      return;
+      return false;
     }
 
-    this.selectContentIndex("navidrome", 0);
     this.appState.lastEvent = "refreshed Navidrome Library Browser";
+    return true;
   }
 
   private async searchNavidromeTracks(query: string): Promise<void> {
