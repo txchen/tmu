@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import net from "node:net";
+import { setTimeout as delay } from "node:timers/promises";
 import type { PlaybackLocator, Player, PlayerPlaybackState } from "./domain";
 
 const OBSERVED_MPV_PROPERTIES = ["duration", "pause", "idle-active", "eof-reached"] as const;
@@ -143,7 +145,7 @@ export class MpvPlayer implements Player {
   private tearingDown = false;
 
   constructor(private readonly options: MpvPlayerOptions) {
-    this.adapter = options.adapter ?? new BunMpvProcessAdapter();
+    this.adapter = options.adapter ?? new NodeMpvProcessAdapter();
     this.commandTimeoutMs = options.commandTimeoutMs ?? 2500;
     this.startTimeoutMs = options.startTimeoutMs ?? 2500;
     this.positionPollMs = normalizePositionPollMs(options.positionPollMs);
@@ -620,16 +622,19 @@ function normalizePositionPollMs(value: number | undefined): number {
     : DEFAULT_POSITION_POLL_MS;
 }
 
-export class BunMpvProcessAdapter implements MpvProcessAdapter {
+export class NodeMpvProcessAdapter implements MpvProcessAdapter {
   startMpv(command: string, args: string[], options: { cwd: string }): MpvProcessHandle {
-    const subprocess = Bun.spawn([command, ...args], {
+    const subprocess = spawn(command, args, {
       cwd: options.cwd,
-      stdout: "ignore",
-      stderr: "ignore",
+      stdio: "ignore",
+    });
+    const exited = new Promise<number | null>((resolve, reject) => {
+      subprocess.once("error", reject);
+      subprocess.once("exit", resolve);
     });
 
     return {
-      exited: subprocess.exited,
+      exited,
       kill: () => {
         subprocess.kill();
       },
@@ -642,7 +647,7 @@ export class BunMpvProcessAdapter implements MpvProcessAdapter {
       if (performance.now() - startedAt > timeoutMs) {
         throw new Error(`mpv did not create IPC socket at ${path}`);
       }
-      await Bun.sleep(25);
+      await delay(25);
     }
   }
 

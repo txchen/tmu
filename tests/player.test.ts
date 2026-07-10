@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import {
-  BunMpvProcessAdapter,
+  NodeMpvProcessAdapter,
   MpvPlayer,
   type MpvIpcClient,
   type MpvProcessAdapter,
@@ -505,7 +505,7 @@ describe("MpvPlayer smoke", () => {
       command: "mpv",
       ipcPath: join(workspace, "mpv.sock"),
       workDir: workspace,
-      adapter: new BunMpvProcessAdapter(),
+      adapter: new NodeMpvProcessAdapter(),
       commandTimeoutMs: 2500,
     });
 
