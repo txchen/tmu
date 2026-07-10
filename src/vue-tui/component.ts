@@ -412,8 +412,7 @@ function overlayView(
   const locationSegment = overlay.providerLocation?.path.at(-1);
   const locationDetail = locationSegment
     ? "path" in locationSegment ? locationSegment.path
-      : "id" in locationSegment ? locationSegment.id
-        : "query" in locationSegment ? locationSegment.query : locationSegment.kind
+      : "id" in locationSegment ? locationSegment.id : locationSegment.kind
     : "";
   const location = overlay.providerLocation?.providerId
     ? `${overlay.providerLocation.providerId}${locationDetail ? ` · ${locationDetail}` : ""}`
