@@ -371,20 +371,32 @@ function selectedQueueTrack(context: ActionContext): Track | null {
 function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
   const overlay = context.uiState.overlays.at(-1);
-  if (overlay?.focus === "results") return overlay.selectedPlayableTarget ?? null;
+  if (overlay?.focus === "results") return selectedOverlayTarget(context);
   const providerId = context.uiState.activeTargetId;
-  const provider = context.appState.providers[providerId];
-  if (!provider) return null;
   const index = context.uiState.selectedContentIndexByTarget[providerId] ?? 0;
-  if ("listVisibleTracks" in provider) {
-    return provider.playableTargetAt?.(context.uiState.providerLocation, index)
-      ?? provider.listVisibleTracks()[index]
-      ?? null;
-  }
-  return provider.visibleTracks[index] ?? null;
+  return providerTargetAt(context, providerId, context.uiState.providerLocation, index);
 }
 
 function selectedOverlayTarget(context: ActionContext): PlayableTarget | null {
   const overlay = context.uiState.overlays.at(-1);
-  return overlay?.focus === "results" ? overlay.selectedPlayableTarget ?? null : null;
+  const location = overlay?.focus === "results" ? overlay.providerLocation : undefined;
+  const providerId = location?.providerId;
+  if (!overlay || !location || !providerId) return null;
+  return providerTargetAt(context, providerId, location, overlay.selectedResultIndex ?? 0);
+}
+
+function providerTargetAt(
+  context: ActionContext,
+  providerId: string,
+  location: UiState["providerLocation"],
+  index: number,
+): PlayableTarget | null {
+  const provider = context.appState.providers[providerId];
+  if (!provider) return null;
+  if ("listVisibleTracks" in provider) {
+    return provider.playableTargetAt?.(location, index)
+      ?? provider.listVisibleTracks()[index]
+      ?? null;
+  }
+  return provider.visibleTracks[index] as Track | undefined ?? null;
 }

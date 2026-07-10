@@ -270,6 +270,14 @@ describe("production vue-tui", () => {
       label: "Set",
       tracks: [secondTrack],
     };
+    coordinator.appState.providers.navidrome = {
+      id: "navidrome",
+      label: "Navidrome",
+      hint: "Music Collections",
+      listVisibleTracks: () => [],
+      playableTargetAt: () => collection,
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/dev/null" }),
+    };
     coordinator.dispatchUi({
       type: "openOverlay",
       overlay: {
@@ -277,7 +285,8 @@ describe("production vue-tui", () => {
         focus: "results",
         query: "set",
         selectedIdentity: secondTrack.identity,
-        selectedPlayableTarget: collection,
+        selectedResultIndex: 0,
+        providerLocation: { providerId: "navidrome", path: [] },
         scroll: 0,
       },
     });
@@ -288,7 +297,7 @@ describe("production vue-tui", () => {
       secondTrack.title,
     ]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
-    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
 
     await terminal.stdin.write("\x1b[13;2u");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
