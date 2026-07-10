@@ -201,6 +201,13 @@ class RecordingPlayer extends NoopPlayer implements Player {
   }
 }
 
+class FailingStopPlayer extends RecordingPlayer {
+  async stop(): Promise<never> {
+    this.stops += 1;
+    throw new Error("Player stop failed");
+  }
+}
+
 class ManualPlaybackPlayer implements Player {
   readonly loaded: PlaybackLocator[] = [];
   private state: PlayerPlaybackState = { status: "idle" };
@@ -1536,6 +1543,30 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([]);
   });
 
+  test("keeps Current Track and Queue unchanged when playback cannot stop for removal", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.enqueue(cinder);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.playback = { status: "playing", currentTrackIdentity: amber.identity };
+    const coordinator = new AppCoordinator({
+      appState,
+      uiState: createInitialUiState(),
+      queue,
+      player: new FailingStopPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber", "Cinder"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+    expect(coordinator.appState.lastEvent).toBe("Player stop failed");
+  });
+
   test("reordering follows selected Track Identity without interrupting Current Track", async () => {
     const amber = track("local", "amber", "Amber");
     const cinder = track("local", "cinder", "Cinder");
@@ -1585,6 +1616,31 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
     expect(coordinator.uiState.selectedQueueIdentity).toBeNull();
     expect(coordinator.uiState.selectedQueueIndex).toBe(0);
+  });
+
+  test("keeps Queue, Current Track, and selection unchanged when Clear Queue cannot stop playback", async () => {
+    const amber = track("local", "amber", "Amber");
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.playback = { status: "playing", currentTrackIdentity: amber.identity };
+    const uiState = createInitialUiState();
+    uiState.selectedQueueIdentity = amber.identity;
+    const coordinator = new AppCoordinator({
+      appState,
+      uiState,
+      queue,
+      player: new FailingStopPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "clearQueue" });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(amber.identity);
+    expect(coordinator.appState.lastEvent).toBe("Player stop failed");
   });
 
   test("drives Queue-focused playback controls through App Coordinator intents", async () => {
