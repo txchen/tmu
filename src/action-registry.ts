@@ -229,17 +229,6 @@ export function createActionRegistry(): ActionRegistry {
       { key: "\x1b", label: "Esc" },
     ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
     {
-      id: "legacy.unsupported-enqueue",
-      scope: "context",
-      name: "Unsupported legacy enqueue binding",
-      aliases: [],
-      bindings: [{ key: "a", label: "a" }],
-      applies: () => false,
-      enabled: () => false,
-      disabledReason: () => "Use Enter for Play Next",
-      createIntent: () => null,
-    },
-    {
       id: "player.toggle-play-pause",
       scope: "global",
       name: "Play / Pause / Resume",

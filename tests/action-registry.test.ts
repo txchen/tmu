@@ -380,7 +380,7 @@ describe("root input router", () => {
     expect(resolutions).toBe(3);
   });
 
-  test("keeps superseded legacy bindings inert", async () => {
+  test("omits superseded source-rail bindings from the production registry", async () => {
     const current = context();
     current.uiState.activeTargetId = "local";
     current.uiState.focusedPane = "content";
@@ -405,31 +405,24 @@ describe("root input router", () => {
     await router.route("a");
 
     expect(intents).toEqual([]);
+    expect(createActionRegistry().some((action) => action.id.includes("legacy"))).toBe(false);
   });
 
-  test("keeps Provider navigation inside the one root router", async () => {
+  test("does not retain source-rail fallback routing beside the action registry", async () => {
     const current = context();
     current.uiState.activeTargetId = "navidrome";
     const ui = new UiStateStore(current.uiState);
-    const intents: string[] = [];
+    const intents: AppIntent[] = [];
     const router = new RootInputRouter({
       registry: createActionRegistry(),
       appState: () => current.appState,
       uiState: ui,
-      dispatchApp: () => undefined,
-      dispatchUiIntent: (intent) => { intents.push(intent.type); },
+      dispatchApp: (intent) => { intents.push(intent); },
     });
 
     for (const key of ["\t", "\x1b[B", "2", "o", "/", "\r"]) await router.route(key);
 
-    expect(intents).toEqual([
-      "cycleFocus",
-      "moveSelection",
-      "selectNavigationTarget",
-      "openLocalPathPrompt",
-      "openNavidromeSearchPrompt",
-      "activateSelectedContent",
-    ]);
+    expect(intents).toEqual([]);
   });
 
   test("repairs Queue selection after semantic Queue mutations", async () => {
@@ -666,7 +659,7 @@ describe("root input router", () => {
     expect(ui.snapshot.activePrompt).toBeNull();
   });
 
-  test("supports word deletion and clearing in legacy prompt text fields", async () => {
+  test("supports word deletion and clearing in Provider prompt text fields", async () => {
     const current = context();
     current.uiState.activePrompt = "local-open-path";
     current.uiState.promptInput = "/music/night drive";
