@@ -6,12 +6,21 @@ import {
   type Track,
   type UiState,
 } from "./domain";
+import type { AppStateSnapshot } from "./state-publication";
 
 export type ActionContext = {
-  readonly appState: Readonly<AppState>;
+  readonly appState: Readonly<AppState> | AppStateSnapshot;
   readonly uiState: Readonly<UiState>;
   readonly selectedPlayableTarget?: PlayableTarget | null;
 };
+
+export type UiActionIntent = {
+  type: "openOverlay";
+  kind: "music-picker" | "shortcut-help" | "command-palette" | "youtube-url";
+  focus: "results" | "search" | "input";
+};
+
+export type ActionIntent = AppIntent | UiActionIntent;
 
 type ActionBinding = { key: string; label: string };
 
@@ -23,7 +32,7 @@ export type ActionDefinition = {
   readonly applies: (context: ActionContext) => boolean;
   readonly enabled: (context: ActionContext) => boolean;
   readonly disabledReason: (context: ActionContext) => string | null;
-  readonly createIntent: (context: ActionContext) => AppIntent | null;
+  readonly createIntent: (context: ActionContext) => ActionIntent | null;
 };
 
 export type ResolvedAction = {
@@ -33,7 +42,7 @@ export type ResolvedAction = {
   readonly bindings: readonly string[];
   readonly enabled: boolean;
   readonly disabledReason: string | null;
-  readonly intent: AppIntent | null;
+  readonly intent: ActionIntent | null;
 };
 
 export type ActionRegistry = readonly ActionDefinition[];
@@ -43,6 +52,21 @@ const neverDisabled = () => null;
 
 export function createActionRegistry(): ActionRegistry {
   return [
+    uiAction("picker.open-navigation", "Music", ["browse", "providers"], "o", "o", {
+      type: "openOverlay", kind: "music-picker", focus: "results",
+    }),
+    uiAction("picker.open-search", "Global Search", ["find music"], "/", "/", {
+      type: "openOverlay", kind: "music-picker", focus: "search",
+    }),
+    uiAction("help.open", "Help", ["shortcuts"], "?", "?", {
+      type: "openOverlay", kind: "shortcut-help", focus: "search",
+    }),
+    uiAction("palette.open", "Commands", ["command palette"], ":", ":", {
+      type: "openOverlay", kind: "command-palette", focus: "search",
+    }),
+    uiAction("download.open", "YouTube URL Download", ["download youtube"], "u", "u", {
+      type: "openOverlay", kind: "youtube-url", focus: "input",
+    }),
     promptAction("provider.open-local-path", "Open Local Path", "local-open-path", (query) => ({
       type: "providerOperation", providerId: "local", operation: "open-path", path: query,
     })),
@@ -257,6 +281,26 @@ function simpleAction(
   return boundAction(id, name, aliases, [{ key, label }], intent);
 }
 
+function uiAction(
+  id: string,
+  name: string,
+  aliases: readonly string[],
+  key: string,
+  label: string,
+  intent: UiActionIntent,
+): ActionDefinition {
+  return {
+    id,
+    name,
+    aliases,
+    bindings: [{ key, label }],
+    applies: (context) => context.uiState.activeTargetId === "queue" && context.uiState.overlays.length === 0,
+    enabled: always,
+    disabledReason: neverDisabled,
+    createIntent: () => intent,
+  };
+}
+
 function boundAction(
   id: string,
   name: string,
@@ -303,7 +347,10 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
   const index = context.uiState.selectedContentIndexByTarget[providerId] ?? 0;
-  return provider.playableTargetAt?.(context.uiState.providerLocation, index)
-    ?? provider.listVisibleTracks()[index]
-    ?? null;
+  if ("listVisibleTracks" in provider) {
+    return provider.playableTargetAt?.(context.uiState.providerLocation, index)
+      ?? provider.listVisibleTracks()[index]
+      ?? null;
+  }
+  return provider.visibleTracks[index] ?? null;
 }
