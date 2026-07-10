@@ -136,6 +136,7 @@ describe("action registry contracts", () => {
       label: "Local",
       hint: "directories and Tracks",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "directories and Tracks" }),
       listVisibleTracks: () => [amber],
       playableTargetAt: () => undefined,
       resolvePlaybackLocator: async () => ({ kind: "file", path: amber.identity.stableId }),
@@ -259,6 +260,7 @@ describe("root input router", () => {
         label: "Remote",
         hint: "collections",
         capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["album", "track"], operations: [] },
+        getNavigationRoot: () => ({ visible: true, order: 20, detail: "collections" }),
         listVisibleTracks: () => [],
         playableTargetAt: () => collection,
         resolveMusicCollection: async () => {
@@ -332,6 +334,7 @@ describe("root input router", () => {
       label: "Local",
       hint: "files",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "files" }),
       listVisibleTracks: () => [amber],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/music/amber.flac" }),
     };
@@ -533,6 +536,7 @@ describe("root input router", () => {
       label: "Local",
       hint: "files and folders",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "files and folders" }),
       listVisibleTracks: () => [amber],
       listBrowserEntries: (location) => location.path.length === 0
         ? [{ id: "/music/Album", kind: "local-directory", label: "Album" }]
@@ -545,6 +549,7 @@ describe("root input router", () => {
       label: "Offline YouTube Cache",
       hint: "cached Tracks",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: ["refresh"] },
+      getNavigationRoot: () => ({ visible: true, order: 30, detail: "cached Tracks" }),
       listVisibleTracks: () => [],
       listBrowserEntries: () => [],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache" }),
@@ -592,6 +597,39 @@ describe("root input router", () => {
     await router.route("ambient mix");
     await router.route("\x1b");
     expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "music-picker", focus: "results" });
+  });
+
+  test("routes configured Provider recovery from the results overlay", async () => {
+    const current = context();
+    current.appState.providers.navidrome = {
+      id: "navidrome",
+      label: "Navidrome",
+      hint: "offline",
+      capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["artist", "album", "playlist", "track"], operations: ["retry"] },
+      getNavigationRoot: () => ({ visible: true, order: 20, detail: "Offline · Retry" }),
+      listVisibleTracks: () => [],
+      listBrowserEntries: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "url", url: "https://music.example.test/stream" }),
+    };
+    const ui = new UiStateStore(current.uiState);
+    ui.dispatch({
+      type: "openOverlay",
+      overlay: {
+        kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+        selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "navidrome", path: [] },
+      },
+    });
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+    });
+
+    await router.route("r");
+    expect(intents).toEqual([{ type: "providerOperation", providerId: "navidrome", operation: "retry" }]);
+    ui.dispatch({ type: "setProviderLocation", location: { providerId: null, path: [] } });
+    await router.route("r");
+    expect(intents.at(-1)).toEqual({ type: "providerOperation", providerId: "navidrome", operation: "retry" });
   });
 
   test("advances and cancels the visible gg key sequence", async () => {

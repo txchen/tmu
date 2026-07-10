@@ -93,6 +93,12 @@ export type ProviderBrowserEntry = {
   readonly detail?: string;
 };
 
+export type ProviderNavigationRoot = {
+  readonly visible: boolean;
+  readonly order: number;
+  readonly detail: string;
+};
+
 export type MusicCollectionResolution =
   | { status: "resolved"; tracks: readonly Track[] }
   | { status: "cancelled" };
@@ -165,6 +171,7 @@ export type Provider = {
   label: string;
   hint: string;
   capabilities: ProviderCapabilities;
+  getNavigationRoot(): ProviderNavigationRoot;
   listVisibleTracks(): readonly Track[];
   listBrowserEntries?(location: ProviderLocation): readonly ProviderBrowserEntry[];
   playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
@@ -270,7 +277,7 @@ export type AppIntent =
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
-  | { type: "providerOperation"; providerId: string; operation: "refresh" }
+  | { type: "providerOperation"; providerId: string; operation: "refresh" | "retry" }
   | { type: "providerOperation"; providerId: string; operation: "browse-query"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
   | { type: "providerOperation"; providerId: string; operation: "cancel-open" }

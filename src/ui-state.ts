@@ -25,6 +25,8 @@ export type UiStateAction =
     rows: number;
     queueIdentities?: readonly TrackIdentity[];
     visibleQueueRows?: number;
+    overlayRowCount?: number;
+    visibleOverlayRows?: number;
   }
   | { type: "openOverlay"; overlay: Omit<PickerOverlay, "returnTo"> }
   | { type: "dismissOverlay"; queueIdentities?: readonly TrackIdentity[] }
@@ -122,9 +124,19 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         tier: responsiveTier(action.columns, action.rows),
       },
     };
-    return action.queueIdentities
+    const repaired = action.queueIdentities
       ? repairQueueSelection(resized, action.queueIdentities, undefined, action.visibleQueueRows)
       : resized;
+    if (action.overlayRowCount === undefined || action.visibleOverlayRows === undefined) return repaired;
+    const overlay = repaired.overlays.at(-1);
+    if (!overlay) return repaired;
+    const scroll = keepIndexVisible(
+      overlay.scroll,
+      overlay.selectedResultIndex ?? 0,
+      action.visibleOverlayRows,
+      action.overlayRowCount,
+    );
+    return updateTopOverlay(repaired, (value) => ({ ...value, scroll })) ?? repaired;
   }
 
   if (state.terminal.tier === "terminal-too-small") return state;

@@ -69,6 +69,25 @@ describe("UI State reducer", () => {
     expect(state.scrollByPane.queue).toBe(1);
   });
 
+  test("minimally repairs Provider navigation scroll when overlay geometry changes", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, {
+      type: "openOverlay",
+      overlay: {
+        kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+        selectedResultIndex: 9, scroll: 0, providerLocation: { providerId: "local", path: [] },
+      },
+    });
+    state = reduceUiState(state, {
+      type: "resize", columns: 70, rows: 16, overlayRowCount: 10, visibleOverlayRows: 3,
+    });
+    expect(state.overlays.at(-1)?.scroll).toBe(7);
+    state = reduceUiState(state, {
+      type: "resize", columns: 100, rows: 24, overlayRowCount: 10, visibleOverlayRows: 8,
+    });
+    expect(state.overlays.at(-1)?.scroll).toBe(2);
+  });
+
   test("dismisses layered overlays and restores the exact prior Queue and Provider context", () => {
     let state = createInitialUiState();
     state = reduceUiState(state, { type: "setFocus", focusedPane: "queue" });

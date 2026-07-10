@@ -1,4 +1,3 @@
-import { isNavidromeProvider } from "./navidrome";
 import type {
   AppState,
   ProviderBrowserEntry,
@@ -7,12 +6,13 @@ import type {
   ResponsiveTier,
 } from "./domain";
 
-export type ProviderNavigationRow = ProviderBrowserEntry & {
+export type ProviderNavigationRow = Omit<ProviderBrowserEntry, "kind"> & {
   readonly providerId: string;
+  readonly kind: ProviderBrowserEntry["kind"] | "provider";
 };
 
 export function providerNavigationRows(
-  appState: Pick<AppState, "config" | "providers">,
+  appState: Pick<AppState, "providers">,
   location: ProviderLocation,
 ): readonly ProviderNavigationRow[] {
   if (location.providerId) {
@@ -20,18 +20,17 @@ export function providerNavigationRows(
     return provider?.listBrowserEntries?.(location).map((entry) => ({ ...entry, providerId: provider.id })) ?? [];
   }
 
-  return ["local", "navidrome", "offline-youtube-cache"].flatMap((providerId) => {
-    const provider = appState.providers[providerId];
-    if (!provider) return [];
-    if (providerId === "navidrome" && !appState.config.providers.navidrome.serverUrl.trim()) return [];
-    return [{
+  return Object.values(appState.providers)
+    .map((provider) => ({ provider, root: provider.getNavigationRoot() }))
+    .filter(({ root }) => root.visible)
+    .sort((left, right) => left.root.order - right.root.order || left.provider.label.localeCompare(right.provider.label))
+    .map(({ provider, root }) => ({
       id: provider.id,
       providerId: provider.id,
-      kind: provider.capabilities.browsableHierarchy[0] ?? "track",
+      kind: "provider" as const,
       label: provider.label,
-      detail: providerRootDetail(appState, providerId),
-    } satisfies ProviderNavigationRow];
-  });
+      detail: root.detail,
+    }));
 }
 
 export type OverlayGeometry = { readonly width: number; readonly height: number };
@@ -54,20 +53,11 @@ export function overlayGeometry(
   };
 }
 
-function providerRootDetail(
-  appState: Pick<AppState, "config" | "providers">,
-  providerId: string,
-): string {
-  const provider = appState.providers[providerId];
-  if (providerId !== "navidrome" || !isNavidromeProvider(provider)) return provider?.hint ?? "";
-  const state = provider.getConnectionState();
-  if (state.status === "missing-config") {
-    return state.missingFields.includes("enabled")
-      ? "Disabled · Enable in TMU Config"
-      : `${state.message} · Update TMU Config`;
-  }
-  if (state.status === "auth-failure") return "Authentication failed · Check credentials and retry";
-  if (state.status === "api-failure") return "Offline · Retry";
-  if (state.status === "checking") return "Checking connection · Retry";
-  return provider.hint;
+export function overlayContentRows(
+  kind: PickerOverlay["kind"],
+  tier: ResponsiveTier,
+  columns: number,
+  rows: number,
+): number {
+  return Math.max(1, overlayGeometry(kind, tier, columns, rows).height - 5);
 }

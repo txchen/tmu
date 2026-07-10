@@ -51,6 +51,7 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
     label: id,
     hint: "fake provider",
     capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
+    getNavigationRoot: () => ({ visible: true, order: 10, detail: "fake provider" }),
     listVisibleTracks() {
       return tracks;
     },
@@ -71,6 +72,7 @@ function cancellableLocalProvider(): Provider & {
     label: "Local",
     hint: "files and folders",
     capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
+    getNavigationRoot: () => ({ visible: true, order: 10, detail: "files and folders" }),
     observedSignal: null,
     listVisibleTracks() {
       return [];
@@ -116,6 +118,7 @@ function restoringLocalProvider(
     label: "Local",
     hint: "files and folders",
     capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["local-directory", "track"], operations: [] },
+    getNavigationRoot: () => ({ visible: true, order: 10, detail: "files and folders" }),
     resolveCalls: [],
     pathCalls: [],
     openPathCalls: [],
@@ -826,6 +829,7 @@ describe("AppCoordinator", () => {
       label: "Broken Provider",
       hint: "failure seam",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "failure seam" }),
       listVisibleTracks() {
         return [brokenTrack];
       },
@@ -952,6 +956,27 @@ describe("AppCoordinator", () => {
       stableId: "Navidrome:https://music.example.test:track:track-1",
     });
     expect(seenEndpoints).toEqual(["ping", "getArtists", "getArtist", "getAlbum", "scrobble"]);
+  });
+
+  test("retries a configured Navidrome failure through the Provider operation", async () => {
+    const config = connectedNavidromeConfig();
+    const provider = createNavidromeProvider({
+      config: createDefaultTmuConfig(config).providers.navidrome,
+      fetcher: async () => new Response(JSON.stringify({
+        "subsonic-response": { status: "ok", version: "1.16.1" },
+      }), { status: 200 }),
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome: provider }, { config }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new RecordingPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "providerOperation", providerId: "navidrome", operation: "retry" });
+
+    expect(provider.getConnectionState().status).toBe("connected");
+    expect(coordinator.appState.lastEvent).toBe("Navidrome connection restored");
   });
 
   test("does not persist Navidrome stream URLs after a Player load failure", async () => {

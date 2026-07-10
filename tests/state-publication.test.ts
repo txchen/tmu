@@ -82,6 +82,7 @@ describe("StatePublicationGate", () => {
       label: "Extra",
       hint: "extra Tracks",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "extra Tracks" }),
       listVisibleTracks: () => [],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/extra" }),
     };
@@ -173,6 +174,7 @@ describe("StatePublicationGate", () => {
       label: "Local",
       hint: "files",
       capabilities: { searchableResultTypes: ["track"], browsableHierarchy: ["track"], operations: [] },
+      getNavigationRoot: () => ({ visible: true, order: 10, detail: "files" }),
       listVisibleTracks: () => providerTracks,
       resolvePlaybackLocator: async (identity) => ({ kind: "file", path: identity.stableId }),
     };

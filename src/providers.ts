@@ -95,6 +95,10 @@ class SkeletonProvider implements Provider {
   readonly capabilities: ProviderCapabilities = {
     searchableResultTypes: [], browsableHierarchy: [], operations: [],
   };
+
+  getNavigationRoot() {
+    return { visible: false, order: 40, detail: this.hint };
+  }
   constructor(
     readonly id: string,
     readonly label: string,
@@ -116,6 +120,10 @@ class FileSystemLocalProvider implements LocalProvider {
   readonly label = "Local";
   readonly hint = "files and folders";
   readonly capabilities = LOCAL_CAPABILITIES;
+
+  getNavigationRoot() {
+    return { visible: true, order: 10, detail: this.hint };
+  }
 
   private readonly dependencyHealth: DependencyHealthState;
   private readonly ffprobeCommand: string;
