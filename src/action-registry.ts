@@ -24,9 +24,14 @@ export type UiActionIntent = {
   type: "requestConfirmation";
   kind: "clear-queue";
 } | {
-  type: "routeKey";
-  key: string;
+  type: "routeUi";
+  operation: UiRouteOperation;
 };
+
+export type UiRouteOperation =
+  | "move-down" | "move-up" | "first" | "last"
+  | "half-page-down" | "half-page-up" | "page-down" | "page-up"
+  | "open" | "back" | "dismiss" | "search-filters";
 
 export type ActionIntent = AppIntent | UiActionIntent;
 
@@ -88,41 +93,41 @@ export function createActionRegistry(): ActionRegistry {
     })),
     routeAction("navigation.move-down", "Move Down", ["next row"], [
       { key: "j", label: "j" }, { key: "\x1b[B", label: "Down" },
-    ], "j", isListContext),
+    ], "move-down", isListContext),
     routeAction("navigation.move-up", "Move Up", ["previous row"], [
       { key: "k", label: "k" }, { key: "\x1b[A", label: "Up" },
-    ], "k", isListContext),
+    ], "move-up", isListContext),
     routeAction("navigation.first", "First Row", ["go to top"], [
       { key: "g", label: "gg" }, { key: "\x1b[H", label: "Home" },
-    ], "gg", isListContext),
+    ], "first", isListContext),
     routeAction("navigation.last", "Last Row", ["go to bottom"], [
       { key: "G", label: "G" }, { key: "\x1b[F", label: "End" },
-    ], "G", isListContext),
+    ], "last", isListContext),
     routeAction("navigation.half-page-down", "Half Page Down", ["scroll down"], [
       { key: "\x04", label: "Ctrl-d" },
-    ], "\x04", isListContext),
+    ], "half-page-down", isListContext),
     routeAction("navigation.half-page-up", "Half Page Up", ["scroll up"], [
       { key: "\x15", label: "Ctrl-u" },
-    ], "\x15", isListContext),
+    ], "half-page-up", isListContext),
     routeAction("navigation.page-down", "Page Down", ["next page"], [
       { key: "\x1b[6~", label: "Page Down" },
-    ], "\x1b[6~", isListContext),
+    ], "page-down", isListContext),
     routeAction("navigation.page-up", "Page Up", ["previous page"], [
       { key: "\x1b[5~", label: "Page Up" },
-    ], "\x1b[5~", isListContext),
+    ], "page-up", isListContext),
     routeAction("navigation.open", "Open", ["inspect"], [
       { key: "l", label: "l" }, { key: "\x1b[C", label: "Right" },
-    ], "l", isMusicResultsContext),
+    ], "open", isMusicResultsContext),
     routeAction("navigation.back", "Back", ["parent"], [
       { key: "h", label: "h" }, { key: "\x1b[D", label: "Left" },
       { key: "\x7f", label: "Backspace" },
-    ], "h", isMusicResultsContext),
+    ], "back", isMusicResultsContext),
     routeAction("overlay.dismiss", "Dismiss Overlay", ["close"], [
       { key: "\x1b", label: "Esc" }, { key: "q", label: "q" },
-    ], "\x1b", isNonTextOverlayContext),
+    ], "dismiss", isNonTextOverlayContext),
     routeAction("search.filters", "Search Filters", ["filter results"], [
       { key: "f", label: "f" },
-    ], "f", isMusicResultsContext),
+    ], "search-filters", isMusicResultsContext),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -300,8 +305,11 @@ function providerSupports(context: ActionContext, operation: "refresh" | "retry"
 
 export function discoveryActions(registry: ActionRegistry, context: ActionContext): ResolvedAction[] {
   const effectiveContext = underlyingDiscoveryContext(context);
+  const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
+    .includes(context.uiState.overlays.at(-1)?.kind ?? "");
   return registry
-    .filter((action) => action.applies(effectiveContext))
+    .filter((action) => action.applies(effectiveContext)
+      || (discoveryOverlayOpen && action.id === "overlay.dismiss"))
     .map((action) => resolveAction(action, effectiveContext))
     .sort((left, right) => Number(left.scope === "global") - Number(right.scope === "global"));
 }
@@ -323,24 +331,18 @@ export function searchDiscoveryActions(
   });
 }
 
-export function actionForId(
-  registry: ActionRegistry,
-  id: string,
-  context: ActionContext,
-): ResolvedAction | null {
-  const effectiveContext = underlyingDiscoveryContext(context);
-  const action = registry.find((candidate) => candidate.id === id && candidate.applies(effectiveContext));
-  return action ? resolveAction(action, effectiveContext) : null;
-}
-
 export function actionForBinding(
   registry: ActionRegistry,
   key: string,
   context: ActionContext,
 ): ResolvedAction | null {
-  const action = registry.find((candidate) => candidate.applies(context)
+  const effectiveContext = underlyingDiscoveryContext(context);
+  const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
+    .includes(context.uiState.overlays.at(-1)?.kind ?? "");
+  const action = registry.find((candidate) => (candidate.applies(effectiveContext)
+      || (discoveryOverlayOpen && candidate.id === "overlay.dismiss"))
     && candidate.bindings.some((binding) => binding.key === key));
-  return action ? resolveAction(action, context) : null;
+  return action ? resolveAction(action, effectiveContext) : null;
 }
 
 function promptAction(
@@ -434,14 +436,14 @@ function routeAction(
   name: string,
   aliases: readonly string[],
   bindings: readonly ActionBinding[],
-  key: string,
+  operation: UiRouteOperation,
   applies: (context: ActionContext) => boolean,
 ): ActionDefinition {
   return {
     id, name, aliases, bindings, applies, scope: "context",
     enabled: always,
     disabledReason: neverDisabled,
-    createIntent: () => ({ type: "routeKey", key }),
+    createIntent: () => ({ type: "routeUi", operation }),
   };
 }
 
