@@ -72,6 +72,50 @@ describe("Provider navigation", () => {
     }
   });
 
+  test("Navidrome exposes aligned Artists and Playlists navigation rows", async () => {
+    const config = createDefaultTmuConfig({
+      providers: { navidrome: { enabled: true, serverUrl: "https://music.example.test", username: "listener", password: "secret" } },
+    });
+    const provider = createNavidromeProvider({
+      config: config.providers.navidrome,
+      saltFactory: () => "salt",
+      fetcher: async (url) => new Response(JSON.stringify({ "subsonic-response": {
+        status: "ok",
+        ...(url.pathname.endsWith("/getArtists.view") ? { artists: { index: [{ artist: [
+          { id: "artist", name: "Artist" },
+        ] }] } } : {}),
+        ...(url.pathname.endsWith("/getArtist.view") ? { artist: { album: [
+          { id: "album", name: "Album", artist: "Artist" },
+        ] } } : {}),
+      } })),
+    });
+    await provider.validateConnection();
+
+    expect(providerNavigationRows(createInitialAppState({ navidrome: provider }), {
+      providerId: "navidrome", path: [],
+    }).map(({ kind, label }) => ({ kind, label }))).toEqual([
+      { kind: "navigation", label: "Artists" },
+      { kind: "navigation", label: "Playlists" },
+    ]);
+
+    await provider.openBrowserEntry!({ providerId: "navidrome", path: [] }, 0);
+    const artistsLocation = { providerId: "navidrome" as const, path: ["artists"] };
+    const rows = providerNavigationRows(createInitialAppState({ navidrome: provider }), artistsLocation);
+    expect(rows.map(({ kind, label }) => ({ kind, label }))).toEqual([
+      { kind: "navigation", label: "Artists" },
+      { kind: "artist", label: "Artist" },
+      { kind: "navigation", label: "Playlists" },
+    ]);
+    expect(provider.playableTargetAt?.(artistsLocation, 1)).toBeUndefined();
+
+    expect(await provider.openBrowserEntry!(artistsLocation, 1)).toEqual({
+      providerId: "navidrome", path: ["artists", "artist:artist"],
+    });
+    expect(providerNavigationRows(createInitialAppState({ navidrome: provider }), {
+      providerId: "navidrome", path: ["artists", "artist:artist"],
+    }).map(({ kind, label }) => ({ kind, label }))).toContainEqual({ kind: "album", label: "Album" });
+  });
+
   test("Local exposes one directory level and playable Tracks without making directories queueable", async () => {
     const root = `/tmp/tmu-provider-navigation-${process.pid}-${crypto.randomUUID()}`;
     await mkdir(join(root, "Album"), { recursive: true });

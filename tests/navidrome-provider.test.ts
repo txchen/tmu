@@ -417,6 +417,73 @@ describe("Navidrome Provider", () => {
     ]);
   });
 
+  test("sorts Artists, Albums, and Album Tracks while retaining Playlist Track order", async () => {
+    const provider = createNavidromeProvider({
+      config: navidromeConfig(),
+      fetcher: async (url) => {
+        if (url.pathname.endsWith("/getArtists.view")) return jsonResponse(okPayload({ artists: { index: [{ artist: [
+          { id: "z", name: "Zulu" }, { id: "a", name: "alpha" },
+        ] }] } }));
+        if (url.pathname.endsWith("/getArtist.view")) return jsonResponse(okPayload({ artist: { album: [
+          { id: "b", name: "Same", artist: "Zulu" },
+          { id: "c", name: "Beta", artist: "Zulu" },
+          { id: "a", name: "Same", artist: "Alpha" },
+        ] } }));
+        if (url.pathname.endsWith("/getAlbum.view")) return jsonResponse(okPayload({ album: { song: [
+          { id: "d2t2", title: "Fourth", discNumber: 2, track: 2 },
+          { id: "d1t2", title: "Second", discNumber: 1, track: 2 },
+          { id: "d1t1", title: "First", discNumber: 1, track: 1 },
+          { id: "d2t1", title: "Third", discNumber: 2, track: 1 },
+        ] } }));
+        if (url.pathname.endsWith("/getPlaylist.view")) return jsonResponse(okPayload({ playlist: { entry: [
+          { id: "stored-2", title: "Stored second" }, { id: "stored-1", title: "Stored first" },
+        ] } }));
+        return jsonResponse(okPayload());
+      },
+      saltFactory: () => "salt",
+    });
+
+    expect((await provider.listArtists()).map((artist) => artist.name)).toEqual(["alpha", "Zulu"]);
+    expect((await provider.listArtistAlbums("z")).map((album) => [album.name, album.artist])).toEqual([
+      ["Beta", "Zulu"], ["Same", "Alpha"], ["Same", "Zulu"],
+    ]);
+    expect((await provider.listAlbumTracks("b")).map((track) => track.title)).toEqual([
+      "First", "Second", "Third", "Fourth",
+    ]);
+    expect((await provider.listPlaylistTracks("playlist")).map((track) => track.title)).toEqual([
+      "Stored second", "Stored first",
+    ]);
+  });
+
+  test("resolves lazy Album and Playlist Music Collections from real Subsonic response shapes", async () => {
+    const provider = createNavidromeProvider({
+      config: navidromeConfig(),
+      fetcher: async (url) => jsonResponse(okPayload(url.pathname.endsWith("/getAlbum.view") ? {
+        album: { id: "album", name: "Album", song: [
+          { id: "two", title: "Two", discNumber: "1", track: "2" },
+          { id: "one", title: "One", discNumber: "1", track: "1" },
+        ] },
+      } : {
+        playlist: { id: "playlist", name: "Playlist", entry: [
+          { id: "second", title: "Second" }, { id: "first", title: "First" },
+        ] },
+      })),
+      saltFactory: () => "salt",
+    });
+
+    const album = await provider.resolveMusicCollection!({
+      kind: "music-collection", id: "navidrome:album:album", label: "Album",
+      resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
+    });
+    const playlist = await provider.resolveMusicCollection!({
+      kind: "music-collection", id: "navidrome:playlist:playlist", label: "Playlist",
+      resolve: { providerId: "navidrome", operation: "playlist-tracks", collectionId: "playlist" },
+    });
+
+    expect(album.status === "resolved" && album.tracks.map((track) => track.title)).toEqual(["One", "Two"]);
+    expect(playlist.status === "resolved" && playlist.tracks.map((track) => track.title)).toEqual(["Second", "First"]);
+  });
+
   test("browses read-only playlists without unsupported username filtering and exposes playlist Tracks", async () => {
     const seenRequests: Array<{ endpoint: string; params: Record<string, string> }> = [];
     const provider = createNavidromeProvider({

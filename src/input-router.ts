@@ -17,7 +17,7 @@ import {
   type UiStateAction,
 } from "./ui-state";
 import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
-import { globalSearchRows, globalSearchRetryProviderId } from "./global-search";
+import { globalSearchResultAt, globalSearchRows, globalSearchRetryProviderId } from "./global-search";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -312,6 +312,17 @@ export class RootInputRouter {
         });
         return true;
       }
+      if (location.providerId === "navidrome"
+        && (key !== "\r" || selected.kind === "navigation" || selected.kind === "artist")) {
+        await this.dispatchApp({
+          type: "providerOperation",
+          providerId: "navidrome",
+          operation: "open-entry",
+          location,
+          index: overlay.selectedResultIndex ?? 0,
+        });
+        return true;
+      }
       if (key === "\r") await this.dispatchBinding(key);
       return true;
     }
@@ -337,6 +348,13 @@ export class RootInputRouter {
       const providerId = globalSearchRetryProviderId(row);
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
       return true;
+    }
+    if (key === "\r") {
+      const result = globalSearchResultAt(this.appState().globalSearch, overlay.selectedResultIndex ?? 0);
+      if (result?.type === "artist" && !result.target) {
+        await this.dispatchApp({ type: "globalSearch", operation: "open", result });
+        return true;
+      }
     }
     if (key === "/") {
       this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });

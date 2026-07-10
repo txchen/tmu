@@ -19,6 +19,7 @@ import {
   type PlayableTarget,
   type ProviderSearchFilter,
   type ProviderSearchResultType,
+  type ProviderSearchResult,
   type UiState,
 } from "./domain";
 import {
@@ -166,6 +167,7 @@ export class AppCoordinator {
           else if (intent.operation === "retry") await this.retryProvider(intent.providerId);
           else if (intent.operation === "browse-query") await this.queryProviderBrowsingSurface(intent.providerId, intent.query);
           else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
+          else if (intent.operation === "open-entry") await this.openProviderBrowserEntry(intent.providerId, intent.location, intent.index);
           else this.cancelLocalOpen();
           return;
         case "globalSearch":
@@ -173,6 +175,8 @@ export class AppCoordinator {
             await this.submitGlobalSearch(intent.query, intent.providerFilter, intent.resultTypeFilter);
           } else if (intent.operation === "retry") {
             await this.retryGlobalSearchProvider(intent.providerId);
+          } else if (intent.operation === "open") {
+            await this.openGlobalSearchResult(intent.result);
           } else {
             this.clearGlobalSearch();
           }
@@ -618,6 +622,25 @@ export class AppCoordinator {
     await this.openLocalPathTracks(path, signal);
   }
 
+  private async openProviderBrowserEntry(
+    providerId: string,
+    location: import("./domain").ProviderLocation,
+    index: number,
+  ): Promise<void> {
+    const provider = this.appState.providers[providerId];
+    if (!provider?.openBrowserEntry) {
+      this.appState.lastEvent = `${providerId} Provider row cannot be opened`;
+      return;
+    }
+    try {
+      const nextLocation = await provider.openBrowserEntry(location, index);
+      if (nextLocation) this.uiStateStore.dispatch({ type: "setProviderLocation", location: nextLocation });
+      this.appState.lastEvent = nextLocation ? `opened ${providerId} Provider row` : `${providerId} Provider row cannot be opened`;
+    } catch (error) {
+      this.appState.lastEvent = `Could not open ${providerId} Provider row: ${error instanceof Error ? error.message : String(error)} · Retry`;
+    }
+  }
+
   private async submitGlobalSearch(
     query: string,
     providerFilter: ProviderSearchFilter<string>,
@@ -674,6 +697,23 @@ export class AppCoordinator {
       query: "", providerFilter: "all", resultTypeFilter: "all", providers: {},
     };
     this.notifyStateChanged();
+  }
+
+  private async openGlobalSearchResult(result: ProviderSearchResult): Promise<void> {
+    const provider = this.appState.providers[result.providerId];
+    if (result.type !== "artist" || !isNavidromeProvider(provider)) {
+      this.appState.lastEvent = "Global Search result cannot be opened";
+      return;
+    }
+    try {
+      const location = await provider.openArtistSearchResult(result);
+      this.clearGlobalSearch();
+      this.uiStateStore.dispatch({ type: "setQuery", query: "" });
+      this.uiStateStore.dispatch({ type: "setProviderLocation", location });
+      this.appState.lastEvent = `opened Navidrome artist ${result.label}`;
+    } catch (error) {
+      this.appState.lastEvent = `Could not open Artist Albums: ${error instanceof Error ? error.message : String(error)} · Retry`;
+    }
   }
 
   private searchProviders(providerFilter: ProviderSearchFilter<string>): Provider[] {

@@ -109,7 +109,7 @@ export type GlobalSearchState = {
   resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>;
   providers: Record<string, ProviderSearchState>;
 };
-export type ProviderBrowseKind = "local-directory" | "artist" | "album" | "playlist" | "track";
+export type ProviderBrowseKind = "navigation" | "local-directory" | "artist" | "album" | "playlist" | "track";
 export type ProviderOperation = "refresh" | "retry";
 
 export type ProviderCapabilities = {
@@ -206,6 +206,7 @@ export type Provider = {
   getNavigationRoot(): ProviderNavigationRoot;
   listVisibleTracks(): readonly Track[];
   listBrowserEntries?(location: ProviderLocation): readonly ProviderBrowserEntry[];
+  openBrowserEntry?(location: ProviderLocation, index: number): Promise<ProviderLocation | null>;
   playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
   search?(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]>;
   resolveMusicCollection?(
@@ -314,9 +315,11 @@ export type AppIntent =
   | { type: "providerOperation"; providerId: string; operation: "refresh" | "retry" }
   | { type: "providerOperation"; providerId: string; operation: "browse-query"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
+  | { type: "providerOperation"; providerId: string; operation: "open-entry"; location: ProviderLocation; index: number }
   | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
   | { type: "globalSearch"; operation: "submit"; query: string; providerFilter: ProviderSearchFilter<string>; resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType> }
   | { type: "globalSearch"; operation: "retry"; providerId: string }
+  | { type: "globalSearch"; operation: "open"; result: ProviderSearchResult }
   | { type: "globalSearch"; operation: "clear" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
