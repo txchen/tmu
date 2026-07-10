@@ -14,10 +14,15 @@ const cachedTrack: Track = {
 
 class RecordingPlayer extends NoopPlayer {
   readonly loaded: PlaybackLocator[] = [];
+  teardownCount = 0;
 
   override async load(locator: PlaybackLocator): Promise<void> {
     this.loaded.push(locator);
     await super.load(locator);
+  }
+
+  override async teardown(): Promise<void> {
+    this.teardownCount += 1;
   }
 }
 
@@ -170,6 +175,139 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.queue).toEqual(queueBefore);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
     expect(player.loaded).toHaveLength(loadsBefore);
+  });
+
+  test("Download Pipeline is FIFO, removes pending work, and continues after active-batch cancellation", async () => {
+    const player = new RecordingPlayer();
+    const started: string[] = [];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": {
+        id: "youtube-cache",
+        label: "YouTube Cache",
+        listTracks: () => [],
+        searchTracks: () => [],
+        resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+      } }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+      prepareDownloadBatch: async (url) => ({
+        kind: "ready",
+        batch: { sourceUrl: url, kind: "single", entries: [] },
+      }),
+      executeDownloadBatch: async (batch, options) => {
+        started.push(batch.sourceUrl);
+        if (batch.sourceUrl.endsWith("/one")) {
+          await waitFor(() => options.signal?.aborted === true);
+          return { downloaded: 0, alreadyCached: 0, failed: 0, cancelled: 1, failures: [] };
+        }
+        return { downloaded: 1, alreadyCached: 0, failed: 0, cancelled: 0, failures: [] };
+      },
+    });
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/one" });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/two" });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/three" });
+    await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 2);
+    expect(started).toEqual(["https://youtu.be/one"]);
+    const pendingTwo = coordinator.appState.downloads.pendingBatches[0]!;
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "remove-pending", batchId: pendingTwo.id });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
+    await waitFor(() => coordinator.appState.downloads.summaries.length === 2);
+
+    expect(started).toEqual(["https://youtu.be/one", "https://youtu.be/three"]);
+    expect(coordinator.appState.downloads.summaries.map((summary) => summary.sourceUrl)).toEqual([
+      "https://youtu.be/one",
+      "https://youtu.be/three",
+    ]);
+  });
+
+  test("quit with Download Pipeline work requires confirmation before cancelling all work", async () => {
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": {
+        id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+        resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+      } }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      prepareDownloadBatch: async (url) => ({ kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] } }),
+      executeDownloadBatch: async (_batch, options) => {
+        await waitFor(() => options.signal?.aborted === true);
+        return { downloaded: 0, alreadyCached: 0, failed: 0, cancelled: 1, failures: [] };
+      },
+    });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/one" });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/two" });
+    await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 1);
+
+    await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+    expect(coordinator.appState.downloads.quitConfirmationRequired).toBe(true);
+    expect(player.teardownCount).toBe(0);
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
+    await waitFor(() => player.teardownCount === 1);
+    expect(coordinator.appState.downloads.pendingBatches).toEqual([]);
+  });
+
+  test("quit confirmation includes a submission still in preflight and confirmed quit aborts it", async () => {
+    const player = new RecordingPlayer();
+    let preflightAborted = false;
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": {
+        id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+        resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+      } }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      prepareDownloadBatch: async (_url, options) => {
+        await waitFor(() => options.signal?.aborted === true);
+        preflightAborted = true;
+        return { kind: "rejected", message: "cancelled" };
+      },
+    });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/one" });
+    await waitFor(() => coordinator.appState.downloads.preparingSubmissions === 1);
+
+    await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+    expect(coordinator.appState.downloads.quitConfirmationRequired).toBe(true);
+    expect(player.teardownCount).toBe(0);
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
+    expect(preflightAborted).toBe(true);
+    expect(player.teardownCount).toBe(1);
+  });
+
+  test("confirmed quit during dependency refresh never starts download preflight", async () => {
+    const player = new RecordingPlayer();
+    let finishRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    let refreshStarted = false;
+    let preflightStarted = false;
+    const appState = createInitialAppState({ "youtube-cache": {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+    } });
+    const coordinator = new AppCoordinator({
+      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      refreshDependencyHealth: async (_helper, current) => {
+        refreshStarted = true;
+        await refreshGate;
+        return current;
+      },
+      prepareDownloadBatch: async () => {
+        preflightStarted = true;
+        return { kind: "rejected", message: "unexpected" };
+      },
+    });
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/one" });
+    await waitFor(() => refreshStarted);
+    await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+    const confirmedQuit = coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
+    finishRefresh();
+    await confirmedQuit;
+
+    expect(preflightStarted).toBe(false);
+    expect(player.teardownCount).toBe(1);
   });
 });
 

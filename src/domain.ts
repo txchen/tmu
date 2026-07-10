@@ -153,6 +153,18 @@ export type AppState = {
     lines: string[];
     confirmation?: { title: string; itemCount: number };
     summary?: { downloaded: number; alreadyCached: number; failed: number; cancelled: number };
+    activeBatch?: { id: number; sourceUrl: string; kind: "single" | "playlist" };
+    pendingBatches: Array<{ id: number; sourceUrl: string; kind: "single" | "playlist" }>;
+    summaries: Array<{
+      id: number;
+      sourceUrl: string;
+      downloaded: number;
+      alreadyCached: number;
+      failed: number;
+      cancelled: number;
+    }>;
+    quitConfirmationRequired: boolean;
+    preparingSubmissions: number;
   };
   appErrors: string[];
   lastEvent: string;
@@ -199,7 +211,8 @@ export type AppIntent =
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
   | { type: "downloadOperation"; operation: "start"; url: string }
-  | { type: "downloadOperation"; operation: "cancel" }
+  | { type: "downloadOperation"; operation: "cancel" | "cancel-active" | "confirm-quit" | "cancel-quit" }
+  | { type: "downloadOperation"; operation: "remove-pending"; batchId: number }
   | { type: "downloadOperation"; operation: "confirm-playlist" | "cancel-playlist" }
   | {
     type: "playerOperation";
