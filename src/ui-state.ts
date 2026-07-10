@@ -259,7 +259,7 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       : action.boundary === "first" ? 0 : Math.max(0, action.rowCount - 1);
     const scroll = keepIndexVisible(overlay.scroll, selectedResultIndex, action.visibleRows, action.rowCount);
     const updated = updateTopOverlay(state, (value) => ({ ...value, selectedResultIndex, scroll })) ?? state;
-    return overlay.kind === "music-picker" ? {
+    return overlay.kind === "music-picker" && !overlay.query.trim() ? {
       ...updated,
       providerNavigationMemory: {
         location: cloneProviderLocation(overlay.providerLocation ?? { providerId: null, path: [] }),

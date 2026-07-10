@@ -595,45 +595,21 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   }
 
   async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
-    if (request.signal?.aborted || !request.query.trim()) return [];
-    const types = new Set(request.resultTypes);
+    if (request.signal?.aborted || !request.query.trim() || !request.resultTypes.includes("track")) return [];
     try {
       const count = String(Math.min(50, Math.max(1, request.limit)));
       const response = await this.requestSubsonic<{ searchResult3?: unknown }>("search3", {
         query: request.query.trim(),
-        artistCount: types.has("artist") ? count : "0",
-        albumCount: types.has("album") ? count : "0",
-        songCount: types.has("track") ? count : "0",
+        artistCount: "0",
+        albumCount: "0",
+        songCount: count,
       });
       if (request.signal?.aborted) return [];
       const payload = isRecord(response.searchResult3) ? response.searchResult3 : {};
-      const results: ProviderSearchResult[] = [];
-      if (types.has("track")) results.push(...parseTracks(payload, normalizedServerUrl(this.config.serverUrl)).slice(0, request.limit).map((track) => ({
+      const results: ProviderSearchResult[] = parseTracks(payload, normalizedServerUrl(this.config.serverUrl)).slice(0, request.limit).map((track) => ({
         providerId: this.id, providerLabel: this.label, type: "track" as const,
         id: track.identity.stableId, label: track.title, detail: track.artist, target: track,
-      })));
-      if (types.has("artist")) results.push(...parseSearchArtists(payload).slice(0, request.limit).map((artist) => ({
-        providerId: this.id, providerLabel: this.label, type: "artist" as const,
-        id: artist.id, label: artist.name, detail: artist.albumCount === undefined ? undefined : `${artist.albumCount} Albums`,
-      })));
-      if (types.has("album")) results.push(...parseAlbums(payload).slice(0, request.limit).map((album) => ({
-        providerId: this.id, providerLabel: this.label, type: "album" as const,
-        id: album.id, label: album.name, detail: album.artist,
-        target: { kind: "music-collection" as const, id: `navidrome:album:${album.id}`, label: album.name,
-          resolve: { providerId: this.id, operation: "album-tracks" as const, collectionId: album.id } },
-      })));
-      const payloadPlaylists = parsePlaylists(payload);
-      const playlists = types.has("playlist")
-        ? (payloadPlaylists.length > 0
-          ? payloadPlaylists
-          : (await this.listPlaylists()).filter((playlist) => playlist.name.toLocaleLowerCase().includes(request.query.trim().toLocaleLowerCase())))
-        : [];
-      if (types.has("playlist")) results.push(...playlists.slice(0, request.limit).map((playlist) => ({
-        providerId: this.id, providerLabel: this.label, type: "playlist" as const,
-        id: playlist.id, label: playlist.name,
-        target: { kind: "music-collection" as const, id: `navidrome:playlist:${playlist.id}`, label: playlist.name,
-          resolve: { providerId: this.id, operation: "playlist-tracks" as const, collectionId: playlist.id } },
-      })));
+      }));
       this.connectionState = { status: "connected", message: "Connected", serverUrl: normalizedServerUrl(this.config.serverUrl) };
       return results;
     } catch (error) {
@@ -897,20 +873,6 @@ function parseArtists(value: unknown): NavidromeArtist[] {
   }
 
   return artists;
-}
-
-function parseSearchArtists(value: unknown): NavidromeArtist[] {
-  if (!isRecord(value) || !Array.isArray(value.artist)) return [];
-  return value.artist.flatMap((artist): NavidromeArtist[] => {
-    if (!isRecord(artist)) return [];
-    const id = navidromeServerId(artist.id);
-    const name = stringValue(artist.name);
-    if (!id || !name) return [];
-    const parsed: NavidromeArtist = { id, name };
-    const albumCount = numberValue(artist.albumCount);
-    if (albumCount !== undefined) parsed.albumCount = albumCount;
-    return [parsed];
-  });
 }
 
 function parseAlbums(value: unknown): NavidromeAlbum[] {

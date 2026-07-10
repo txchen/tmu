@@ -430,7 +430,7 @@ function globalSearchRowView(row: GlobalSearchRow, selected: boolean) {
       : row.state.status === "auth" ? "Authentication failed"
       : row.state.status === "offline" ? "Offline"
       : "Failed";
-    const retry = row.state.status === "loading" || row.state.status === "empty" ? "" : " · Retry";
+    const retry = row.state.status === "loading" ? "" : " · Retry";
     return h(Text, { inverse: selected, wrap: "truncate-end" }, () =>
       `${selected ? "› " : "  "}${row.label} · ${status}${row.state.message ? `: ${row.state.message}` : ""}${retry}`);
   }

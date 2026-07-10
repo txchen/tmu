@@ -13,6 +13,7 @@ import {
   type TrackAvailability,
   type TrackIdentity,
 } from "./domain";
+import { searchKnownTracks } from "./global-search";
 
 export const OFFLINE_YOUTUBE_CACHE_PROVIDER_ID = "offline-youtube-cache";
 const OFFLINE_YOUTUBE_CACHE_PROVIDER_LABEL = "Offline YouTube Cache";
@@ -145,17 +146,7 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
   }
 
   async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
-    if (!request.resultTypes.includes("track") || request.signal?.aborted) return [];
-    const query = request.query.trim().toLocaleLowerCase();
-    if (!query) return [];
-    return this.listVisibleTracks()
-      .filter((track) => [track.title, track.artist, track.album]
-        .some((value) => value?.toLocaleLowerCase().includes(query)))
-      .slice(0, request.limit)
-      .map((track) => ({
-        providerId: this.id, providerLabel: this.label, type: "track" as const,
-        id: identityKey(track.identity), label: track.title, detail: track.artist, target: track,
-      }));
+    return searchKnownTracks(this, this.listVisibleTracks(), request);
   }
 
   listBrowserEntries(): readonly ProviderBrowserEntry[] {

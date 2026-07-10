@@ -17,7 +17,7 @@ import {
   type UiStateAction,
 } from "./ui-state";
 import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
-import { globalSearchRows } from "./global-search";
+import { globalSearchRows, globalSearchRowProviderId } from "./global-search";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -331,8 +331,7 @@ export class RootInputRouter {
     }
     if (key === "r") {
       const row = rows[overlay.selectedResultIndex ?? 0];
-      const providerId = row?.kind === "provider-heading" || row?.kind === "provider-status" ? row.providerId
-        : row?.kind === "result" ? row.result.providerId : undefined;
+      const providerId = globalSearchRowProviderId(row);
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
       return true;
     }
