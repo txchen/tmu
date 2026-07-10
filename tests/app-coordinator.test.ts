@@ -329,6 +329,136 @@ class VolumeFailingPlayer extends RecordingPlayer {
 }
 
 describe("AppCoordinator", () => {
+  test("Play Next moves a Track after Current Track without starting playback", async () => {
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    const queue = new MemoryQueue();
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local") }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+    for (const value of [a, b, c]) queue.enqueue(value);
+    queue.startAt(1);
+    coordinator.appState.playback.currentTrackIdentity = b.identity;
+
+    await coordinator.dispatch({ type: "playNext", target: a });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["B", "A", "C"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(player.loaded).toEqual([]);
+  });
+
+  test("Play Now moves a Music Collection into one block and starts its first Track", async () => {
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    const d = track("local", "d", "D");
+    const queue = new MemoryQueue();
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local") }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+    for (const value of [a, b, c]) queue.enqueue(value);
+    queue.startAt(1);
+    coordinator.appState.playback.currentTrackIdentity = b.identity;
+
+    await coordinator.dispatch({
+      type: "playNow",
+      target: { kind: "music-collection", id: "set", label: "Set", tracks: [c, d, c] },
+    });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C", "D"]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(c.identity);
+    expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local/c" }]);
+  });
+
+  test("resolves a Music Collection completely before applying its Queue transformation", async () => {
+    const a = track("local", "a", "A");
+    const b = track("remote", "b", "B");
+    const c = track("remote", "c", "C");
+    let queueSizeDuringResolution = -1;
+    const queue = new MemoryQueue();
+    queue.enqueue(a);
+    const provider: Provider = {
+      ...fakeProvider("remote"),
+      async resolveMusicCollection() {
+        queueSizeDuringResolution = queue.entries.length;
+        return { status: "resolved", tracks: [b, c] };
+      },
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ remote: provider }),
+      uiState: createInitialUiState(),
+      queue,
+      player: new NoopPlayer(),
+    });
+
+    await coordinator.dispatch({
+      type: "playNext",
+      target: {
+        kind: "music-collection",
+        id: "remote:album:set",
+        label: "Set",
+        resolve: { providerId: "remote", operation: "album-tracks", collectionId: "set" },
+      },
+    });
+
+    expect(queueSizeDuringResolution).toBe(1);
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["B", "C", "A"]);
+  });
+
+  test("keeps Queue and requesting overlay unchanged when Music Collection resolution fails or is cancelled", async () => {
+    const a = track("local", "a", "A");
+    const queue = new MemoryQueue();
+    queue.enqueue(a);
+    let outcome: "fail" | "cancel" = "fail";
+    const provider: Provider = {
+      ...fakeProvider("remote"),
+      async resolveMusicCollection() {
+        if (outcome === "fail") throw new Error("Provider is offline");
+        return { status: "cancelled" };
+      },
+    };
+    const uiState = createInitialUiState();
+    uiState.overlays = [{
+      kind: "music-picker",
+      focus: "results",
+      query: "set",
+      selectedIdentity: null,
+      scroll: 2,
+    }];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ remote: provider }),
+      uiState,
+      queue,
+      player: new NoopPlayer(),
+    });
+    const target = {
+      kind: "music-collection" as const,
+      id: "remote:playlist:set",
+      label: "Set",
+      resolve: { providerId: "remote", operation: "playlist-tracks" as const, collectionId: "set" },
+    };
+
+    await coordinator.dispatch({ type: "playNext", target });
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
+    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.appState.lastEvent).toContain("Provider is offline");
+
+    outcome = "cancel";
+    await coordinator.dispatch({ type: "playNow", target });
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
+    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.appState.lastEvent).toBe("Music Collection resolution cancelled");
+  });
+
   test("starts empty on the target switcher with separate app and UI state", async () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
@@ -1860,7 +1990,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    for (const queued of [first, missing, last]) await coordinator.dispatch({ type: "playNext", target: queued });
+    for (const queued of [first, missing, last]) queue.enqueue(queued);
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file missing" });
     await coordinator.dispatch({ type: "playNow", target: first });
 

@@ -237,6 +237,67 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
+  test("routes Queue-row Enter to Play Next through the production PTY", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 3 Tracks");
+      terminal.write("j");
+      await Bun.sleep(100);
+      terminal.write("j");
+      await Bun.sleep(100);
+      const nextFrame = output.length;
+      terminal.write("\r");
+      await waitForNewOutput(read, nextFrame, "PTY Last");
+      const frame = output.slice(nextFrame);
+      expect(frame.indexOf("PTY Track")).toBeLessThan(frame.indexOf("PTY Last"));
+      expect(frame.indexOf("PTY Last")).toBeLessThan(frame.indexOf("PTY Missing"));
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      if (subprocess.exitCode === null) subprocess.kill();
+      terminal.close();
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  realPlaybackTest("routes Queue-row Shift+Enter to Play Now through the production PTY", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 3 Tracks");
+      terminal.write("j");
+      await Bun.sleep(100);
+      terminal.write("j");
+      await Bun.sleep(100);
+      const nextFrame = output.length;
+      terminal.write("\x1b[13;2u");
+      await waitForNewOutput(read, nextFrame, "Playing · PTY Last");
+      const frame = output.slice(nextFrame);
+      expect(frame.indexOf("PTY Track")).toBeLessThan(frame.indexOf("PTY Last"));
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      if (subprocess.exitCode === null) subprocess.kill();
+      terminal.close();
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   realPlaybackTest("routes Current Track controls through real production PTY key input", async () => {
     let output = "";
     const read = () => output;

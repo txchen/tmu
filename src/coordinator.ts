@@ -145,10 +145,10 @@ export class AppCoordinator {
     try {
       switch (intent.type) {
         case "playNext":
-          await this.playNextTarget(intent.target);
+          await this.playNextTarget(intent.target, intent.signal);
           return;
         case "playNow":
-          await this.playNowTarget(intent.target);
+          await this.playNowTarget(intent.target, intent.signal);
           return;
         case "removeQueueTrack":
           await this.removeQueueTrack(intent.identity);
@@ -474,32 +474,32 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private async playNextTarget(target: PlayableTarget): Promise<void> {
-    const tracks = uniqueTracks(this.targetTracksAlreadyResolved(target));
-    for (const track of tracks) {
-      const entry = this.queue.enqueue(track);
+  private async playNextTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
+    const tracks = await this.resolvePlayableTarget(target, signal);
+    if (!tracks) return;
+    const block = this.queue.playNext(tracks);
+    for (const entry of block) {
       if (entry.availability.status === "unknown") this.markSelectedOfflineYouTubeCacheAvailability(entry);
     }
-    this.appState.lastEvent = tracks.length === 0
-      ? "Music Collection must be resolved by its Provider"
-      : `accepted Play Next for ${tracks.length} Track${tracks.length === 1 ? "" : "s"}`;
+    this.appState.lastEvent = `accepted Play Next for ${block.length} Track${block.length === 1 ? "" : "s"}`;
     this.syncQueueState();
   }
 
-  private async playNowTarget(target: PlayableTarget): Promise<void> {
+  private async playNowTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
-    const tracks = uniqueTracks(this.targetTracksAlreadyResolved(target));
-    const first = tracks[0];
-    if (!first) {
+    const tracks = await this.resolvePlayableTarget(target, signal);
+    if (!tracks) return;
+    if (tracks.length === 0) {
       this.appState.lastEvent = "Music Collection has no Tracks";
       return;
     }
+    const entry = this.queue.playNow(tracks);
     for (const track of tracks) {
-      const entry = this.queue.enqueue(track);
-      if (entry.availability.status === "unknown") this.markSelectedOfflineYouTubeCacheAvailability(entry);
+      const queuedEntry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
+      if (queuedEntry?.availability.status === "unknown") {
+        this.markSelectedOfflineYouTubeCacheAvailability(queuedEntry);
+      }
     }
-    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, first.identity));
-    const entry = index < 0 ? undefined : this.queue.startAt(index);
     if (!entry) {
       this.appState.lastEvent = "Track is not in Queue";
       this.syncQueueState();
@@ -512,9 +512,33 @@ export class AppCoordinator {
     await this.playQueueEntry(entry);
   }
 
-  private targetTracksAlreadyResolved(target: PlayableTarget): readonly Track[] {
+  private async resolvePlayableTarget(target: PlayableTarget, signal?: AbortSignal): Promise<readonly Track[] | null> {
     if ("identity" in target) return [target];
-    return target.tracks ?? [];
+    if (target.tracks !== undefined) return uniqueTracks(target.tracks);
+    if (signal?.aborted) {
+      this.appState.lastEvent = "Music Collection resolution cancelled";
+      return null;
+    }
+
+    const providerId = target.resolve?.providerId;
+    const provider = providerId ? this.appState.providers[providerId] : undefined;
+    if (!provider?.resolveMusicCollection) {
+      this.appState.lastEvent = "Music Collection must be resolved by its Provider";
+      return null;
+    }
+
+    try {
+      const result = await provider.resolveMusicCollection(target, { signal });
+      if (result.status === "cancelled" || signal?.aborted) {
+        this.appState.lastEvent = "Music Collection resolution cancelled";
+        return null;
+      }
+      return uniqueTracks(result.tracks);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appState.lastEvent = `Music Collection resolution failed: ${message}`;
+      return null;
+    }
   }
 
   private async removeQueueTrack(identity: Track["identity"]): Promise<void> {

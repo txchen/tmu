@@ -232,6 +232,35 @@ describe("production vue-tui", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
   });
 
+  test("routes Enter Play Next and Shift+Enter Play Now from Queue rows", async () => {
+    const thirdTrack: Track = {
+      identity: { providerId: "test", stableId: "third-track" },
+      title: "Third Track",
+      providerLabel: "Test",
+    };
+    const { coordinator, player } = await productionHarness({
+      tracks: [restoredTrack, secondTrack, thirdTrack],
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\r");
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      restoredTrack.title,
+      thirdTrack.title,
+      secondTrack.title,
+    ]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
+    expect(player.loaded).toEqual([]);
+
+    await terminal.stdin.write("\x1b[13;2u");
+
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(thirdTrack.identity);
+    expect(player.loaded).toEqual([{ kind: "file", path: "/dev/null" }]);
+  });
+
   test("Space reloads a restored Current Track and seeks to its resumable position", async () => {
     const { coordinator, player } = await productionHarness();
     player.setStateSilently({ status: "idle" });

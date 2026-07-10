@@ -45,6 +45,62 @@ export class MemoryQueue implements Queue {
     return entry;
   }
 
+  playNext(tracks: readonly Track[]): readonly QueueEntry[] {
+    const current = this.items[this.activeIndex];
+    const requested = uniqueTracks(tracks).filter((track) =>
+      !sameIdentity(track.identity, current?.track.identity),
+    );
+    const requestedKeys = new Set(requested.map((track) => identityKey(track.identity)));
+    const existing = new Map(this.items.map((entry) => [identityKey(entry.track.identity), entry]));
+    const block = requested.map((track) => existing.get(identityKey(track.identity)) ?? newQueueEntry(track));
+    const remaining = this.items.filter((entry) => !requestedKeys.has(identityKey(entry.track.identity)));
+    const currentIndex = current
+      ? remaining.findIndex((entry) => sameIdentity(entry.track.identity, current.track.identity))
+      : -1;
+    remaining.splice(currentIndex + 1, 0, ...block);
+    this.items.splice(0, this.items.length, ...remaining);
+    this.activeIndex = current
+      ? this.items.findIndex((entry) => sameIdentity(entry.track.identity, current.track.identity))
+      : -1;
+    return block;
+  }
+
+  playNow(tracks: readonly Track[]): QueueEntry | undefined {
+    const requested = uniqueTracks(tracks);
+    const first = requested[0];
+    if (!first) return undefined;
+
+    const formerCurrent = this.items[this.activeIndex];
+    const differentFormerCurrent = formerCurrent
+      && !sameIdentity(formerCurrent.track.identity, first.identity)
+      ? formerCurrent
+      : undefined;
+    const blockTracks = differentFormerCurrent
+      ? requested.filter((track) => !sameIdentity(track.identity, differentFormerCurrent.track.identity))
+      : requested;
+    const blockKeys = new Set(blockTracks.map((track) => identityKey(track.identity)));
+    const existing = new Map(this.items.map((entry) => [identityKey(entry.track.identity), entry]));
+    const block = blockTracks.map((track) => existing.get(identityKey(track.identity)) ?? newQueueEntry(track));
+    const removedKeys = new Set(blockKeys);
+    if (differentFormerCurrent) removedKeys.add(identityKey(differentFormerCurrent.track.identity));
+    const remaining = this.items.filter((entry) => !removedKeys.has(identityKey(entry.track.identity)));
+    const oldAnchor = formerCurrent ? this.items.indexOf(formerCurrent) : 0;
+    const insertionIndex = formerCurrent
+      ? this.items.slice(0, oldAnchor).filter((entry) =>
+        !removedKeys.has(identityKey(entry.track.identity)),
+      ).length
+      : 0;
+    remaining.splice(
+      insertionIndex,
+      0,
+      ...(differentFormerCurrent ? [differentFormerCurrent] : []),
+      ...block,
+    );
+    this.items.splice(0, this.items.length, ...remaining);
+    this.activeIndex = this.items.findIndex((entry) => sameIdentity(entry.track.identity, first.identity));
+    return this.items[this.activeIndex];
+  }
+
   remove(index: number): QueueEntry | undefined {
     if (index < 0 || index >= this.items.length) return undefined;
 
@@ -180,4 +236,18 @@ export class MemoryQueue implements Queue {
       this.items[candidate] = value!;
     }
   }
+}
+
+function uniqueTracks(tracks: readonly Track[]): Track[] {
+  const seen = new Set<string>();
+  return tracks.filter((track) => {
+    const key = identityKey(track.identity);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function newQueueEntry(track: Track): QueueEntry {
+  return { track, availability: { status: "unknown" } };
 }

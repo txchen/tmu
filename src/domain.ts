@@ -75,6 +75,10 @@ export type MusicCollection = {
 
 export type PlayableTarget = Track | MusicCollection;
 
+export type MusicCollectionResolution =
+  | { status: "resolved"; tracks: readonly Track[] }
+  | { status: "cancelled" };
+
 export type QueueEntry = {
   track: Track;
   availability: TrackAvailability;
@@ -144,6 +148,10 @@ export type Provider = {
   hint: string;
   listVisibleTracks(): readonly Track[];
   playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
+  resolveMusicCollection?(
+    collection: MusicCollection,
+    options?: { signal?: AbortSignal },
+  ): Promise<MusicCollectionResolution>;
   resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator>;
 };
 
@@ -164,6 +172,8 @@ export type Queue = {
   readonly entries: readonly QueueEntry[];
   readonly currentIndex: number;
   enqueue(track: Track): QueueEntry;
+  playNext(tracks: readonly Track[]): readonly QueueEntry[];
+  playNow(tracks: readonly Track[]): QueueEntry | undefined;
   remove(index: number): QueueEntry | undefined;
   move(fromIndex: number, toIndex: number): QueueEntry | undefined;
   clear(): void;
@@ -230,8 +240,8 @@ export type UiState = {
 };
 
 export type AppIntent =
-  | { type: "playNext"; target: PlayableTarget }
-  | { type: "playNow"; target: PlayableTarget }
+  | { type: "playNext"; target: PlayableTarget; signal?: AbortSignal }
+  | { type: "playNow"; target: PlayableTarget; signal?: AbortSignal }
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
