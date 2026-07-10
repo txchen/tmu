@@ -2,44 +2,15 @@ import type { RedactedTmuConfig } from "./config";
 import type { DependencyHealthState } from "./dependencies";
 
 export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
-export type ProviderId = "local" | "navidrome" | "offline-youtube-cache";
-export type GlobalSearchProviderId = ProviderId;
-export function isProviderId(value: string): value is ProviderId {
-  return value === "local" || value === "navidrome" || value === "offline-youtube-cache";
-}
-export type ProviderNavigationSegment =
-  | { kind: "local-directory"; path: string }
-  | { kind: "artists" }
-  | { kind: "artist"; id: string }
-  | { kind: "album"; id: string }
-  | { kind: "playlists" }
-  | { kind: "playlist"; id: string };
-export type ProviderLocation = {
-  providerId: ProviderId | null;
-  path: readonly ProviderNavigationSegment[];
-};
+export const YOUTUBE_CACHE_PROVIDER_ID = "youtube-cache" as const;
+export type ProviderId = typeof YOUTUBE_CACHE_PROVIDER_ID;
 export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
 
-export type FocusReturnToken = {
-  selectedQueueIdentity: TrackIdentity | null;
-  selectedQueueIndex: number;
-  providerLocation: ProviderLocation;
-  queueScroll: number;
-};
-
 export type PickerOverlay = {
-  kind: "music-picker" | "shortcut-help" | "command-palette" | "confirmation" | "youtube-url";
-  focus: "results" | "search" | "filter" | "choice" | "input";
+  kind: "shortcut-help" | "command-palette";
+  focus: "search" | "results";
   query: string;
-  selectedIdentity: TrackIdentity | null;
-  selectedResultIndex?: number;
   scroll: number;
-  filterText?: string;
-  providerLocation?: ProviderLocation;
-  providerFilter?: GlobalSearchFilter<GlobalSearchProviderId>;
-  resultTypeFilter?: GlobalSearchFilter<GlobalSearchResultType>;
-  message?: string;
-  returnTo?: FocusReturnToken;
 };
 
 export type TrackAvailability =
@@ -53,89 +24,17 @@ export type TrackIdentity = {
 };
 
 export type PlaybackLocator =
-  | { kind: "file"; path: string }
-  | { kind: "url"; url: string };
+  { kind: "file"; path: string };
+
+export type LocalPlaybackLocator = { kind: "file"; path: string };
 
 export type Track = {
   identity: TrackIdentity;
   title: string;
   providerLabel: string;
   artist?: string;
-  album?: string;
   durationSeconds?: number;
-  coverArtId?: string;
 };
-
-export type MusicCollection = {
-  kind: "music-collection";
-  id: string;
-  label: string;
-  tracks?: readonly Track[];
-  resolve?: {
-    providerId: string;
-    operation: "album-tracks" | "playlist-tracks";
-    collectionId: string;
-  };
-};
-
-export type PlayableTarget = Track | MusicCollection;
-
-export type GlobalSearchResultType = "track" | "artist" | "album" | "playlist";
-export type GlobalSearchFilter<T> = "all" | T;
-export type GlobalSearchProviderRequest = {
-  readonly query: string;
-  readonly resultTypes: readonly GlobalSearchResultType[];
-  readonly limit: number;
-  readonly signal?: AbortSignal;
-};
-export type GlobalSearchProviderResult = {
-  readonly providerId: GlobalSearchProviderId;
-  readonly providerLabel: string;
-  readonly type: GlobalSearchResultType;
-  readonly id: string;
-  readonly label: string;
-  readonly detail?: string;
-  readonly target?: PlayableTarget;
-};
-export type GlobalSearchProviderStatus = "loading" | "success" | "empty" | "auth" | "offline" | "failure";
-export type GlobalSearchProviderState = {
-  providerLabel?: string;
-  status: GlobalSearchProviderStatus;
-  results: readonly GlobalSearchProviderResult[];
-  message?: string;
-};
-export type GlobalSearchState = {
-  requestId: number;
-  query: string;
-  providerFilter: GlobalSearchFilter<GlobalSearchProviderId>;
-  resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType>;
-  providers: Partial<Record<GlobalSearchProviderId, GlobalSearchProviderState>>;
-};
-export type ProviderBrowseKind = "navigation" | "local-directory" | "artist" | "album" | "playlist" | "track";
-export type ProviderOperation = "refresh" | "retry";
-
-export type ProviderCapabilities = {
-  readonly searchableResultTypes: readonly GlobalSearchResultType[];
-  readonly browsableHierarchy: readonly ProviderBrowseKind[];
-  readonly operations: readonly ProviderOperation[];
-};
-
-export type ProviderBrowserEntry = {
-  readonly id: string;
-  readonly kind: ProviderBrowseKind;
-  readonly label: string;
-  readonly detail?: string;
-};
-
-export type ProviderNavigationRoot = {
-  readonly visible: boolean;
-  readonly order: number;
-  readonly detail: string;
-};
-
-export type MusicCollectionResolution =
-  | { status: "resolved"; tracks: readonly Track[] }
-  | { status: "cancelled" };
 
 export type QueueEntry = {
   track: Track;
@@ -177,14 +76,11 @@ export type SnapshotTrack = {
   title: string;
   providerLabel: string;
   artist?: string;
-  album?: string;
   durationSeconds?: number;
-  coverArtId?: string;
 };
 
 export type LastQueueSnapshotEntry = {
   track: SnapshotTrack;
-  availability: TrackAvailability;
 };
 
 export type LastQueueSnapshot = {
@@ -205,19 +101,9 @@ export type PlaybackState = PlayerPlaybackState & {
 export type Provider = {
   id: string;
   label: string;
-  hint: string;
-  capabilities: ProviderCapabilities;
-  getNavigationRoot(): ProviderNavigationRoot;
-  listVisibleTracks(): readonly Track[];
-  listBrowserEntries?(location: ProviderLocation): readonly ProviderBrowserEntry[];
-  openBrowserEntry?(location: ProviderLocation, index: number): Promise<ProviderLocation | null>;
-  playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
-  search?(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]>;
-  resolveMusicCollection?(
-    collection: MusicCollection,
-    options?: { signal?: AbortSignal },
-  ): Promise<MusicCollectionResolution>;
-  resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator>;
+  listTracks(): readonly Track[];
+  searchTracks(query: string): readonly Track[];
+  resolvePlaybackLocator(identity: TrackIdentity): Promise<LocalPlaybackLocator>;
 };
 
 export type Player = {
@@ -266,20 +152,24 @@ export type AppState = {
     active: boolean;
     lines: string[];
   };
-  globalSearch: GlobalSearchState;
   appErrors: string[];
   lastEvent: string;
 };
 
 export type UiState = {
+  activeTab: "playback" | "library" | "downloader";
   selectedQueueIndex: number;
   queueScroll: number;
   overlays: readonly PickerOverlay[];
   selectedQueueIdentity: TrackIdentity | null;
-  providerLocation: ProviderLocation;
-  providerNavigationMemory: {
-    location: ProviderLocation;
+  library: {
+    query: string;
     selectedIndex: number;
+    scroll: number;
+  };
+  downloader: {
+    urlInput: string;
+    selectedBatchIndex: number;
     scroll: number;
   };
   terminal: {
@@ -298,17 +188,11 @@ export type UiState = {
 };
 
 export type AppIntent =
-  | { type: "playNext"; target: PlayableTarget; signal?: AbortSignal }
-  | { type: "playNow"; target: PlayableTarget; signal?: AbortSignal }
+  | { type: "playNext"; target: Track }
+  | { type: "playNow"; target: Track }
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
-  | { type: "providerOperation"; providerId: string; operation: "refresh" | "retry" }
-  | { type: "providerOperation"; providerId: string; operation: "open-entry"; location: ProviderLocation; index: number }
-  | { type: "globalSearch"; operation: "submit"; query: string; providerFilter: GlobalSearchFilter<GlobalSearchProviderId>; resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType> }
-  | { type: "globalSearch"; operation: "retry"; providerId: GlobalSearchProviderId }
-  | { type: "globalSearch"; operation: "open"; result: GlobalSearchProviderResult }
-  | { type: "globalSearch"; operation: "clear" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
   | {

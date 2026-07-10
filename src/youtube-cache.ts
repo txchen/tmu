@@ -3,28 +3,23 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import {
   identityKey,
-  type PlaybackLocator,
+  YOUTUBE_CACHE_PROVIDER_ID,
+  type LocalPlaybackLocator,
   type Provider,
-  type ProviderBrowserEntry,
-  type ProviderCapabilities,
-  type GlobalSearchProviderRequest,
-  type GlobalSearchProviderResult,
   type Track,
   type TrackAvailability,
   type TrackIdentity,
 } from "./domain";
-import { searchKnownTracks } from "./global-search";
 
-export const OFFLINE_YOUTUBE_CACHE_PROVIDER_ID = "offline-youtube-cache";
-const OFFLINE_YOUTUBE_CACHE_PROVIDER_LABEL = "Offline YouTube Cache";
+const YOUTUBE_CACHE_PROVIDER_LABEL = "YouTube Cache";
 
-export type OfflineYouTubeCacheProviderOptions = {
+export type YouTubeCacheProviderOptions = {
   cacheDir: string;
   mediaDirName: string;
   metadataFileName: string;
 };
 
-export type OfflineYouTubeCacheMetadata = {
+export type YouTubeCacheMetadata = {
   version: 1;
   extractor: string;
   id: string;
@@ -36,49 +31,49 @@ export type OfflineYouTubeCacheMetadata = {
   coverArtId?: string;
 };
 
-export type OfflineYouTubeCacheEntry = {
+export type YouTubeCacheEntry = {
   track: Track;
   availability: TrackAvailability;
   metadataPath: string;
   mediaPath: string;
 };
 
-export type OfflineYouTubeCacheProvider = Provider & {
+export type YouTubeCacheProvider = Provider & {
   refresh(): void;
-  listCacheEntries(): readonly OfflineYouTubeCacheEntry[];
-  findByIdentity(identity: TrackIdentity): OfflineYouTubeCacheEntry | undefined;
+  listCacheEntries(): readonly YouTubeCacheEntry[];
+  findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined;
 };
 
-type NormalizedOfflineYouTubeCacheMetadata = OfflineYouTubeCacheMetadata & {
+type NormalizedYouTubeCacheMetadata = YouTubeCacheMetadata & {
   extractor: string;
   id: string;
   title: string;
   mediaFileName: string;
 };
 
-export function createOfflineYouTubeCacheProvider(
-  options: OfflineYouTubeCacheProviderOptions,
-): OfflineYouTubeCacheProvider {
-  return new FileSystemOfflineYouTubeCacheProvider(options);
+export function createYouTubeCacheProvider(
+  options: YouTubeCacheProviderOptions,
+): YouTubeCacheProvider {
+  return new FileSystemYouTubeCacheProvider(options);
 }
 
-export function isOfflineYouTubeCacheProvider(
+export function isYouTubeCacheProvider(
   provider: Provider | undefined,
-): provider is OfflineYouTubeCacheProvider {
+): provider is YouTubeCacheProvider {
   return Boolean(provider)
-    && typeof (provider as Partial<OfflineYouTubeCacheProvider>).listCacheEntries === "function"
-    && typeof (provider as Partial<OfflineYouTubeCacheProvider>).findByIdentity === "function"
-    && typeof (provider as Partial<OfflineYouTubeCacheProvider>).refresh === "function";
+    && typeof (provider as Partial<YouTubeCacheProvider>).listCacheEntries === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).findByIdentity === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).refresh === "function";
 }
 
-export async function writeOfflineYouTubeCacheMetadata(
-  options: OfflineYouTubeCacheProviderOptions,
-  metadata: OfflineYouTubeCacheMetadata,
+export async function writeYouTubeCacheMetadata(
+  options: YouTubeCacheProviderOptions,
+  metadata: YouTubeCacheMetadata,
   writeOptions: { signal?: AbortSignal } = {},
 ): Promise<string> {
   const normalized = normalizeMetadata(metadata);
   if (!normalized) {
-    throw new Error("Offline YouTube Cache metadata is invalid");
+    throw new Error("YouTube Cache metadata is invalid");
   }
 
   throwIfAborted(writeOptions.signal);
@@ -109,23 +104,12 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   throw new Error("YouTube download cancelled");
 }
 
-class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvider {
-  readonly id = OFFLINE_YOUTUBE_CACHE_PROVIDER_ID;
-  readonly label = OFFLINE_YOUTUBE_CACHE_PROVIDER_LABEL;
-  readonly hint = "downloaded YouTube audio";
-  readonly capabilities: ProviderCapabilities = {
-    searchableResultTypes: ["track"],
-    browsableHierarchy: ["track"],
-    operations: ["refresh"],
-  };
+class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
+  readonly id = YOUTUBE_CACHE_PROVIDER_ID;
+  readonly label = YOUTUBE_CACHE_PROVIDER_LABEL;
+  private readonly entries = new Map<string, YouTubeCacheEntry>();
 
-  getNavigationRoot() {
-    return { visible: true, order: 30, detail: this.hint };
-  }
-
-  private readonly entries = new Map<string, OfflineYouTubeCacheEntry>();
-
-  constructor(private readonly options: OfflineYouTubeCacheProviderOptions) {
+  constructor(private readonly options: YouTubeCacheProviderOptions) {
     this.refresh();
   }
 
@@ -141,44 +125,36 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
     }
   }
 
-  listVisibleTracks(): readonly Track[] {
+  listTracks(): readonly Track[] {
     return this.listCacheEntries().map((entry) => entry.track);
   }
 
-  async search(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]> {
-    return searchKnownTracks(this, this.listVisibleTracks(), request);
+  searchTracks(query: string): readonly Track[] {
+    const normalized = query.trim().toLocaleLowerCase();
+    if (!normalized) return this.listTracks();
+    return this.listTracks().filter((track) =>
+      [track.title, track.artist, track.identity.stableId]
+        .some((value) => value?.toLocaleLowerCase().includes(normalized))
+    );
   }
 
-  listBrowserEntries(): readonly ProviderBrowserEntry[] {
-    return this.listCacheEntries().map(({ track }) => ({
-      id: track.identity.stableId,
-      kind: "track",
-      label: track.title,
-      detail: track.artist,
-    }));
-  }
-
-  playableTargetAt(_location: import("./domain").ProviderLocation, index: number): Track | undefined {
-    return this.listVisibleTracks()[index];
-  }
-
-  listCacheEntries(): readonly OfflineYouTubeCacheEntry[] {
+  listCacheEntries(): readonly YouTubeCacheEntry[] {
     return [...this.entries.values()].sort(compareCacheEntries);
   }
 
-  findByIdentity(identity: TrackIdentity): OfflineYouTubeCacheEntry | undefined {
-    if (identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) return undefined;
+  findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined {
+    if (identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) return undefined;
     return this.entries.get(identityKey(identity));
   }
 
-  async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
-    if (identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) {
-      throw new Error(`Offline YouTube Cache cannot resolve ${identity.providerId}`);
+  async resolvePlaybackLocator(identity: TrackIdentity): Promise<LocalPlaybackLocator> {
+    if (identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) {
+      throw new Error(`YouTube Cache cannot resolve ${identity.providerId}`);
     }
 
     const entry = this.findByIdentity(identity);
     if (!entry) {
-      throw new Error(`Offline YouTube Cache entry is missing: ${identity.stableId}`);
+      throw new Error(`YouTube Cache entry is missing: ${identity.stableId}`);
     }
 
     const availability = cachedMediaAvailability(entry.mediaPath);
@@ -187,7 +163,7 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
     return { kind: "file", path: entry.mediaPath };
   }
 
-  private entryFromMetadataPath(metadataPath: string): OfflineYouTubeCacheEntry | undefined {
+  private entryFromMetadataPath(metadataPath: string): YouTubeCacheEntry | undefined {
     const metadata = readMetadata(metadataPath);
     if (!metadata) return undefined;
 
@@ -239,7 +215,7 @@ function findMetadataFiles(cacheDir: string, metadataFileName: string): string[]
   return found;
 }
 
-function readMetadata(path: string): NormalizedOfflineYouTubeCacheMetadata | null {
+function readMetadata(path: string): NormalizedYouTubeCacheMetadata | null {
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     return normalizeMetadata(parsed);
@@ -248,9 +224,9 @@ function readMetadata(path: string): NormalizedOfflineYouTubeCacheMetadata | nul
   }
 }
 
-function normalizeMetadata(value: unknown): NormalizedOfflineYouTubeCacheMetadata | null {
+function normalizeMetadata(value: unknown): NormalizedYouTubeCacheMetadata | null {
   if (typeof value !== "object" || value === null) return null;
-  const input = value as Partial<OfflineYouTubeCacheMetadata>;
+  const input = value as Partial<YouTubeCacheMetadata>;
   if (input.version !== 1) return null;
 
   const extractor = normalizeExtractor(input.extractor);
@@ -259,7 +235,7 @@ function normalizeMetadata(value: unknown): NormalizedOfflineYouTubeCacheMetadat
   const mediaFileName = normalizeMediaFileName(input.mediaFileName);
   if (!extractor || !id || !title || !mediaFileName) return null;
 
-  const metadata: NormalizedOfflineYouTubeCacheMetadata = {
+  const metadata: NormalizedYouTubeCacheMetadata = {
     version: 1,
     extractor,
     id,
@@ -278,20 +254,18 @@ function normalizeMetadata(value: unknown): NormalizedOfflineYouTubeCacheMetadat
   return metadata;
 }
 
-function trackFromMetadata(metadata: NormalizedOfflineYouTubeCacheMetadata): Track {
+function trackFromMetadata(metadata: NormalizedYouTubeCacheMetadata): Track {
   const track: Track = {
     identity: {
-      providerId: OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
-      stableId: `${metadata.extractor}:${metadata.id}`,
+      providerId: YOUTUBE_CACHE_PROVIDER_ID,
+      stableId: metadata.id,
     },
     title: metadata.title,
-    providerLabel: OFFLINE_YOUTUBE_CACHE_PROVIDER_LABEL,
+    providerLabel: YOUTUBE_CACHE_PROVIDER_LABEL,
   };
 
   if (metadata.artist) track.artist = metadata.artist;
-  if (metadata.album) track.album = metadata.album;
   if (metadata.durationSeconds !== undefined) track.durationSeconds = metadata.durationSeconds;
-  if (metadata.coverArtId) track.coverArtId = metadata.coverArtId;
   return track;
 }
 
@@ -306,8 +280,8 @@ function cachedMediaAvailability(mediaPath: string): TrackAvailability {
 }
 
 function serializableMetadata(
-  metadata: NormalizedOfflineYouTubeCacheMetadata,
-): OfflineYouTubeCacheMetadata {
+  metadata: NormalizedYouTubeCacheMetadata,
+): YouTubeCacheMetadata {
   return {
     version: 1,
     extractor: metadata.extractor,
@@ -349,7 +323,7 @@ function normalizeDuration(value: unknown): number | undefined {
   return Number.isFinite(number) && number >= 0 ? number : undefined;
 }
 
-function compareCacheEntries(left: OfflineYouTubeCacheEntry, right: OfflineYouTubeCacheEntry): number {
+function compareCacheEntries(left: YouTubeCacheEntry, right: YouTubeCacheEntry): number {
   return compareStrings(left.track.title.toLowerCase(), right.track.title.toLowerCase())
     || compareStrings(left.track.artist?.toLowerCase() ?? "", right.track.artist?.toLowerCase() ?? "")
     || compareStrings(left.track.identity.stableId, right.track.identity.stableId);

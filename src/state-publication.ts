@@ -1,5 +1,4 @@
-import type { AppState, ProviderCapabilities, Track, UiState } from "./domain";
-import { providerNavigationRows, type ProviderNavigationRow } from "./provider-navigation";
+import type { AppState, Track, UiState } from "./domain";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -12,9 +11,7 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
 export type ProviderStateSnapshot = {
   readonly id: string;
   readonly label: string;
-  readonly hint: string;
-  readonly capabilities: DeepReadonly<ProviderCapabilities>;
-  readonly visibleTracks: readonly DeepReadonly<Track>[];
+  readonly tracks: readonly DeepReadonly<Track>[];
 };
 
 export type AppStateSnapshot = DeepReadonly<Omit<AppState, "providers">> & {
@@ -24,7 +21,6 @@ export type AppStateSnapshot = DeepReadonly<Omit<AppState, "providers">> & {
 export type PublicationSnapshot = {
   readonly appState: AppStateSnapshot;
   readonly uiState: DeepReadonly<UiState>;
-  readonly providerNavigationRows: readonly DeepReadonly<ProviderNavigationRow>[];
 };
 
 export type PublicationCause = "input" | "resize" | "playback" | "error" | "state";
@@ -75,9 +71,7 @@ export function selectAppStateSnapshot(appState: AppState): AppStateSnapshot {
       Object.entries(providers).map(([providerId, provider]) => [providerId, {
         id: provider.id,
         label: provider.label,
-        hint: provider.hint,
-        capabilities: structuredClone(provider.capabilities),
-        visibleTracks: structuredClone(provider.listVisibleTracks()),
+        tracks: structuredClone(provider.listTracks()),
       }]),
     ),
   } as AppStateSnapshot;
@@ -95,10 +89,6 @@ export function selectPublicationSnapshot(
   return deepFreeze({
     appState: selectAppStateSnapshot(appState),
     uiState: selectUiStateSnapshot(uiState),
-    providerNavigationRows: structuredClone(providerNavigationRows(
-      appState,
-      uiState.overlays.at(-1)?.providerLocation ?? { providerId: null, path: [] },
-    )),
   });
 }
 
@@ -312,15 +302,13 @@ function providersWithoutDisplayMetadata(providers: AppStateSnapshot["providers"
   return Object.fromEntries(Object.entries(providers).map(([id, provider]) => [id, {
     id: provider.id,
     label: provider.label,
-    hint: provider.hint,
-    capabilities: provider.capabilities,
-    visibleTracks: provider.visibleTracks.map((track) => ({ identity: track.identity })),
+    tracks: provider.tracks.map((track) => ({ identity: track.identity })),
   }]));
 }
 
 function providerDisplayMetadata(providers: AppStateSnapshot["providers"]) {
   return Object.fromEntries(Object.entries(providers).map(([id, provider]) => [id,
-    provider.visibleTracks.map(({ identity: _identity, ...display }) => display),
+    provider.tracks.map(({ identity: _identity, ...display }) => display),
   ]));
 }
 

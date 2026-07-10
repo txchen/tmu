@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   NoopPlayer,
-  createOfflineYouTubeCacheProvider,
+  createYouTubeCacheProvider,
   createTmuApp,
-  writeOfflineYouTubeCacheMetadata,
+  writeYouTubeCacheMetadata,
   type PlaybackLocator,
 } from "../src/index";
 
@@ -19,7 +19,7 @@ class RecordingPlayer extends NoopPlayer {
   }
 }
 
-describe("OfflineYouTubeCacheProvider", () => {
+describe("YouTubeCacheProvider", () => {
   test("discovers normalized cache metadata with present and missing media files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
 
@@ -29,9 +29,7 @@ describe("OfflineYouTubeCacheProvider", () => {
         id: "late-upload",
         title: "Late Upload",
         artist: "Ada",
-        album: "Uploads",
         durationSeconds: 125,
-        coverArtId: "yt-thumb",
         mediaFileName: "late-upload.opus",
         writeMedia: true,
       });
@@ -43,7 +41,7 @@ describe("OfflineYouTubeCacheProvider", () => {
         writeMedia: false,
       });
 
-      const provider = createOfflineYouTubeCacheProvider({
+      const provider = createYouTubeCacheProvider({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
@@ -55,12 +53,12 @@ describe("OfflineYouTubeCacheProvider", () => {
         availability: entry.availability,
       }))).toEqual([
         {
-          identity: { providerId: "offline-youtube-cache", stableId: "youtube:late-upload" },
+          identity: { providerId: "youtube-cache", stableId: "late-upload" },
           title: "Late Upload",
           availability: { status: "available" },
         },
         {
-          identity: { providerId: "offline-youtube-cache", stableId: "youtube:missing-copy" },
+          identity: { providerId: "youtube-cache", stableId: "missing-copy" },
           title: "Missing Copy",
           availability: {
             status: "unavailable",
@@ -68,14 +66,12 @@ describe("OfflineYouTubeCacheProvider", () => {
           },
         },
       ]);
-      expect(provider.listVisibleTracks()[0]).toEqual({
-        identity: { providerId: "offline-youtube-cache", stableId: "youtube:late-upload" },
+      expect(provider.listTracks()[0]).toEqual({
+        identity: { providerId: "youtube-cache", stableId: "late-upload" },
         title: "Late Upload",
-        providerLabel: "Offline YouTube Cache",
+        providerLabel: "YouTube Cache",
         artist: "Ada",
-        album: "Uploads",
         durationSeconds: 125,
-        coverArtId: "yt-thumb",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -101,15 +97,15 @@ describe("OfflineYouTubeCacheProvider", () => {
         writeMedia: true,
       });
 
-      const provider = createOfflineYouTubeCacheProvider({
+      const provider = createYouTubeCacheProvider({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
       });
 
-      expect(provider.listVisibleTracks().map((track) => `${track.title}:${track.identity.stableId}`)).toEqual([
-        "Amber:youtube:AbC123",
-        "Zephyr:youtube:z-id",
+      expect(provider.listTracks().map((track) => `${track.title}:${track.identity.stableId}`)).toEqual([
+        "Amber:AbC123",
+        "Zephyr:z-id",
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -127,12 +123,12 @@ describe("OfflineYouTubeCacheProvider", () => {
         mediaFileName: "cached.webm",
         writeMedia: true,
       });
-      const provider = createOfflineYouTubeCacheProvider({
+      const provider = createYouTubeCacheProvider({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
       });
-      const identity = { providerId: "offline-youtube-cache", stableId: "youtube:abc123" };
+      const identity = { providerId: "youtube-cache", stableId: "abc123" };
 
       const entry = provider.findByIdentity(identity);
 
@@ -157,14 +153,14 @@ describe("OfflineYouTubeCacheProvider", () => {
         mediaFileName: "missing.opus",
         writeMedia: false,
       });
-      const provider = createOfflineYouTubeCacheProvider({
+      const provider = createYouTubeCacheProvider({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
       });
-      const identity = { providerId: "offline-youtube-cache", stableId: "youtube:missing" };
+      const identity = { providerId: "youtube-cache", stableId: "missing" };
 
-      expect(provider.listVisibleTracks().map((track) => track.title)).toEqual(["Missing Media"]);
+      expect(provider.listTracks().map((track) => track.title)).toEqual(["Missing Media"]);
       expect(provider.findByIdentity(identity)?.availability).toEqual({
         status: "unavailable",
         reason: "Cached media file is missing",
@@ -179,7 +175,7 @@ describe("OfflineYouTubeCacheProvider", () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
 
     try {
-      await writeOfflineYouTubeCacheMetadata({
+      await writeYouTubeCacheMetadata({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
@@ -194,21 +190,21 @@ describe("OfflineYouTubeCacheProvider", () => {
       await mkdir(join(dir, "youtube", "persisted", "media"), { recursive: true });
       await writeFile(join(dir, "youtube", "persisted", "media", "persisted.opus"), "audio bytes");
 
-      const provider = createOfflineYouTubeCacheProvider({
+      const provider = createYouTubeCacheProvider({
         cacheDir: dir,
         mediaDirName: "media",
         metadataFileName: "metadata.json",
       });
 
-      expect(provider.listVisibleTracks()).toEqual([{
-        identity: { providerId: "offline-youtube-cache", stableId: "youtube:persisted" },
+      expect(provider.listTracks()).toEqual([{
+        identity: { providerId: "youtube-cache", stableId: "persisted" },
         title: "Persisted Track",
-        providerLabel: "Offline YouTube Cache",
+        providerLabel: "YouTube Cache",
         artist: "Cache Artist",
       }]);
       expect(provider.findByIdentity({
-        providerId: "offline-youtube-cache",
-        stableId: "youtube:persisted",
+        providerId: "youtube-cache",
+        stableId: "persisted",
       })?.metadataPath).toBe(join(dir, "youtube", "persisted", "metadata.json"));
     } finally {
       await rm(dir, { recursive: true, force: true });

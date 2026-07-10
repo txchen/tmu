@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { OFFLINE_YOUTUBE_CACHE_PROVIDER_ID } from "./offline-youtube-cache";
+import { YOUTUBE_CACHE_PROVIDER_ID } from "./domain";
 import {
-  writeOfflineYouTubeCacheMetadata,
-  type OfflineYouTubeCacheProviderOptions,
-} from "./offline-youtube-cache";
+  writeYouTubeCacheMetadata,
+  type YouTubeCacheProviderOptions,
+} from "./youtube-cache";
 import type {
   DependencyCommandRequest,
   DependencyCommandResult,
@@ -76,7 +76,7 @@ export type FfprobeYouTubeMediaValidatorOptions = {
 export type YouTubeDownloadOptions = {
   url: string;
   command: string;
-  cache: OfflineYouTubeCacheProviderOptions;
+  cache: YouTubeCacheProviderOptions;
   metadata: IdentifiedYouTubeMetadata;
   cookiesFromBrowser?: string;
   progressThrottleMs: number;
@@ -227,8 +227,8 @@ export async function identifyYouTubeUrl(
   return {
     ok: true,
     identity: {
-      providerId: OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
-      stableId: `${metadata.extractor}:${metadata.id}`,
+      providerId: YOUTUBE_CACHE_PROVIDER_ID,
+      stableId: metadata.id,
     },
     metadata,
   };
@@ -285,7 +285,7 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
   if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   let metadataPath: string;
   try {
-    metadataPath = await writeOfflineYouTubeCacheMetadata(options.cache, {
+    metadataPath = await writeYouTubeCacheMetadata(options.cache, {
       version: 1,
       ...metadata,
       mediaFileName: basename(mediaPath),
@@ -405,7 +405,7 @@ function createYouTubeDownloadArgs(
   ];
 }
 
-function youtubeDownloadPaths(cache: OfflineYouTubeCacheProviderOptions, metadata: IdentifiedYouTubeMetadata) {
+function youtubeDownloadPaths(cache: YouTubeCacheProviderOptions, metadata: IdentifiedYouTubeMetadata) {
   const entryDir = join(cache.cacheDir, metadata.extractor, metadata.id);
   const mediaDir = join(entryDir, cache.mediaDirName);
   const outputPrefix = `${metadata.extractor}-${metadata.id}`;

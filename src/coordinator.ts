@@ -1,8 +1,8 @@
 import {
   clampIndex,
   identityKey,
+  YOUTUBE_CACHE_PROVIDER_ID,
   sameIdentity,
-  uniqueTracksByIdentity,
   type AppIntent,
   type AppState,
   type LastQueueSnapshot,
@@ -12,12 +12,6 @@ import {
   type Queue,
   type QueueEntry,
   type Track,
-  type PlayableTarget,
-  type GlobalSearchFilter,
-  type GlobalSearchResultType,
-  type GlobalSearchProviderResult,
-  type GlobalSearchProviderId,
-  isProviderId,
   type UiState,
 } from "./domain";
 import {
@@ -28,13 +22,9 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
-import { isNavidromeProvider } from "./navidrome";
 import {
-  OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
-  isOfflineYouTubeCacheProvider,
-  type OfflineYouTubeCacheEntry,
-} from "./offline-youtube-cache";
-import { isLocalProvider } from "./providers";
+  isYouTubeCacheProvider,
+} from "./youtube-cache";
 import {
   InMemoryAppPreferencesPersistence,
   type AppPreferencesRecord,
@@ -52,7 +42,6 @@ import {
   type YouTubeDownloader,
 } from "./youtube-url-download";
 import { UiStateStore, type UiStateAction } from "./ui-state";
-import { isNavigableGlobalSearchResult } from "./global-search";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -84,14 +73,9 @@ export class AppCoordinator {
   private readonly dependencyRunner: DependencyCommandRunner;
   private readonly youtubeDownloader: YouTubeDownloader;
   private readonly unsubscribeFromPlayer: () => void;
-  private readonly unsubscribeFromProviders: Array<() => void>;
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeYouTubeDownload: AbortController | null = null;
   private activeYouTubeDownloadTask: Promise<void> | null = null;
-  private activeGlobalSearch: AbortController | null = null;
-  private readonly globalSearchAttempts = new Map<GlobalSearchProviderId, number>();
-  private reportingSessionKey: string | null = null;
-  private completedPlayReported = false;
   private naturalAdvanceInFlight = false;
   private tornDown = false;
   private readonly now: () => number;
@@ -114,21 +98,10 @@ export class AppCoordinator {
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       const reachedNaturalEnd = playback.status === "idle" && playback.eof === true;
       this.mergePlayerPlayback(playback);
-      this.maybeReportCompletedPlay(playback);
       this.notifyStateChanged("playback");
       this.maybeCheckpointLastQueueSnapshot(playback);
       if (reachedNaturalEnd) void this.advanceAfterNaturalEnd();
     });
-    this.unsubscribeFromProviders = Object.values(this.appState.providers)
-      .filter(isLocalProvider)
-      .map((provider) => provider.onTrackMetadataChange((track) => {
-        if (!this.queue.updateTrack(track)) return;
-
-        this.syncQueueState();
-        this.appState.lastEvent = `updated metadata for ${track.title}`;
-        this.notifyStateChanged();
-        void this.saveLastQueueSnapshot({ meaningful: true });
-      }));
     this.syncQueueState();
   }
 
@@ -158,34 +131,16 @@ export class AppCoordinator {
     try {
       switch (intent.type) {
         case "playNext":
-          await this.playNextTarget(intent.target, intent.signal);
+          await this.playNextTarget(intent.target);
           return;
         case "playNow":
-          await this.playNowTarget(intent.target, intent.signal);
+          await this.playNowTarget(intent.target);
           return;
         case "removeQueueTrack":
           await this.removeQueueTrack(intent.identity);
           return;
         case "moveQueueTrack":
           this.moveQueueTrack(intent.identity, intent.delta);
-          return;
-        case "providerOperation":
-          if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
-          else if (intent.operation === "retry") await this.retryProvider(intent.providerId);
-          else if (intent.operation === "open-entry") {
-            await this.openProviderBrowserEntry(intent.providerId, intent.location, intent.index);
-          }
-          return;
-        case "globalSearch":
-          if (intent.operation === "submit") {
-            await this.submitGlobalSearch(intent.query, intent.providerFilter, intent.resultTypeFilter);
-          } else if (intent.operation === "retry") {
-            await this.retryGlobalSearchProvider(intent.providerId);
-          } else if (intent.operation === "open") {
-            await this.openGlobalSearchResult(intent.result);
-          } else {
-            this.clearGlobalSearch();
-          }
           return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
@@ -217,7 +172,6 @@ export class AppCoordinator {
     this.activeYouTubeDownload?.abort();
     this.activeYouTubeDownload = null;
     this.unsubscribeFromPlayer();
-    for (const unsubscribe of this.unsubscribeFromProviders) unsubscribe();
     const cleanupFailures: string[] = [];
     if (this.activeYouTubeDownloadTask) {
       await this.activeYouTubeDownloadTask.catch((error) => {
@@ -291,7 +245,13 @@ export class AppCoordinator {
   }
 
   private async applyLastQueueSnapshot(snapshot: LastQueueSnapshot): Promise<void> {
-    this.queue.restore(snapshot);
+    this.queue.restore({
+      ...snapshot,
+      entries: snapshot.entries.map((entry) => ({
+        track: entry.track,
+        availability: { status: "unknown" },
+      })),
+    });
     await this.refreshRestoredProviderAvailability();
     this.appState.volume = snapshot.volume;
     if (snapshot.volume.ready) {
@@ -309,30 +269,20 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private async playNextTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
-    const tracks = await this.resolvePlayableTarget(target, signal);
-    if (!tracks) return;
-    const block = this.queue.playNext(tracks);
+  private async playNextTarget(track: Track): Promise<void> {
+    const block = this.queue.playNext([track]);
     for (const entry of block) {
-      if (entry.availability.status === "unknown") this.markSelectedOfflineYouTubeCacheAvailability(entry);
+      if (entry.availability.status === "unknown") this.markSelectedYouTubeCacheAvailability(entry);
     }
     this.appState.lastEvent = `accepted Play Next for ${block.length} Track${block.length === 1 ? "" : "s"}`;
     this.syncQueueState();
   }
 
-  private async playNowTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
-    const tracks = await this.resolvePlayableTarget(target, signal);
-    if (!tracks) return;
-    if (tracks.length === 0) {
-      this.appState.lastEvent = "Music Collection has no Tracks";
-      return;
-    }
-    const entry = this.queue.playNow(tracks);
-    for (const track of tracks) {
-      const queuedEntry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
-      if (queuedEntry?.availability.status === "unknown") {
-        this.markSelectedOfflineYouTubeCacheAvailability(queuedEntry);
-      }
+  private async playNowTarget(track: Track): Promise<void> {
+    const entry = this.queue.playNow([track]);
+    const queuedEntry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
+    if (queuedEntry?.availability.status === "unknown") {
+      this.markSelectedYouTubeCacheAvailability(queuedEntry);
     }
     if (!entry) {
       this.appState.lastEvent = "Track is not in Queue";
@@ -353,45 +303,6 @@ export class AppCoordinator {
     await this.playQueueEntry(entry);
   }
 
-  private async resolvePlayableTarget(target: PlayableTarget, signal?: AbortSignal): Promise<readonly Track[] | null> {
-    if ("identity" in target) return [target];
-    if (target.tracks !== undefined) return uniqueTracksByIdentity(target.tracks);
-    this.uiStateStore.dispatch({ type: "setOverlayMessage", message: undefined });
-    if (signal?.aborted) {
-      this.appState.lastEvent = "Music Collection resolution cancelled";
-      this.setPickerRecovery("Music Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
-      return null;
-    }
-
-    const providerId = target.resolve?.providerId;
-    const provider = providerId ? this.appState.providers[providerId] : undefined;
-    if (!provider?.resolveMusicCollection) {
-      this.appState.lastEvent = "Music Collection must be resolved by its Provider";
-      return null;
-    }
-
-    try {
-      const result = await provider.resolveMusicCollection(target, { signal });
-      if (result.status === "cancelled" || signal?.aborted) {
-        this.appState.lastEvent = "Music Collection resolution cancelled";
-        this.setPickerRecovery("Music Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
-        return null;
-      }
-      return uniqueTracksByIdentity(result.tracks);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.appState.lastEvent = `Music Collection resolution failed: ${message}`;
-      this.setPickerRecovery(`Could not load Music Collection: ${message} · Press Enter to retry or Esc to dismiss`);
-      return null;
-    }
-  }
-
-  private setPickerRecovery(message: string): void {
-    if (this.uiStateStore.snapshot.overlays.at(-1)?.kind === "music-picker") {
-      this.uiStateStore.dispatch({ type: "setOverlayMessage", message });
-    }
-  }
-
   private async removeQueueTrack(identity: Track["identity"]): Promise<void> {
     const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
     await this.removeQueueEntry(index, "Track is not in Queue");
@@ -409,168 +320,6 @@ export class AppCoordinator {
     this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
     this.appState.lastEvent = `moved ${moved.track.title}`;
     this.syncQueueState();
-  }
-
-  private async refreshProvider(providerId: string): Promise<void> {
-    if (providerId !== "navidrome") {
-      this.appState.lastEvent = `${providerId} Provider does not support refresh`;
-      return;
-    }
-    await this.refreshNavidromeLibraryData();
-  }
-
-  private async retryProvider(providerId: string): Promise<void> {
-    const provider = this.appState.providers[providerId];
-    if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
-      this.appState.lastEvent = `${providerId} Provider does not support retry`;
-      return;
-    }
-    const state = await provider.validateConnection();
-    this.appState.lastEvent = state.status === "connected"
-      ? "Navidrome connection restored"
-      : `Navidrome retry failed: ${state.message}`;
-  }
-
-  private async openProviderBrowserEntry(
-    providerId: string,
-    location: import("./domain").ProviderLocation,
-    index: number,
-  ): Promise<void> {
-    const provider = this.appState.providers[providerId];
-    if (!provider?.openBrowserEntry) {
-      this.appState.lastEvent = `${providerId} Provider row cannot be opened`;
-      return;
-    }
-    try {
-      const nextLocation = await provider.openBrowserEntry(location, index);
-      if (nextLocation) this.uiStateStore.dispatch({ type: "setProviderLocation", location: nextLocation });
-      this.appState.lastEvent = nextLocation ? `opened ${providerId} Provider row` : `${providerId} Provider row cannot be opened`;
-    } catch (error) {
-      this.appState.lastEvent = `Could not open ${providerId} Provider row: ${error instanceof Error ? error.message : String(error)} · Retry`;
-    }
-  }
-
-  private async submitGlobalSearch(
-    query: string,
-    providerFilter: GlobalSearchFilter<GlobalSearchProviderId>,
-    resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType>,
-  ): Promise<void> {
-    const trimmed = query.trim();
-    if (!trimmed) {
-      this.clearGlobalSearch();
-      return;
-    }
-    this.activeGlobalSearch?.abort();
-    const controller = new AbortController();
-    this.activeGlobalSearch = controller;
-    const requestId = this.appState.globalSearch.requestId + 1;
-    const providers = this.searchProviders(providerFilter);
-    this.appState.globalSearch = {
-      requestId, query: trimmed, providerFilter, resultTypeFilter,
-      providers: Object.fromEntries(providers.map((provider) => [provider.id, {
-        providerLabel: provider.label, status: "loading" as const, results: [],
-      }])),
-    };
-    this.appState.lastEvent = `searching for ${trimmed}`;
-    this.notifyStateChanged();
-    this.globalSearchAttempts.clear();
-    await Promise.all(providers.map((provider) => {
-      this.globalSearchAttempts.set(provider.id, 1);
-      return this.searchProvider(provider, requestId, 1, controller.signal, resultTypeFilter);
-    }));
-    if (this.activeGlobalSearch === controller) this.activeGlobalSearch = null;
-  }
-
-  private async retryGlobalSearchProvider(providerId: GlobalSearchProviderId): Promise<void> {
-    const search = this.appState.globalSearch;
-    const provider = this.appState.providers[providerId];
-    if (!search.query || !provider?.search || !isGlobalSearchProvider(provider)) return;
-    const controller = new AbortController();
-    const requestId = search.requestId;
-    this.appState.globalSearch = {
-      ...search,
-      providers: { ...search.providers, [providerId]: { providerLabel: provider.label, status: "loading", results: [] } },
-    };
-    this.notifyStateChanged();
-    const attemptId = (this.globalSearchAttempts.get(providerId) ?? 0) + 1;
-    this.globalSearchAttempts.set(providerId, attemptId);
-    await this.searchProvider(provider, requestId, attemptId, controller.signal, search.resultTypeFilter);
-  }
-
-  private clearGlobalSearch(): void {
-    this.activeGlobalSearch?.abort();
-    this.activeGlobalSearch = null;
-    this.globalSearchAttempts.clear();
-    this.appState.globalSearch = {
-      requestId: this.appState.globalSearch.requestId + 1,
-      query: "", providerFilter: "all", resultTypeFilter: "all", providers: {},
-    };
-    this.notifyStateChanged();
-  }
-
-  private async openGlobalSearchResult(result: GlobalSearchProviderResult): Promise<void> {
-    const provider = this.appState.providers[result.providerId];
-    if (!isNavigableGlobalSearchResult(result) || !isNavidromeProvider(provider)) {
-      this.appState.lastEvent = "Global Search result cannot be opened";
-      return;
-    }
-    try {
-      const location = await provider.openSearchResult(result);
-      this.clearGlobalSearch();
-      this.uiStateStore.dispatch({ type: "setQuery", query: "" });
-      this.uiStateStore.dispatch({ type: "setProviderLocation", location });
-      this.appState.lastEvent = `opened Navidrome ${result.type} ${result.label}`;
-    } catch (error) {
-      this.appState.lastEvent = `Could not open Artist Albums: ${error instanceof Error ? error.message : String(error)} · Retry`;
-    }
-  }
-
-  private searchProviders(providerFilter: GlobalSearchFilter<GlobalSearchProviderId>): GlobalSearchProvider[] {
-    return Object.values(this.appState.providers).filter((provider): provider is GlobalSearchProvider => {
-      if (!isGlobalSearchProvider(provider)) return false;
-      if (!provider.search || provider.capabilities.searchableResultTypes.length === 0) return false;
-      if (providerFilter !== "all" && provider.id !== providerFilter) return false;
-      if (!provider.getNavigationRoot().visible) return false;
-      if (provider.id === "local" && !this.appState.config.providers.local.enabled) return false;
-      if (provider.id === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID && !this.appState.config.providers.offlineYouTubeCache.enabled) return false;
-      return true;
-    });
-  }
-
-  private async searchProvider(
-    provider: GlobalSearchProvider,
-    requestId: number,
-    attemptId: number,
-    signal: AbortSignal,
-    resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType>,
-  ): Promise<void> {
-    const resultTypes = resultTypeFilter === "all"
-      ? provider.capabilities.searchableResultTypes
-      : provider.capabilities.searchableResultTypes.filter((type) => type === resultTypeFilter);
-    try {
-      const results = resultTypes.length === 0 ? [] : await provider.search!({
-        query: this.appState.globalSearch.query, resultTypes, limit: 50, signal,
-      });
-      if (signal.aborted || this.appState.globalSearch.requestId !== requestId
-        || this.globalSearchAttempts.get(provider.id) !== attemptId) return;
-      this.appState.globalSearch.providers[provider.id] = {
-        providerLabel: provider.label,
-        status: results.length === 0 ? "empty" : "success",
-        results: resultTypes.flatMap((type) => results.filter((result) => result.type === type).slice(0, 50)),
-      };
-    } catch (error) {
-      if (signal.aborted || this.appState.globalSearch.requestId !== requestId
-        || this.globalSearchAttempts.get(provider.id) !== attemptId) return;
-      const message = error instanceof Error ? error.message : String(error);
-      const kind = typeof error === "object" && error !== null && "kind" in error ? String(error.kind) : "failure";
-      this.appState.globalSearch.providers[provider.id] = {
-        providerLabel: provider.label,
-        status: kind === "auth" ? "auth" : kind === "api" ? "offline" : "failure",
-        results: [], message,
-      };
-    }
-    this.appState.lastEvent = `Global Search updated: ${provider.label}`;
-    this.notifyStateChanged();
   }
 
   private async dispatchPlayerOperation(intent: Extract<AppIntent, { type: "playerOperation" }>): Promise<void> {
@@ -874,23 +623,22 @@ export class AppCoordinator {
   }
 
   private async refreshRestoredProviderAvailability(): Promise<void> {
-    await this.refreshRestoredLocalAvailability();
-    this.refreshRestoredOfflineYouTubeCacheAvailability();
+    this.refreshRestoredYouTubeCacheAvailability();
   }
 
-  private refreshRestoredOfflineYouTubeCacheAvailability(): void {
-    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
-    if (!isOfflineYouTubeCacheProvider(provider)) return;
+  private refreshRestoredYouTubeCacheAvailability(): void {
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isYouTubeCacheProvider(provider)) return;
 
     provider.refresh();
     for (const entry of this.queue.entries) {
-      if (entry.track.identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) continue;
+      if (entry.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) continue;
 
       const cacheEntry = provider.findByIdentity(entry.track.identity);
       if (!cacheEntry) {
         this.queue.markAvailability(entry.track.identity, {
           status: "unavailable",
-          reason: `Offline YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
+          reason: `YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
         });
         continue;
       }
@@ -930,38 +678,11 @@ export class AppCoordinator {
       status: "playing",
       currentTrackIdentity: entry.track.identity,
     };
-    this.reportingSessionKey = identityKey(entry.track.identity);
-    this.completedPlayReported = false;
     this.appState.lastEvent = `started ${entry.track.title}`;
     this.syncQueueState();
-    this.reportNowPlaying(entry.track);
     return true;
   }
 
-  private async refreshRestoredLocalAvailability(): Promise<void> {
-    for (const entry of this.queue.entries) {
-      if (entry.track.identity.providerId !== "local") continue;
-
-      const provider = this.appState.providers[entry.track.identity.providerId];
-      if (!provider) {
-        this.queue.markAvailability(entry.track.identity, {
-          status: "unavailable",
-          reason: "Provider local is unavailable",
-        });
-        continue;
-      }
-
-      try {
-        await provider.resolvePlaybackLocator(entry.track.identity);
-        this.queue.markAvailability(entry.track.identity, { status: "available" });
-      } catch (error) {
-        this.queue.markAvailability(entry.track.identity, {
-          status: "unavailable",
-          reason: error instanceof Error ? error.message : "Playback Locator could not be resolved",
-        });
-      }
-    }
-  }
 
   private async submitYouTubeUrl(url: string, signal: AbortSignal): Promise<void> {
     await this.refreshHelperDependency("yt-dlp");
@@ -985,9 +706,9 @@ export class AppCoordinator {
       return;
     }
 
-    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
-    if (!isOfflineYouTubeCacheProvider(provider)) {
-      this.appState.lastEvent = "Offline YouTube Cache Provider is unavailable";
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isYouTubeCacheProvider(provider)) {
+      this.appState.lastEvent = "YouTube Cache Provider is unavailable";
       this.finishYouTubeDownload({ clearLines: true });
       return;
     }
@@ -995,7 +716,7 @@ export class AppCoordinator {
     provider.refresh();
     const cacheEntry = provider.findByIdentity(identified.identity);
     if (cacheEntry?.availability.status === "available") {
-      this.enqueueOfflineYouTubeCacheEntry(cacheEntry);
+      this.appState.lastEvent = `already cached ${cacheEntry.track.title}`;
       this.finishYouTubeDownload({ clearLines: true });
       return;
     }
@@ -1003,7 +724,7 @@ export class AppCoordinator {
     const download = await this.youtubeDownloader({
       url,
       command: this.appState.config.helpers.ytDlp,
-      cache: this.appState.config.offlineYouTubeCache,
+      cache: this.appState.config.youtubeCache,
       metadata: identified.metadata,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
       progressThrottleMs: this.appState.config.lowPower.downloadProgressThrottleMs,
@@ -1031,28 +752,20 @@ export class AppCoordinator {
     const downloadedEntry = provider.findByIdentity(identified.identity);
     if (!downloadedEntry) {
       this.finishYouTubeDownload({ clearLines: false });
-      this.appState.lastEvent = `Offline YouTube Cache entry is missing after download: ${identified.identity.stableId}`;
+      this.appState.lastEvent = `YouTube Cache entry is missing after download: ${identified.identity.stableId}`;
       return;
     }
     if (downloadedEntry.availability.status !== "available") {
       this.finishYouTubeDownload({ clearLines: false });
       this.appState.lastEvent = downloadedEntry.availability.status === "unavailable"
-        ? `Offline YouTube Cache entry is incomplete: ${downloadedEntry.availability.reason}`
-        : "Offline YouTube Cache entry is incomplete";
+        ? `YouTube Cache entry is incomplete: ${downloadedEntry.availability.reason}`
+        : "YouTube Cache entry is incomplete";
       return;
     }
-
-    this.enqueueOfflineYouTubeCacheEntry(downloadedEntry);
+    this.appState.lastEvent = `downloaded ${downloadedEntry.track.title}`;
     this.finishYouTubeDownload({ clearLines: false });
   }
 
-  private enqueueOfflineYouTubeCacheEntry(cacheEntry: OfflineYouTubeCacheEntry): void {
-    const entry = this.queue.enqueue(cacheEntry.track);
-    this.queue.markAvailability(cacheEntry.track.identity, cacheEntry.availability);
-    this.appState.lastEvent = `added ${cacheEntry.track.title} to shared Queue`;
-    this.syncQueueState();
-    void this.saveLastQueueSnapshot({ meaningful: true });
-  }
 
   private recordYouTubeDownloadProgress(line: string): void {
     const lines = [...this.appState.downloads.lines, line].slice(-4);
@@ -1070,10 +783,10 @@ export class AppCoordinator {
     };
   }
 
-  private markSelectedOfflineYouTubeCacheAvailability(entry: QueueEntry): void {
-    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
-    if (!isOfflineYouTubeCacheProvider(provider)) return;
-    if (entry.track.identity.providerId !== OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) return;
+  private markSelectedYouTubeCacheAvailability(entry: QueueEntry): void {
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isYouTubeCacheProvider(provider)) return;
+    if (entry.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) return;
 
     const cacheEntry = provider.findByIdentity(entry.track.identity);
     if (!cacheEntry) return;
@@ -1168,29 +881,6 @@ export class AppCoordinator {
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
-  private async refreshNavidromeLibraryData(): Promise<boolean> {
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) {
-      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
-      return false;
-    }
-
-    const state = await provider.validateConnection();
-    if (state.status !== "connected") {
-      this.appState.lastEvent = state.message;
-      return false;
-    }
-
-    try {
-      await provider.refreshLibraryBrowser();
-    } catch (error) {
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      return false;
-    }
-
-    this.appState.lastEvent = "refreshed Navidrome Library Browser";
-    return true;
-  }
 
   private async runPlayerCommand(
     command: () => Promise<PlayerPlaybackState>,
@@ -1220,56 +910,6 @@ export class AppCoordinator {
     };
   }
 
-  private reportNowPlaying(track: Track): void {
-    if (!this.shouldReportNavidromeScrobble(track)) return;
-
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) return;
-
-    void provider.reportNowPlaying(track.identity)
-      .catch((error) => this.recordReportingFailure(error));
-  }
-
-  private maybeReportCompletedPlay(playback: PlayerPlaybackState): void {
-    if (this.completedPlayReported || playback.status !== "playing") return;
-
-    const currentIdentity = this.appState.playback.currentTrackIdentity;
-    if (!currentIdentity) return;
-
-    const currentKey = identityKey(currentIdentity);
-    if (this.reportingSessionKey !== currentKey) return;
-
-    const entry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, currentIdentity));
-    if (!entry || !this.shouldReportNavidromeScrobble(entry.track)) return;
-
-    const positionSeconds = playback.positionSeconds;
-    if (typeof positionSeconds !== "number" || !Number.isFinite(positionSeconds)) return;
-
-    const durationSeconds = playback.durationSeconds ?? entry.track.durationSeconds;
-    const thresholdSeconds = completedPlayThresholdSeconds(durationSeconds);
-    if (positionSeconds < thresholdSeconds) return;
-
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) return;
-
-    this.completedPlayReported = true;
-    void provider.reportCompletedPlay(entry.track.identity)
-      .catch((error) => this.recordReportingFailure(error));
-  }
-
-  private shouldReportNavidromeScrobble(track: Track): boolean {
-    return track.identity.providerId === "navidrome"
-      && this.appState.config.providers.navidrome.scrobble;
-  }
-
-  private recordReportingFailure(error: unknown): void {
-    if (this.tornDown) return;
-
-    const message = `Navidrome reporting failed: ${error instanceof Error ? error.message : String(error)}`;
-    this.appState.appErrors.push(message);
-    this.notifyStateChanged();
-  }
-
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
   }
@@ -1290,16 +930,4 @@ export class AppCoordinator {
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
     for (const listener of this.stateListeners) listener(reason);
   }
-}
-
-type GlobalSearchProvider = Provider & { readonly id: GlobalSearchProviderId };
-
-function isGlobalSearchProvider(provider: Provider): provider is GlobalSearchProvider {
-  return isProviderId(provider.id);
-}
-
-function completedPlayThresholdSeconds(durationSeconds: number | null | undefined): number {
-  return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
-    ? Math.min(240, durationSeconds / 2)
-    : 240;
 }

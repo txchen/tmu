@@ -17,7 +17,6 @@ import type { DependencyHealthRefresh } from "./coordinator";
 import { FileAppPreferencesPersistence, type AppPreferencesPersistence } from "./preferences";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
-import type { NavidromeFetcher } from "./navidrome";
 import type { YouTubeDownloader } from "./youtube-url-download";
 
 export type TmuAppOptions = {
@@ -31,8 +30,6 @@ export type TmuAppOptions = {
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
   youtubeDownloader?: YouTubeDownloader;
-  navidromeFetcher?: NavidromeFetcher;
-  navidromeSaltFactory?: () => string;
 };
 
 export type TmuRuntimeOptions = {
@@ -46,20 +43,7 @@ export function createTmuApp(options: TmuAppOptions = {}): {
 } {
   const config = createDefaultTmuConfig(options.config);
   const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
-  const providers = createDefaultProviders({
-    local: {
-      dependencyHealth,
-      ffprobeCommand: config.helpers.ffprobe,
-      runner: options.dependencyRunner,
-      metadataTimeoutMs: config.dependencyPolicy.checkTimeoutMs,
-    },
-    navidrome: {
-      config: config.providers.navidrome,
-      fetcher: options.navidromeFetcher,
-      saltFactory: options.navidromeSaltFactory,
-    },
-    offlineYouTubeCache: config.offlineYouTubeCache,
-  });
+  const providers = createDefaultProviders({ youtubeCache: config.youtubeCache });
   const coordinator = new AppCoordinator({
     appState: createInitialAppState(providers, {
       config,

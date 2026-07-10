@@ -305,8 +305,6 @@ export class MpvPlayer implements Player {
   }
 
   private loadCommand(locator: PlaybackLocator): unknown[] {
-    if (locator.kind === "url") return ["loadfile", locator.url, "replace"];
-
     return ["loadfile", locator.path, "replace", -1, LOCAL_FILE_PLAYBACK_OPTIONS];
   }
 

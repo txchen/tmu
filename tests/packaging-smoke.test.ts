@@ -75,10 +75,12 @@ async function expectTmuExecutable(command: string[], env: Record<string, string
 
   try {
     const startedAt = Date.now();
-    while (!output.includes("Queue · 0 Tracks") && Date.now() - startedAt < 10_000) {
+    while (!output.includes("[1 Playback]") && Date.now() - startedAt < 10_000) {
       await Bun.sleep(10);
     }
-    expect(output).toContain("Queue · 0 Tracks");
+    expect(output).toContain("[1 Playback]");
+    expect(output).toContain("2 Library");
+    expect(output).toContain("3 YouTube Downloader");
     terminal.write("q");
     expect(await executable.exited).toBe(0);
   } finally {

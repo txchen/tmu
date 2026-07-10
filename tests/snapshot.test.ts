@@ -19,11 +19,10 @@ function snapshot(): LastQueueSnapshot {
     entries: [
       {
         track: {
-          identity: { providerId: "navidrome", stableId: "song-1" },
-          title: "Remote Song",
-          providerLabel: "Navidrome",
+          identity: { providerId: "youtube-cache", stableId: "song-1" },
+          title: "Cached Track",
+          providerLabel: "YouTube Cache",
         },
-        availability: { status: "unknown" },
       },
     ],
     currentIndex: 0,
@@ -63,9 +62,9 @@ describe("Last Queue Snapshot persistence", () => {
     const file = join(dir, "last-queue.json");
     const queue = new MemoryQueue();
     const trackWithRuntimeField = {
-      identity: { providerId: "navidrome", stableId: "song-secret" },
-      title: "Remote Secret",
-      providerLabel: "Navidrome",
+      identity: { providerId: "youtube-cache", stableId: "song-secret" },
+      title: "Cached Secret",
+      providerLabel: "YouTube Cache",
       playbackLocator: { kind: "url", url: "https://example.test/auth-token" },
     } as Track & { playbackLocator: { kind: "url"; url: string } };
     queue.enqueue(trackWithRuntimeField);
@@ -79,9 +78,9 @@ describe("Last Queue Snapshot persistence", () => {
       expect(raw).not.toContain("playbackLocator");
       expect(raw).not.toContain("auth-token");
       expect(loaded?.entries[0]?.track).toEqual({
-        identity: { providerId: "navidrome", stableId: "song-secret" },
-        title: "Remote Secret",
-        providerLabel: "Navidrome",
+        identity: { providerId: "youtube-cache", stableId: "song-secret" },
+        title: "Cached Secret",
+        providerLabel: "YouTube Cache",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -161,8 +160,6 @@ describe("Last Queue Snapshot persistence", () => {
     let second: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
 
     try {
-      const seededFile = join(dir, "song-a.flac");
-      await writeFile(seededFile, "not real audio");
       await writeFile(configPath, JSON.stringify({
         persistence: {
           lastQueueSnapshotPath: snapshotPath,
@@ -173,9 +170,9 @@ describe("Last Queue Snapshot persistence", () => {
       first = await createTmuRuntime({ configPath, dependencyRunner: runner });
       await first.coordinator.start();
       await first.coordinator.dispatch({ type: "playNext", target: {
-        identity: { providerId: "local", stableId: seededFile },
-        title: "song-a.flac",
-        providerLabel: "Local",
+        identity: { providerId: "youtube-cache", stableId: "song-a" },
+        title: "Cached Song A",
+        providerLabel: "YouTube Cache",
       } });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "set-volume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
@@ -185,7 +182,7 @@ describe("Last Queue Snapshot persistence", () => {
       second = await createTmuRuntime({ configPath, dependencyRunner: runner });
       await second.coordinator.start();
 
-      expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("song-a.flac");
+      expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Song A");
       expect(second.coordinator.appState.queue.shuffle).toBe(true);
       expect(second.coordinator.appState.volume).toEqual({ percent: 61, ready: true });
     } finally {
