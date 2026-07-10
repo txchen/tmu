@@ -97,9 +97,9 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
   const rows = options.rows ?? 30;
 
   return {
-    activeTargetId: "local",
-    focusedPane: "targets",
-    selectedTargetIndex: 0,
+    activeTargetId: "queue",
+    focusedPane: "queue",
+    selectedTargetIndex: NAVIGATION_TARGETS.findIndex((target) => target.id === "queue"),
     selectedContentIndexByTarget,
     selectedQueueIndex: 0,
     filterText: "",

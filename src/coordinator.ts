@@ -1,5 +1,4 @@
 import {
-  NAVIGATION_TARGETS,
   clampIndex,
   identityKey,
   navigationTargetIndex,
@@ -40,7 +39,6 @@ import {
 import { isLocalProvider } from "./providers";
 import {
   InMemoryAppPreferencesPersistence,
-  isRestorableProviderTargetId,
   type AppPreferencesRecord,
   type AppPreferencesPersistence,
 } from "./preferences";
@@ -152,7 +150,7 @@ export class AppCoordinator {
   }
 
   async start(): Promise<void> {
-    await this.restoreAppPreferences({ restoreProvider: true });
+    await this.restoreAppPreferences();
     await this.restoreQueueSnapshotIfPresent();
     this.syncQueueState();
     this.notifyStateChanged();
@@ -247,7 +245,7 @@ export class AppCoordinator {
     return () => this.stateListeners.delete(listener);
   }
 
-  private async restoreAppPreferences(options: { restoreProvider: boolean }): Promise<void> {
+  private async restoreAppPreferences(): Promise<void> {
     const record = await this.appPreferencesPersistence.load();
     this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
 
@@ -255,33 +253,7 @@ export class AppCoordinator {
     if (record?.repeatAll !== undefined) this.queue.setRepeatAll(record.repeatAll);
     if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
 
-    if (options.restoreProvider) {
-      this.updateUiState({
-        activeTargetId: "local",
-        selectedTargetIndex: navigationTargetIndex("local"),
-        focusedPane: "targets",
-        providerLocation: { providerId: "local", path: [] },
-      });
-      this.appState.lastEvent = "opened Local";
-
-      if (record?.lastSelectedProviderId) {
-        const targetId = record.lastSelectedProviderId;
-        this.updateUiState({
-          activeTargetId: targetId,
-          selectedTargetIndex: navigationTargetIndex(targetId),
-          focusedPane: "targets",
-          providerLocation: { providerId: targetId, path: [] },
-        });
-        this.appState.lastEvent = `restored last selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
-      }
-    }
-
     this.syncQueueState();
-  }
-
-  private async persistLastSelectedTarget(targetId: NavigationTargetId): Promise<void> {
-    if (!isRestorableProviderTargetId(targetId)) return;
-    await this.persistAppPreferences({ lastSelectedProviderId: targetId });
   }
 
   private async persistPlaybackPreferences(): Promise<void> {
@@ -713,8 +685,6 @@ export class AppCoordinator {
       focusedPane: "content",
       providerLocation: { providerId: "local", path: [{ kind: "local-directory", path }] },
     });
-    await this.persistLastSelectedTarget("local");
-
     const selectedEntry = await this.openLocalPathTracks(path, signal);
     if (selectedEntry) this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(selectedEntry)));
   }

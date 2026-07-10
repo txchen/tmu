@@ -630,7 +630,7 @@ describe("AppCoordinator", () => {
       ]));
   });
 
-  test("starts empty on the target switcher with separate app and UI state", async () => {
+  test("starts on Queue Home with source-neutral Provider navigation and separate app and UI state", async () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
@@ -641,8 +641,9 @@ describe("AppCoordinator", () => {
     await coordinator.start();
 
     expect(coordinator.appState.queue.entries).toEqual([]);
-    expect(coordinator.uiState.focusedPane).toBe("targets");
-    expect(coordinator.uiState.activeTargetId).toBe("local");
+    expect(coordinator.uiState.focusedPane).toBe("queue");
+    expect(coordinator.uiState.activeTargetId).toBe("queue");
+    expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
     expect(coordinator.appState).not.toBe(coordinator.uiState);
   });
 
@@ -657,6 +658,9 @@ describe("AppCoordinator", () => {
     });
 
     await first.start();
+    first.dispatchUi({ type: "updateView", patch: {
+      activeTargetId: "local", focusedPane: "content", providerLocation: { providerId: "local", path: [] },
+    } });
     await first.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
     await first.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
     await first.dispatch({ type: "playerOperation", operation: "set-volume", percent: 36, ready: true });
@@ -674,6 +678,9 @@ describe("AppCoordinator", () => {
     expect(second.appState.queue.shuffle).toBe(true);
     expect(second.appState.queue.repeatAll).toBe(true);
     expect(second.appState.volume).toEqual({ percent: 36, ready: true });
+    expect(second.uiState.activeTargetId).toBe("queue");
+    expect(second.uiState.focusedPane).toBe("queue");
+    expect(second.uiState.providerLocation).toEqual({ providerId: null, path: [] });
   });
 
   test("startup restores Offline YouTube Cache snapshot entries from cache metadata", async () => {
@@ -758,8 +765,8 @@ describe("AppCoordinator", () => {
       await coordinator.start();
 
       expect(coordinator.appState.queue.entries).toEqual([]);
-      expect(coordinator.uiState.activeTargetId).toBe("local");
-      expect(coordinator.appState.lastEvent).toContain("opened Local");
+      expect(coordinator.uiState.activeTargetId).toBe("queue");
+      expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
       expect(coordinator.appState.appErrors).toEqual(expect.arrayContaining([
         expect.stringContaining("Last Queue Snapshot was corrupted"),
         expect.stringContaining("Ignored corrupted app preferences"),
@@ -794,7 +801,8 @@ describe("AppCoordinator", () => {
       await coordinator.start();
       await coordinator.dispatch({ type: "providerOperation", providerId: "local", operation: "open-path", path: album });
 
-      expect(coordinator.uiState.activeTargetId).toBe("local");
+      expect(coordinator.uiState.activeTargetId).toBe("queue");
+      expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
       expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual([
         await realpath(first),
         await realpath(second),

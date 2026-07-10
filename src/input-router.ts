@@ -85,7 +85,8 @@ export class RootInputRouter {
     });
     const uiOperation = requestedUiOperation
       ?? (resolvedBinding?.intent?.type === "routeUi" ? resolvedBinding.intent.operation : null);
-    if (this.uiState.snapshot.pendingVimChord && !(uiOperation === "first" && key === "g")) {
+    const chordEligible = !overlay || !isTextEntryFocus(overlay.focus);
+    if (this.uiState.snapshot.pendingVimChord && !(chordEligible && uiOperation === "first" && key === "g")) {
       this.cancelOverlayChord();
       if (key === "\x1b") return true;
     }
@@ -108,7 +109,7 @@ export class RootInputRouter {
     }
     if (overlay && isTextEntryFocus(overlay.focus)) {
       if ((overlay.kind === "shortcut-help" || overlay.kind === "command-palette")
-        && movementForUiOperation(uiOperation, 1)) {
+        && isDiscoveryTextNavigationKey(key) && movementForUiOperation(uiOperation, 1)) {
         this.moveDiscoverySelection(uiOperation, overlay);
         return true;
       }
@@ -122,6 +123,8 @@ export class RootInputRouter {
         }
       } else if (key === "\r" && overlay.kind === "command-palette") {
         await this.invokeDiscoverySelection(overlay);
+      } else if (key === "\t" && overlay.kind === "command-palette") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
       } else if (key === "\r" && overlay.kind === "youtube-url") {
         await this.dispatchBinding(key);
         if (this.appState().downloads.active) this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
@@ -163,6 +166,10 @@ export class RootInputRouter {
       }
       if (overlay.kind === "command-palette" && key === "\r") {
         await this.invokeDiscoverySelection(overlay);
+        return true;
+      }
+      if (overlay.kind === "command-palette" && (key === "\t" || key === "/")) {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
         return true;
       }
     }
@@ -523,6 +530,10 @@ function isTextEntryFocus(focus: UiState["overlays"][number]["focus"]): boolean 
 
 function isPrintableKey(key: string): boolean {
   return key.length > 0 && [...key].every((character) => character >= " " && character !== "\x7f");
+}
+
+function isDiscoveryTextNavigationKey(key: string): boolean {
+  return ["\x1b[A", "\x1b[B", "\x1b[H", "\x1b[F", "\x1b[5~", "\x1b[6~"].includes(key);
 }
 
 function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" }>, uiState: Readonly<UiState>) {
