@@ -82,7 +82,12 @@ export class RootInputRouter {
     }
 
     const overlay = this.uiState.snapshot.overlays.at(-1);
-    const uiOperation = requestedUiOperation ?? this.uiRouteOperation(key);
+    const resolvedBinding = requestedUiOperation ? null : actionForBinding(this.registry, key, {
+      appState: this.appState(), uiState: this.uiState.snapshot,
+      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
+    });
+    const uiOperation = requestedUiOperation
+      ?? (resolvedBinding?.intent?.type === "routeUi" ? resolvedBinding.intent.operation : null);
     if (overlay?.kind === "music-picker" && overlay.focus === "filter") {
       if (key === "\x1b" || key === "\r" || key === "\t") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
@@ -165,8 +170,9 @@ export class RootInputRouter {
       }
     }
 
-    if (overlay && (key === "?" || key === ":")) {
-      await this.dispatchBinding(key);
+    if (overlay && resolvedBinding?.intent?.type === "openOverlay"
+      && (resolvedBinding.intent.kind === "shortcut-help" || resolvedBinding.intent.kind === "command-palette")) {
+      await this.dispatchIntent(resolvedBinding.intent);
       return true;
     }
 
@@ -181,8 +187,9 @@ export class RootInputRouter {
       this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
       return true;
     }
-    if (overlay?.focus === "results" && (key === "\r" || key === "\x1b[13;2u")) {
-      await this.dispatchBinding(key);
+    if (overlay?.focus === "results"
+      && (resolvedBinding?.intent?.type === "playNext" || resolvedBinding?.intent?.type === "playNow")) {
+      await this.dispatchIntent(resolvedBinding.intent);
       return true;
     }
     if (overlay) return true;
@@ -243,11 +250,7 @@ export class RootInputRouter {
       return true;
     }
 
-    const action = actionForBinding(this.registry, key, {
-      appState: this.appState(),
-      uiState: this.uiState.snapshot,
-      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
-    });
+    const action = resolvedBinding;
     if (!action) {
       const uiIntent = uiIntentForKey(key);
       if (uiIntent && this.dispatchUiIntent) {
@@ -284,16 +287,17 @@ export class RootInputRouter {
     overlay: UiState["overlays"][number],
     uiOperation: UiRouteOperation | null,
   ): Promise<boolean> {
-    const searchRows = this.appState().globalSearch.query ? globalSearchRows(this.appState().globalSearch) : null;
-    if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows, uiOperation);
     if (uiOperation === "search-filters") {
       this.cancelOverlayChord();
       this.uiState.dispatch({ type: "setOverlayFocus", focus: "filter" });
       return true;
     }
-    if (key === "r") {
+    const searchRows = this.appState().globalSearch.query ? globalSearchRows(this.appState().globalSearch) : null;
+    if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows, uiOperation);
+    if (uiOperation === "retry") {
       this.cancelOverlayChord();
-      await this.dispatchBinding(key);
+      const providerId = selectedOverlayProviderId(this.appState(), this.uiState.snapshot);
+      if (providerId) await this.dispatchApp({ type: "providerOperation", providerId, operation: "retry" });
       return true;
     }
     if (key === "/") {
@@ -396,7 +400,7 @@ export class RootInputRouter {
         : { type: "moveOverlaySelection", delta: movement.delta, rowCount: rows.length, visibleRows });
       return true;
     }
-    if (key === "r") {
+    if (uiOperation === "retry") {
       const row = rows[overlay.selectedResultIndex ?? 0];
       const providerId = globalSearchRetryProviderId(row);
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
@@ -457,14 +461,6 @@ export class RootInputRouter {
     this.uiState.dispatch(movement.kind === "boundary"
       ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
       : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
-  }
-
-  private uiRouteOperation(key: string): UiRouteOperation | null {
-    const action = actionForBinding(this.registry, key, {
-      appState: this.appState(), uiState: this.uiState.snapshot,
-      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
-    });
-    return action?.intent?.type === "routeUi" ? action.intent.operation : null;
   }
 
   private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
