@@ -153,7 +153,7 @@ describe("Last Queue Snapshot persistence", () => {
     const preferencesPath = join(dir, "preferences.json");
     const runner: DependencyCommandRunner = async ({ helper }) => ({
       exitCode: 0,
-      stdout: helper === "ffprobe" ? "ffprobe version 7.1\n" : `${helper} 1.0\n`,
+      stdout: `${helper} 1.0\n`,
       stderr: "",
     });
     let first: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;

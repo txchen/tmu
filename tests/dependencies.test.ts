@@ -13,13 +13,11 @@ describe("dependency health", () => {
     const config = createDefaultTmuConfig({
       helpers: {
         mpv: "/opt/bin/mpv",
-        ffprobe: "/opt/bin/ffprobe",
         ytDlp: "/opt/bin/yt-dlp",
       },
     });
     const runner: DependencyCommandRunner = async ({ command }) => {
       if (command === "/opt/bin/mpv") return { exitCode: 0, stdout: "mpv 0.39.0\n", stderr: "" };
-      if (command === "/opt/bin/ffprobe") return { exitCode: 0, stdout: "ffprobe version 7.1\n", stderr: "" };
       if (command === "/opt/bin/yt-dlp") return { exitCode: 0, stdout: "2026.01.02\n", stderr: "" };
       return { exitCode: 127, stdout: "", stderr: "not found" };
     };
@@ -31,18 +29,12 @@ describe("dependency health", () => {
       status: "present",
       version: "0.39.0",
     });
-    expect(health.helpers.ffprobe).toMatchObject({
-      command: "/opt/bin/ffprobe",
-      status: "present",
-      version: "7.1",
-    });
     expect(health.helpers["yt-dlp"]).toMatchObject({
       command: "/opt/bin/yt-dlp",
       status: "present",
       version: "2026.01.02",
     });
     expect(health.playback.enabled).toBe(true);
-    expect(health.metadata.degraded).toBe(false);
     expect(health.youtubeUrlDownload.enabled).toBe(true);
   });
 
@@ -50,7 +42,6 @@ describe("dependency health", () => {
     const config = createDefaultTmuConfig({
       helpers: {
         mpv: "/missing/mpv",
-        ffprobe: "/missing/ffprobe",
         ytDlp: "/missing/yt-dlp",
       },
     });
@@ -70,10 +61,6 @@ describe("dependency health", () => {
     expect(health.playback).toEqual({
       enabled: false,
       message: "Playback disabled: mpv missing at /missing/mpv",
-    });
-    expect(health.metadata).toEqual({
-      degraded: true,
-      message: "Metadata degraded: ffprobe missing at /missing/ffprobe",
     });
     expect(health.youtubeUrlDownload).toEqual({
       enabled: false,
@@ -115,7 +102,6 @@ describe("dependency health", () => {
       version: "/opt/bin/yt-dlp 2026.01.02",
     });
     expect(health.playback.enabled).toBe(true);
-    expect(health.metadata.degraded).toBe(false);
     expect(health.youtubeUrlDownload.enabled).toBe(true);
   });
 

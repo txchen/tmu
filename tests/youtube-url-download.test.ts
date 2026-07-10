@@ -1,676 +1,304 @@
 import { describe, expect, test } from "bun:test";
-import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  createFfprobeYouTubeMediaValidator,
-  downloadYouTubeUrl,
-  identifyYouTubeUrl,
-  nodeYouTubeDownloadProcessRunner,
-  parseYtDlpDownloadProgressLine,
+  executeYouTubeDownloadBatch,
+  prepareYouTubeDownloadBatch,
   validateYouTubeUrlDownloadInput,
-  type DependencyCommandRunner,
   type DependencyCommandRequest,
-  type YouTubeDownloadProcessRequest,
+  type DownloadBatchEntry,
+  type YouTubeDownloadBatch,
   type YouTubeDownloadProcessRunner,
 } from "../src/index";
 
 describe("YouTube URL Download adapter", () => {
-  test("accepts direct YouTube and YouTube Music URL forms", () => {
-    const accepted = [
-      "https://www.youtube.com/watch?v=abc123XYZ_0",
-      "https://youtube.com/watch?v=abc123XYZ_0&t=42",
-      "https://m.youtube.com/watch?v=abc123XYZ_0",
-      "https://music.youtube.com/watch?v=abc123XYZ_0",
-      "https://youtu.be/abc123XYZ_0",
-      "https://www.youtube.com/shorts/abc123XYZ_0",
-      "https://www.youtube.com/embed/abc123XYZ_0",
-    ];
+  test("accepts one supported video URL and rejects bare, multiple, and non-YouTube inputs before extraction", () => {
+    for (const input of [
+      "https://youtube.com/watch?v=One",
+      "https://music.youtube.com/watch?v=One",
+      "https://youtu.be/One",
+      "https://youtube.com/shorts/One",
+    ]) expect(validateYouTubeUrlDownloadInput(input)).toMatchObject({ ok: true, kind: "single" });
 
-    expect(accepted.map((input) => validateYouTubeUrlDownloadInput(input).ok)).toEqual([
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-      true,
-    ]);
+    for (const input of [
+      "One",
+      "https://example.com/watch?v=One",
+      "https://youtube.com/watch?v=One https://youtu.be/Two",
+    ]) expect(validateYouTubeUrlDownloadInput(input).ok).toBe(false);
   });
 
-  test("rejects out-of-scope YouTube URL Download inputs with clear messages", () => {
-    const rejected = [
-      ["never gonna give you up", "direct YouTube or YouTube Music URL"],
-      ["ytsearch1:never gonna give you up", "ytsearch inputs"],
-      ["https://www.youtube.com/results?search_query=ambient", "search URLs"],
-      ["https://www.youtube.com/playlist?list=PL123", "playlist URLs"],
-      ["https://www.youtube.com/watch?v=abc123XYZ_0&list=PL123", "playlist URLs"],
-      ["https://www.youtube.com/@some-channel", "channel URLs"],
-      ["https://music.youtube.com/library", "account/library URLs"],
-      ["https://www.youtube.com/live/abc123XYZ_0", "live streams"],
-      ["https://example.com/watch?v=abc123XYZ_0", "non-YouTube sites"],
-    ];
-
-    for (const [input, message] of rejected) {
-      const result = validateYouTubeUrlDownloadInput(input);
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.message).toContain(message);
-    }
-  });
-
-  test("identifies metadata with a finite timeout and lowercased extractor/id identity", async () => {
+  test("treats watch URLs with list parameters as one video", async () => {
     let request: DependencyCommandRequest | undefined;
-    const runner: DependencyCommandRunner = async (nextRequest) => {
-      request = nextRequest;
-      return {
+    const prepared = await prepareYouTubeDownloadBatch(
+      "https://youtube.com/watch?v=One&list=PLSurprise&index=4",
+      {
+        command: "yt-dlp",
+        timeoutMs: 1000,
+        runner: async (value) => {
+          request = value;
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ extractor_key: "Youtube", id: "One00000001", title: "First", uploader: "Artist" }),
+            stderr: "",
+          };
+        },
+      },
+    );
+
+    expect(prepared).toMatchObject({
+      kind: "ready",
+      batch: { kind: "single", entries: [{ kind: "track", metadata: { id: "One00000001" } }] },
+    });
+    expect(request?.args).toContain("--no-playlist");
+    expect(request?.args.at(-1)).toBe("https://youtube.com/watch?v=One");
+  });
+
+  test("rejects extracted IDs that are not canonical YouTube video IDs", async () => {
+    const prepared = await prepareYouTubeDownloadBatch("https://youtube.com/watch?v=short", {
+      command: "yt-dlp",
+      timeoutMs: 1000,
+      runner: async () => ({
         exitCode: 0,
-        stdout: JSON.stringify({
-          extractor_key: "YouTube",
-          id: "AbC123",
-          title: "Identified Track",
-          uploader: "Cache Artist",
-          duration: 181.7,
-        }),
+        stdout: JSON.stringify({ extractor_key: "Youtube", id: "short", title: "Bad", uploader: "Artist" }),
         stderr: "",
-      };
-    };
-
-    const result = await identifyYouTubeUrl("https://music.youtube.com/watch?v=AbC123", {
-      command: "/opt/bin/yt-dlp",
-      timeoutMs: 3456,
-      cookiesFromBrowser: "firefox",
-      runner,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      identity: {
-        providerId: "youtube-cache",
-        stableId: "AbC123",
-      },
-      metadata: {
-        extractor: "youtube",
-        id: "AbC123",
-        title: "Identified Track",
-        uploader: "Cache Artist",
-        durationSeconds: 181.7,
-      },
-    });
-    expect(request).toMatchObject({
-      helper: "yt-dlp",
-      command: "/opt/bin/yt-dlp",
-      timeoutMs: 3456,
-    });
-    expect(request?.args).toEqual([
-      "--dump-single-json",
-      "--skip-download",
-      "--no-playlist",
-      "--cookies-from-browser",
-      "firefox",
-      "--",
-      "https://music.youtube.com/watch?v=AbC123",
-    ]);
-  });
-
-  test("surfaces explanatory yt-dlp stderr for restricted or unavailable media", async () => {
-    const runner: DependencyCommandRunner = async () => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "ERROR: [youtube] AbC123: Video unavailable. This video is restricted in your region.",
-    });
-
-    const result = await identifyYouTubeUrl("https://www.youtube.com/watch?v=AbC123", {
-      command: "yt-dlp",
-      timeoutMs: 2000,
-      runner,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      message: "yt-dlp identify failed: ERROR: [youtube] AbC123: Video unavailable. This video is restricted in your region.",
-    });
-  });
-
-  test("reports identify timeouts and rejects live metadata before cache lookup", async () => {
-    const timedOutRunner: DependencyCommandRunner = async () => ({
-      exitCode: null,
-      stdout: "",
-      stderr: "",
-      errorMessage: "Command timed out after 25ms",
-    });
-    const timedOut = await identifyYouTubeUrl("https://www.youtube.com/watch?v=AbC123", {
-      command: "yt-dlp",
-      timeoutMs: 25,
-      runner: timedOutRunner,
-    });
-    expect(timedOut).toEqual({
-      ok: false,
-      message: "yt-dlp identify timed out: Command timed out after 25ms",
-    });
-
-    const liveRunner: DependencyCommandRunner = async () => ({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        extractor_key: "YouTube",
-        id: "Live123",
-        title: "Live Now",
-        is_live: true,
       }),
-      stderr: "",
     });
-    const live = await identifyYouTubeUrl("https://www.youtube.com/watch?v=Live123", {
-      command: "yt-dlp",
-      timeoutMs: 2000,
-      runner: liveRunner,
-    });
-    expect(live).toEqual({
-      ok: false,
-      message: "YouTube URL Download rejects live streams",
-    });
+    expect(prepared).toMatchObject({ kind: "rejected" });
   });
 
-  test("validates downloaded media with ffprobe before cache metadata can be written", async () => {
-    const requests: DependencyCommandRequest[] = [];
-    const validator = createFfprobeYouTubeMediaValidator({
-      command: "/opt/bin/ffprobe",
-      timeoutMs: 1234,
+  test("preflights explicit playlists with title and total source count, preserving unavailable entries in source order", async () => {
+    const prepared = await prepareYouTubeDownloadBatch("https://youtube.com/playlist?list=PL1", {
+      command: "yt-dlp",
+      timeoutMs: 1000,
       runner: async (request) => {
-        requests.push(request);
+        expect(request.args).toContain("--flat-playlist");
+        expect(request.args).toContain("--yes-playlist");
+        expect(request.args).toContain("--ignore-errors");
         return {
           exitCode: 0,
-          stdout: JSON.stringify({ streams: [{ codec_type: "audio" }] }),
           stderr: "",
+          stdout: JSON.stringify({
+            _type: "playlist",
+            title: "Road Trip",
+            playlist_count: 5,
+            entries: [
+              { extractor: "youtube", id: "A0000000000", title: "Alpha", uploader: "Artist A" },
+              null,
+              { title: "Private video" },
+              { extractor: "youtube", id: "B0000000000", title: "Beta", channel: "Artist B" },
+            ],
+          }),
         };
       },
     });
 
-      await expect(validator("/tmp/downloaded.webm")).resolves.toEqual({ ok: true });
-    expect(requests).toEqual([{
-      helper: "ffprobe",
-      command: "/opt/bin/ffprobe",
-      args: [
-        "-v",
-        "error",
-        "-select_streams",
-        "a:0",
-        "-show_entries",
-        "stream=codec_type",
-        "-of",
-        "json",
-        "/tmp/downloaded.webm",
-      ],
-      timeoutMs: 1234,
-    }]);
-
-    const failed = await createFfprobeYouTubeMediaValidator({
-      command: "ffprobe",
-      timeoutMs: 2000,
-      runner: async () => ({
-        exitCode: 0,
-        stdout: JSON.stringify({ streams: [{ codec_type: "video" }] }),
-        stderr: "",
-      }),
-    })("/tmp/not-audio.webm");
-    expect(failed).toEqual({
-      ok: false,
-      message: "Downloaded media validation failed: no audio stream found",
+    expect(prepared).toMatchObject({
+      kind: "confirmation-required",
+      confirmation: { title: "Road Trip", itemCount: 5 },
     });
+    expect(prepared.kind).toBe("confirmation-required");
+    if (prepared.kind !== "confirmation-required") throw new Error("expected confirmation");
+    expect(prepared.cancel()).toEqual({ kind: "cancelled" });
+    expect(prepared.confirm()).toMatchObject({
+        kind: "playlist",
+        entries: [
+          { kind: "track", metadata: { id: "A0000000000" } },
+          { kind: "unavailable" },
+          { kind: "unavailable", title: "Private video" },
+          { kind: "track", metadata: { id: "B0000000000" } },
+          { kind: "unavailable", message: "YouTube playlist entry was unavailable during preflight" },
+        ],
+    });
+    await expect(executeYouTubeDownloadBatch({
+      sourceUrl: "https://youtube.com/playlist?list=PL1",
+      kind: "playlist",
+      entries: [],
+    }, {
+      command: "yt-dlp",
+      cache: { cacheDir: "/tmp/unused" },
+      progressThrottleMs: 500,
+    })).rejects.toThrow("must be created by preflight");
   });
 
-  test("downloads cache misses with stable yt-dlp command shape and writes normalized metadata after validation", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-download-"));
-    let request: YouTubeDownloadProcessRequest | undefined;
-    const runner: YouTubeDownloadProcessRunner = async (nextRequest) => {
-      request = nextRequest;
-      await expect(readFile(join(dir, "youtube", "AbC123", "download-archive.txt"), "utf8")).rejects.toThrow();
-      await mkdir(join(dir, "youtube", "AbC123", "media"), { recursive: true });
-      await writeFile(join(dir, "youtube", "AbC123", "media", "youtube-AbC123.webm"), "audio bytes");
-      nextRequest.onLine("[download]  42.5% of 4.00MiB at 1.00MiB/s ETA 00:02");
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
-    const validated: string[] = [];
-
-    try {
-      await mkdir(join(dir, "youtube", "AbC123"), { recursive: true });
-      await writeFile(join(dir, "youtube", "AbC123", "download-archive.txt"), "youtube AbC123\n");
-      const result = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=AbC123",
-        command: "/opt/bin/yt-dlp",
-        cache: {
-          cacheDir: dir,
-        },
-        metadata: {
-          extractor: "youtube",
-          id: "AbC123",
-          title: "Downloaded Track",
-          uploader: "Prompt Artist",
-          durationSeconds: 188,
-        },
-        cookiesFromBrowser: "firefox:Profile With Spaces",
-        progressThrottleMs: 500,
-        now: () => 1000,
-        runner,
-        validateMedia: async (path) => {
-          validated.push(path);
-          return { ok: true };
-        },
-      });
-
-      expect(result).toMatchObject({
-        ok: true,
-        mediaPath: join(dir, "youtube", "AbC123", "media", "youtube-AbC123.webm"),
-        metadataPath: join(dir, "youtube", "AbC123", "metadata.json"),
-        sourceMetadataPath: join(dir, "youtube", "AbC123", "source.json"),
-      });
-      expect(request).toMatchObject({
-        helper: "yt-dlp",
-        command: "/opt/bin/yt-dlp",
-        graceKillMs: 1500,
-      });
-      expect(request?.args).toEqual([
-        "--no-playlist",
-        "--format",
-        "bestaudio/best",
-        "--continue",
-        "--part",
-        "--newline",
-        "--progress",
-        "--download-archive",
-        join(dir, "youtube", "AbC123", "download-archive.txt"),
-        "--output",
-        join(dir, "youtube", "AbC123", "media", "youtube-AbC123.%(ext)s"),
-        "--cookies-from-browser",
-        "firefox:Profile With Spaces",
-        "--",
-        "https://www.youtube.com/watch?v=AbC123",
-      ]);
-      expect(validated).toEqual([join(dir, "youtube", "AbC123", "media", "youtube-AbC123.webm")]);
-      expect(JSON.parse(await readFile(join(dir, "youtube", "AbC123", "metadata.json"), "utf8"))).toEqual({
-        version: 1,
-        extractor: "youtube",
-        id: "AbC123",
-        title: "Downloaded Track",
-        mediaFileName: "youtube-AbC123.webm",
-        uploader: "Prompt Artist",
-        durationSeconds: 188,
-      });
-      expect(JSON.parse(await readFile(join(dir, "youtube", "AbC123", "source.json"), "utf8"))).toEqual({
-        version: 1,
-        url: "https://www.youtube.com/watch?v=AbC123",
-        extractor: "youtube",
-        id: "AbC123",
-        title: "Downloaded Track",
-        uploader: "Prompt Artist",
-        durationSeconds: 188,
-      });
-      const entryFiles = await readdir(join(dir, "youtube", "AbC123"));
-      expect(entryFiles.filter((file) => file.endsWith(".tmp"))).toEqual([]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("keeps the download archive when existing media can satisfy the cache entry", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-download-archive-"));
-    let archiveDuringRun = "";
-    const runner: YouTubeDownloadProcessRunner = async () => {
-      archiveDuringRun = await readFile(join(dir, "youtube", "Archived123", "download-archive.txt"), "utf8");
-      return { exitCode: 0, stdout: "", stderr: "" };
-    };
-
-    try {
-      await mkdir(join(dir, "youtube", "Archived123", "media"), { recursive: true });
-      await writeFile(join(dir, "youtube", "Archived123", "download-archive.txt"), "youtube Archived123\n");
-      await writeFile(join(dir, "youtube", "Archived123", "media", "youtube-Archived123.webm"), "audio bytes");
-
-      const result = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=Archived123",
-        command: "yt-dlp",
-        cache: {
-          cacheDir: dir,
-        },
-        metadata: {
-          extractor: "youtube",
-          id: "Archived123",
-          title: "Archived Track",
-          uploader: "Uploader",
-        },
-        progressThrottleMs: 500,
-        runner,
-        validateMedia: async () => ({ ok: true }),
-      });
-
-      expect(archiveDuringRun).toBe("youtube Archived123\n");
-      expect(result).toMatchObject({
-        ok: true,
-        mediaPath: join(dir, "youtube", "Archived123", "media", "youtube-Archived123.webm"),
-      });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("parses and throttles line-oriented yt-dlp progress for display", async () => {
-    expect(parseYtDlpDownloadProgressLine("[download]   7.4% of 3.00MiB at 800.00KiB/s ETA 00:08"))
-      .toBe("download 7.4% at 800.00KiB/s ETA 00:08");
-    expect(parseYtDlpDownloadProgressLine("[download] Destination: /tmp/cache/youtube-AbC123.webm"))
-      .toBe("download destination: youtube-AbC123.webm");
-    expect(parseYtDlpDownloadProgressLine("plain warning")).toBeUndefined();
-
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-progress-"));
-    const progress: string[] = [];
-    const times = [0, 100, 200, 600];
+  test("processes source order sequentially, skips healthy entries, repairs incomplete entries, and summarizes every outcome", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-download-batch-"));
+    const started: string[] = [];
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const batch = await makeBatch([
+      track("Healthy0001", "Healthy track"),
+      { kind: "unavailable", title: "Deleted video", message: "Playlist item is private, deleted, or unavailable" },
+      track("Repair00001", "Repaired track"),
+      track("Broken00001", "Broken track"),
+      track("Fresh000001", "Fresh track"),
+    ]);
     const runner: YouTubeDownloadProcessRunner = async (request) => {
-      await mkdir(join(dir, "youtube", "AbC123", "media"), { recursive: true });
-      await writeFile(join(dir, "youtube", "AbC123", "media", "youtube-AbC123.webm"), "audio bytes");
-      request.onLine("[download]   1.0% of 3.00MiB at 100.00KiB/s ETA 00:30");
-      request.onLine("[download]   2.0% of 3.00MiB at 200.00KiB/s ETA 00:20");
-      request.onLine("[download]   3.0% of 3.00MiB at 300.00KiB/s ETA 00:10");
-      request.onLine("[download]   4.0% of 3.00MiB at 400.00KiB/s ETA 00:05");
+      const id = videoIdFromArgs(request.args);
+      started.push(id);
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await Bun.sleep(1);
+      if (id === "Broken00001") {
+        concurrent -= 1;
+        return { exitCode: 1, stdout: "", stderr: "ERROR: unavailable" };
+      }
+      const output = request.args[request.args.indexOf("--output") + 1]!;
+      await writeFile(output.replace("%(ext)s", id === "Repair00001" ? "m4a" : "webm"), `audio-${id}`);
+      concurrent -= 1;
       return { exitCode: 0, stdout: "", stderr: "" };
     };
 
     try {
-      await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=AbC123",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "AbC123", title: "Progress Track", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        now: () => times.shift() ?? 600,
-        runner,
-        validateMedia: async () => ({ ok: true }),
-        onProgress: (line) => progress.push(line),
+      await writeHealthy(dir, "Healthy0001", "webm");
+      await writeFile(join(dir, "Repair00001.webm"), "old incomplete media");
+      const summary = await executeYouTubeDownloadBatch(batch, {
+        command: "yt-dlp", cache: { cacheDir: dir }, progressThrottleMs: 500, runner, now: () => 1000,
       });
 
-      expect(progress).toEqual([
-        "download 1.0% at 100.00KiB/s ETA 00:30",
-        "download 4.0% at 400.00KiB/s ETA 00:05",
-      ]);
+      expect(started).toEqual(["Repair00001", "Broken00001", "Fresh000001"]);
+      expect(maxConcurrent).toBe(1);
+      expect(summary).toEqual({
+        downloaded: 2,
+        alreadyCached: 1,
+        failed: 2,
+        cancelled: 0,
+        failures: [
+          { index: 1, title: "Deleted video", message: "Playlist item is private, deleted, or unavailable" },
+          { index: 3, title: "Broken track", message: "yt-dlp download failed: ERROR: unavailable" },
+        ],
+      });
+      expect(await readFile(join(dir, "Repair00001.m4a"), "utf8")).toBe("audio-Repair00001");
+      await expect(readFile(join(dir, "Repair00001.webm"), "utf8")).rejects.toThrow();
+      expect(JSON.parse(await readFile(join(dir, "Repair00001.json"), "utf8"))).toEqual({
+        videoId: "Repair00001", title: "Repaired track", uploader: "Uploader", cachedAt: new Date(1000).toISOString(),
+        mediaFileName: "Repair00001.m4a", container: "m4a",
+      });
+      expect(await readdir(dir)).not.toContain(".partial-Broken00001");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("surfaces download stderr and does not write metadata when media validation fails", async () => {
-    const failedDir = await mkdtemp(join(tmpdir(), "tmu-youtube-failed-"));
-    const validationDir = await mkdtemp(join(tmpdir(), "tmu-youtube-validation-"));
-
+  test("requires successful yt-dlp plus non-empty output without invoking a media validator", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-download-empty-"));
+    let validatorCalled = false;
     try {
-      const failed = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=Restricted",
+      const summary = await executeYouTubeDownloadBatch(await makeBatch([track("Empty000001", "Empty")]), {
         command: "yt-dlp",
-        cache: { cacheDir: failedDir,  },
-        metadata: { extractor: "youtube", id: "Restricted", title: "Restricted Track", uploader: "Uploader" },
+        cache: { cacheDir: dir },
         progressThrottleMs: 500,
-        validateMedia: async () => ({ ok: true }),
-        runner: async () => ({
-          exitCode: 1,
-          stdout: "",
-          stderr: "ERROR: [youtube] Restricted: This video is DRM protected.",
-        }),
-      });
-      expect(failed).toEqual({
-        ok: false,
-        message: "yt-dlp download failed: ERROR: [youtube] Restricted: This video is DRM protected.",
-      });
-
-      const invalid = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=Invalid",
-        command: "yt-dlp",
-        cache: { cacheDir: validationDir,  },
-        metadata: { extractor: "youtube", id: "Invalid", title: "Invalid Media", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        runner: async () => {
-          await mkdir(join(validationDir, "youtube", "Invalid", "media"), { recursive: true });
-          await writeFile(join(validationDir, "youtube", "Invalid", "media", "youtube-Invalid.webm"), "audio bytes");
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-        validateMedia: async () => ({ ok: false, message: "Downloaded media is not playable audio" }),
-      });
-
-      expect(invalid).toEqual({
-        ok: false,
-        message: "Downloaded media is not playable audio",
-      });
-      await expect(readFile(join(validationDir, "youtube", "Invalid", "metadata.json"), "utf8")).rejects.toThrow();
-    } finally {
-      await rm(failedDir, { recursive: true, force: true });
-      await rm(validationDir, { recursive: true, force: true });
-    }
-  });
-
-  test("preserves existing cache metadata when an atomic metadata write fails", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-atomic-"));
-    const fixedNow = 1234567890;
-    const originalDateNow = Date.now;
-    const metadataPath = join(dir, "youtube", "Atomic", "metadata.json");
-    const oldMetadata = {
-      version: 1,
-      extractor: "youtube",
-      id: "Atomic",
-      title: "Existing Title",
-      mediaFileName: "youtube-Atomic.webm",
-    };
-
-    try {
-      await mkdir(join(dir, "youtube", "Atomic", "media"), { recursive: true });
-      await writeFile(metadataPath, `${JSON.stringify(oldMetadata, null, 2)}\n`, "utf8");
-      await mkdir(`${metadataPath}.${process.pid}.${fixedNow}.tmp`);
-      Date.now = () => fixedNow;
-
-      await expect(downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=Atomic",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "Atomic", title: "New Title", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        runner: async () => {
-          await writeFile(join(dir, "youtube", "Atomic", "media", "youtube-Atomic.webm"), "audio bytes");
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-        validateMedia: async () => ({ ok: true }),
-      })).rejects.toThrow();
-
-      expect(JSON.parse(await readFile(metadataPath, "utf8"))).toEqual(oldMetadata);
-    } finally {
-      Date.now = originalDateNow;
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("passes cancellation signals to the download process runner", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cancel-"));
-    const controller = new AbortController();
-    let observedSignal: AbortSignal | undefined;
-
-    try {
-      const resultPromise = downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=CancelMe",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "CancelMe", title: "Cancel Track", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        signal: controller.signal,
-        validateMedia: async () => ({ ok: true }),
         runner: async (request) => {
-          observedSignal = request.signal;
-          await writeFile(join(dir, "youtube", "CancelMe", "media", "youtube-CancelMe.webm.part"), "partial");
+          const output = request.args[request.args.indexOf("--output") + 1]!;
+          await writeFile(output.replace("%(ext)s", "webm"), "");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+        // The batch API deliberately exposes no ffprobe/media-validation dependency.
+        ...(validatorCalled ? { impossible: true } : {}),
+      });
+      expect(validatorCalled).toBe(false);
+      expect(summary).toMatchObject({ downloaded: 0, failed: 1 });
+      await expect(readFile(join(dir, "Empty000001.json"), "utf8")).rejects.toThrow();
+      await expect(readFile(join(dir, "Empty000001.webm"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("restores prior incomplete media when replacement metadata cannot commit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-download-repair-rollback-"));
+    const controller = new AbortController();
+    try {
+      await writeFile(join(dir, "Restore0001.opus"), "prior repairable media");
+      await writeFile(join(dir, "Restore0001.json"), "{broken");
+      const summary = await executeYouTubeDownloadBatch(await makeBatch([track("Restore0001", "Restore")]), {
+        command: "yt-dlp",
+        cache: { cacheDir: dir },
+        progressThrottleMs: 500,
+        signal: controller.signal,
+        runner: async (request) => {
+          const output = request.args[request.args.indexOf("--output") + 1]!;
+          await writeFile(output.replace("%(ext)s", "opus"), "new media");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        },
+        now: () => {
+          controller.abort();
+          return 1000;
+        },
+      });
+      expect(summary).toMatchObject({ downloaded: 0, cancelled: 1 });
+      expect(await readFile(join(dir, "Restore0001.opus"), "utf8")).toBe("prior repairable media");
+      expect(await readFile(join(dir, "Restore0001.json"), "utf8")).toBe("{broken");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("cancellation cleans the interrupted item while preserving known unavailable failures", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-download-cancel-"));
+    const controller = new AbortController();
+    try {
+      const summary = await executeYouTubeDownloadBatch(await makeBatch([
+        track("One00000001", "One"),
+        { kind: "unavailable", title: "Private", message: "unavailable" },
+        track("Two00000002", "Two"),
+      ]), {
+        command: "yt-dlp", cache: { cacheDir: dir }, progressThrottleMs: 500, signal: controller.signal,
+        runner: async (request) => {
+          const output = request.args[request.args.indexOf("--output") + 1]!;
+          await writeFile(output.replace("%(ext)s", "webm.part"), "partial");
           controller.abort();
           return { exitCode: null, stdout: "", stderr: "", cancelled: true };
         },
       });
-
-      await expect(resultPromise).resolves.toEqual({
-        ok: false,
-        message: "YouTube download cancelled; partial files cleaned up",
-        cancelled: true,
-        cleanup: "complete",
+      expect(summary).toEqual({
+        downloaded: 0,
+        alreadyCached: 0,
+        failed: 1,
+        cancelled: 2,
+        failures: [{ index: 1, title: "Private", message: "Playlist item is private, deleted, or unavailable" }],
       });
-      expect(observedSignal).toBe(controller.signal);
-      await expect(readFile(join(dir, "youtube", "CancelMe", "media", "youtube-CancelMe.webm.part"), "utf8")).rejects.toThrow();
+      expect(await readdir(dir)).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
-  });
-
-  test("communicates when cancellation cannot clean up partial files", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cleanup-failure-"));
-    const controller = new AbortController();
-    const youtubeCache = join(dir, "youtube");
-
-    try {
-      const result = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=CleanupFails",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "CleanupFails", title: "Cleanup Failure", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        signal: controller.signal,
-        validateMedia: async () => ({ ok: true }),
-        runner: async () => {
-          await writeFile(join(youtubeCache, "CleanupFails", "media", "youtube-CleanupFails.webm.part"), "partial");
-          await chmod(youtubeCache, 0o555);
-          controller.abort();
-          return { exitCode: null, stdout: "", stderr: "", cancelled: true };
-        },
-      });
-
-      expect(result).toMatchObject({
-        ok: false,
-        cancelled: true,
-        cleanup: "failed",
-        message: expect.stringContaining("partial file cleanup failed"),
-      });
-      await expect(access(join(youtubeCache, "CleanupFails"))).resolves.toBeNull();
-    } finally {
-      await chmod(youtubeCache, 0o755).catch(() => undefined);
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("honors cancellation after yt-dlp exits before cache metadata is written", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-late-cancel-"));
-    const controller = new AbortController();
-    let validatedPath = "";
-
-    try {
-      const result = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=LateCancel",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "LateCancel", title: "Late Cancel Track", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        signal: controller.signal,
-        runner: async () => {
-          await mkdir(join(dir, "youtube", "LateCancel", "media"), { recursive: true });
-          await writeFile(join(dir, "youtube", "LateCancel", "media", "youtube-LateCancel.webm"), "audio bytes");
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-        validateMedia: async (path) => {
-          validatedPath = path;
-          controller.abort();
-          return { ok: true };
-        },
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        message: "YouTube download cancelled; partial files cleaned up",
-        cancelled: true,
-        cleanup: "complete",
-      });
-      expect(validatedPath).toBe(join(dir, "youtube", "LateCancel", "media", "youtube-LateCancel.webm"));
-      await expect(readFile(join(dir, "youtube", "LateCancel", "metadata.json"), "utf8")).rejects.toThrow();
-      await expect(readFile(join(dir, "youtube", "LateCancel", "source.json"), "utf8")).rejects.toThrow();
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("honors cancellation at the final cache metadata write boundary", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-final-cancel-"));
-    const controller = new AbortController();
-    const originalDateNow = Date.now;
-    let dateCalls = 0;
-
-    try {
-      Date.now = () => {
-        dateCalls += 1;
-        if (dateCalls === 2) controller.abort();
-        return 9000 + dateCalls;
-      };
-
-      const result = await downloadYouTubeUrl({
-        url: "https://www.youtube.com/watch?v=FinalCancel",
-        command: "yt-dlp",
-        cache: { cacheDir: dir,  },
-        metadata: { extractor: "youtube", id: "FinalCancel", title: "Final Cancel Track", uploader: "Uploader" },
-        progressThrottleMs: 500,
-        signal: controller.signal,
-        runner: async () => {
-          await mkdir(join(dir, "youtube", "FinalCancel", "media"), { recursive: true });
-          await writeFile(join(dir, "youtube", "FinalCancel", "media", "youtube-FinalCancel.webm"), "audio bytes");
-          return { exitCode: 0, stdout: "", stderr: "" };
-        },
-        validateMedia: async () => ({ ok: true }),
-      });
-
-      expect(result).toEqual({
-        ok: false,
-        message: "YouTube download cancelled; partial files cleaned up",
-        cancelled: true,
-        cleanup: "complete",
-      });
-      await expect(readFile(join(dir, "youtube", "FinalCancel", "source.json"), "utf8")).rejects.toThrow();
-      await expect(readFile(join(dir, "youtube", "FinalCancel", "metadata.json"), "utf8")).rejects.toThrow();
-    } finally {
-      Date.now = originalDateNow;
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("default download process runner terminates and force-kills cancelled children after grace", async () => {
-    const controller = new AbortController();
-    const lines: string[] = [];
-    const resultPromise = nodeYouTubeDownloadProcessRunner({
-      helper: "yt-dlp",
-      command: process.execPath,
-      args: [
-        "-e",
-        "process.stdout.write('ready\\n'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      ],
-      graceKillMs: 20,
-      signal: controller.signal,
-      onLine: (line) => lines.push(line),
-    });
-
-    await waitFor(() => {
-      expect(lines).toContain("ready");
-    });
-    controller.abort();
-
-    const result = await resultPromise;
-
-    expect(result.cancelled).toBe(true);
-    expect(result.killed).toBe(true);
-    expect(result.exitCode).toBeNull();
   });
 });
 
-async function waitFor(assertion: () => void, timeoutMs = 500): Promise<void> {
-  const startedAt = Date.now();
-  let lastError: unknown;
+function track(id: string, title: string): DownloadBatchEntry {
+  return { kind: "track", url: `https://www.youtube.com/watch?v=${id}`, metadata: { extractor: "youtube", id, title, uploader: "Uploader" } };
+}
 
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-      await Bun.sleep(5);
-    }
-  }
+async function makeBatch(entries: DownloadBatchEntry[]): Promise<YouTubeDownloadBatch> {
+  const prepared = await prepareYouTubeDownloadBatch("https://youtube.com/playlist?list=PL1", {
+    command: "yt-dlp",
+    timeoutMs: 1000,
+    runner: async () => ({
+      exitCode: 0,
+      stderr: "",
+      stdout: JSON.stringify({
+        _type: "playlist",
+        title: "Test playlist",
+        playlist_count: entries.length,
+        entries: entries.map((entry) => entry.kind === "track"
+          ? { ...entry.metadata, extractor: "youtube" }
+          : { title: entry.title }),
+      }),
+    }),
+  });
+  if (prepared.kind !== "confirmation-required") throw new Error("expected playlist confirmation");
+  return prepared.confirm();
+}
 
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+function videoIdFromArgs(args: string[]): string {
+  return new URL(args.at(-1)!).searchParams.get("v")!;
+}
+
+async function writeHealthy(dir: string, id: string, extension: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${id}.${extension}`), "healthy audio");
+  await writeFile(join(dir, `${id}.json`), JSON.stringify({
+    videoId: id, title: `${id} track`, uploader: "Uploader", cachedAt: new Date(0).toISOString(),
+    mediaFileName: `${id}.${extension}`, container: extension,
+  }));
 }

@@ -103,4 +103,80 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.queue.currentIndex).toBe(0);
     expect(player.loaded).toHaveLength(loadsAfterPlayNow);
   });
+
+  test("playlist submission requires confirmation and Download Batch execution never changes Queue or playback", async () => {
+    const provider: Provider = {
+      id: "youtube-cache",
+      label: "YouTube Cache",
+      listTracks: () => [cachedTrack],
+      searchTracks: () => [cachedTrack],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+    };
+    const player = new RecordingPlayer();
+    const executed: string[] = [];
+    const batch = {
+      sourceUrl: "https://youtube.com/playlist?list=PL1",
+      kind: "playlist" as const,
+      entries: [],
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+      prepareDownloadBatch: async (url) => url.includes("playlist") ? ({
+          kind: "confirmation-required",
+          confirmation: { title: "Road Trip", itemCount: 12 },
+          confirm: () => batch,
+          cancel: () => ({ kind: "cancelled" }),
+        }) : ({
+          kind: "ready",
+          batch: { sourceUrl: url, kind: "single", entries: [] },
+        }),
+      executeDownloadBatch: async (confirmed) => {
+        executed.push(confirmed.sourceUrl);
+        return { downloaded: 2, alreadyCached: 1, failed: 1, cancelled: 0, failures: [] };
+      },
+    });
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+    const queueBefore = structuredClone(coordinator.appState.queue);
+    const playbackBefore = structuredClone(coordinator.appState.playback);
+    const loadsBefore = player.loaded.length;
+
+    await coordinator.dispatch({
+      type: "downloadOperation",
+      operation: "start",
+      url: "https://youtube.com/watch?v=One00000001",
+    });
+    await waitFor(() => executed.length === 1);
+    expect(coordinator.appState.queue).toEqual(queueBefore);
+    expect(coordinator.appState.playback).toEqual(playbackBefore);
+
+    await coordinator.dispatch({
+      type: "downloadOperation",
+      operation: "start",
+      url: "https://youtube.com/playlist?list=PL1",
+    });
+    await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
+    expect(executed).toEqual(["https://youtube.com/watch?v=One00000001"]);
+    expect(coordinator.appState.downloads.confirmation).toEqual({ title: "Road Trip", itemCount: 12 });
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-playlist" });
+    await waitFor(() => coordinator.appState.downloads.summary !== undefined);
+    expect(executed).toEqual(["https://youtube.com/watch?v=One00000001", batch.sourceUrl]);
+    expect(coordinator.appState.downloads.summary).toEqual({
+      downloaded: 2, alreadyCached: 1, failed: 1, cancelled: 0,
+    });
+    expect(coordinator.appState.queue).toEqual(queueBefore);
+    expect(coordinator.appState.playback).toEqual(playbackBefore);
+    expect(player.loaded).toHaveLength(loadsBefore);
+  });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await Bun.sleep(1);
+  }
+  throw new Error("timed out waiting for app state");
+}

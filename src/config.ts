@@ -5,7 +5,6 @@ import { readFile } from "node:fs/promises";
 export type TmuConfig = {
   helpers: {
     mpv: string;
-    ffprobe: string;
     ytDlp: string;
   };
   lowPower: {
@@ -49,7 +48,6 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
   const base: TmuConfig = {
     helpers: {
       mpv: "mpv",
-      ffprobe: "ffprobe",
       ytDlp: "yt-dlp",
     },
     lowPower: {
