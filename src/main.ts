@@ -5,14 +5,12 @@ import { createTmuRoot } from "./vue-tui/component";
 import { dispatchTerminalResize } from "./vue-tui/resize";
 import type { AppCoordinator } from "./coordinator";
 
-export type TmuMainOptions = {
-  afterMount?: () => void;
-  runtimeFactory?: () => Promise<{ coordinator: AppCoordinator }>;
-};
+export async function main(): Promise<void> {
+  const { coordinator } = await createTmuRuntime();
+  await runTmu(coordinator);
+}
 
-export async function main(options: TmuMainOptions = {}): Promise<void> {
-  const runtime = options.runtimeFactory ? await options.runtimeFactory() : await createTmuRuntime();
-  const { coordinator } = runtime;
+export async function runTmu(coordinator: AppCoordinator): Promise<void> {
   await coordinator.start();
 
   const app = createApp(createTmuRoot({ coordinator }));
@@ -61,7 +59,6 @@ export async function main(options: TmuMainOptions = {}): Promise<void> {
     patchConsole: false,
   });
   installSignalHandlers();
-  if (options.afterMount) queueMicrotask(options.afterMount);
 
   try {
     await app.waitUntilExit();
