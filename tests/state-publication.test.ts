@@ -109,6 +109,38 @@ describe("StatePublicationGate", () => {
     expect(publications).toHaveLength(2);
   });
 
+  test("publishes errors immediately and clears progress work made stale by that snapshot", () => {
+    const { appState, gate, publications, timers } = harness();
+
+    appState.downloads = { active: true, lines: ["0%"] };
+    gate.notify("state");
+    timers.advanceBy(100);
+    appState.downloads = { active: true, lines: ["10%"] };
+    appState.lastEvent = "downloaded 10%";
+    gate.notify("state");
+    expect(timers.count).toBe(1);
+
+    appState.lastEvent = "download failed: network unavailable";
+    gate.notify("error");
+
+    expect(publications.map(({ at }) => at)).toEqual([0, 0, 100]);
+    expect(publications.at(-1)?.snapshot.appState.lastEvent).toContain("network unavailable");
+    expect(timers.count).toBe(0);
+    timers.advanceBy(10_000);
+    expect(publications).toHaveLength(3);
+  });
+
+  test("publishes an equivalent initial snapshot only once", () => {
+    const { gate, publications } = harness();
+
+    const first = gate.snapshot;
+    const second = gate.publishInitial();
+
+    expect(publications).toHaveLength(1);
+    expect(first).not.toBeNull();
+    expect(second).toBe(first!);
+  });
+
   test("bounds configured playback cadence without adding an autonomous tick", () => {
     const { appState, gate, publications, timers } = harness(100);
 

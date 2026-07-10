@@ -24,7 +24,7 @@ export type PublicationSnapshot = {
   readonly uiState: DeepReadonly<UiState>;
 };
 
-export type PublicationCause = "input" | "resize" | "playback" | "state";
+export type PublicationCause = "input" | "resize" | "playback" | "error" | "state";
 
 export type PublicationCadence = {
   /** Null keeps playback-position-only changes out of the reactive view. */
@@ -147,11 +147,14 @@ export class StatePublicationGate {
 
   publishInitial(): PublicationSnapshot {
     const snapshot = this.capture();
-    this.publish(snapshot);
-    return snapshot;
+    const semanticFingerprint = fingerprint(snapshot);
+    if (semanticFingerprint.full !== this.latestFingerprint?.full) {
+      this.publish(snapshot, semanticFingerprint);
+    }
+    return this.latestSnapshot ?? snapshot;
   }
 
-  notify(_cause: PublicationCause = "state"): void {
+  notify(cause: PublicationCause = "state"): void {
     const candidate = this.capture();
     const candidateFingerprint = fingerprint(candidate);
     const previousFingerprint = this.observedFingerprint;
@@ -162,6 +165,10 @@ export class StatePublicationGate {
       return;
     }
     if (previousFingerprint.full === candidateFingerprint.full) return;
+    if (cause === "error") {
+      this.publish(candidate, candidateFingerprint);
+      return;
+    }
 
     const progressKind = progressOnlyChange(previousFingerprint, candidateFingerprint);
     if (!progressKind) {
@@ -222,6 +229,9 @@ export class StatePublicationGate {
     snapshot: PublicationSnapshot,
     semanticFingerprint = fingerprint(snapshot),
   ): void {
+    for (const kind of ["playback", "download", "provider"] as const) {
+      this.clearPending(kind);
+    }
     this.latestSnapshot = snapshot;
     this.latestFingerprint = semanticFingerprint;
     this.observedFingerprint = semanticFingerprint;
