@@ -491,6 +491,16 @@ describe("production vue-tui", () => {
     expect(terminal.lastFrame()).toContain("g… Go to first");
     await terminal.stdin.write("g");
     expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[0]?.identity);
+
+    await terminal.stdin.write("?");
+    await terminal.stdin.write("G");
+    const lastHelpIndex = coordinator.uiState.overlays.at(-1)?.selectedResultIndex;
+    expect(lastHelpIndex).toBeGreaterThan(0);
+    await terminal.stdin.write("g");
+    expect(terminal.lastFrame()).toContain("g… Go to first");
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(lastHelpIndex);
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
   });
 
   test("shows recovery for a selected unavailable narrow row without displacing the footer", async () => {
