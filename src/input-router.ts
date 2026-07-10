@@ -1,5 +1,11 @@
 import { actionForBinding, type ActionRegistry } from "./action-registry";
-import type { AppIntent, AppState, UiState } from "./domain";
+import {
+  NAVIGATION_TARGETS,
+  type AppIntent,
+  type AppState,
+  type LegacyAppIntent,
+  type UiState,
+} from "./domain";
 import type { UiStateAction } from "./ui-state";
 
 export type RootInputRouterOptions = {
@@ -10,6 +16,7 @@ export type RootInputRouterOptions = {
     dispatch(action: UiStateAction): Readonly<UiState>;
   };
   dispatchApp: (intent: AppIntent) => Promise<void> | void;
+  dispatchUiIntent?: (intent: LegacyAppIntent) => Promise<void> | void;
   now?: () => number;
   timers?: {
     setTimeout(callback: () => void, delayMs: number): unknown;
@@ -22,6 +29,7 @@ export class RootInputRouter {
   private readonly appState: () => Readonly<AppState>;
   private readonly uiState: RootInputRouterOptions["uiState"];
   private readonly dispatchApp: (intent: AppIntent) => Promise<void> | void;
+  private readonly dispatchUiIntent?: (intent: LegacyAppIntent) => Promise<void> | void;
   private readonly now: () => number;
   private readonly timers: NonNullable<RootInputRouterOptions["timers"]>;
   private pendingChordTimer: unknown | null = null;
@@ -31,6 +39,7 @@ export class RootInputRouter {
     this.appState = options.appState;
     this.uiState = options.uiState;
     this.dispatchApp = options.dispatchApp;
+    this.dispatchUiIntent = options.dispatchUiIntent;
     this.now = options.now ?? Date.now;
     this.timers = options.timers ?? {
       setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
@@ -97,6 +106,11 @@ export class RootInputRouter {
       uiState: this.uiState.snapshot,
     });
     if (!action) {
+      const uiIntent = uiIntentForKey(key);
+      if (uiIntent && this.dispatchUiIntent) {
+        await this.dispatchUiIntent(uiIntent);
+        return true;
+      }
       return this.registry.some((definition) => definition.bindings.some((binding) => binding.key === key));
     }
     if (!action.enabled || !action.intent) return true;
@@ -130,6 +144,20 @@ export class RootInputRouter {
     this.timers.clearTimeout(this.pendingChordTimer);
     this.pendingChordTimer = null;
   }
+}
+
+function uiIntentForKey(key: string): LegacyAppIntent | null {
+  if (key === "\t") return { type: "cycleFocus" };
+  if (key === "o") return { type: "openLocalPathPrompt" };
+  if (key === "/") return { type: "openNavidromeSearchPrompt" };
+  if (key === "\r") return { type: "activateSelectedContent" };
+  if (key === "\x1b[A" || key === "\x1b[D") return { type: "moveSelection", delta: -1 };
+  if (key === "\x1b[B" || key === "\x1b[C") return { type: "moveSelection", delta: 1 };
+  if (/^[1-5]$/.test(key)) {
+    const target = NAVIGATION_TARGETS[Number(key) - 1];
+    if (target) return { type: "selectNavigationTarget", targetId: target.id };
+  }
+  return null;
 }
 
 function queueIdentities(appState: Readonly<AppState>) {

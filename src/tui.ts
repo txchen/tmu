@@ -411,6 +411,7 @@ export class TerminalTui {
         dispatch: (action) => coordinator.dispatchUi(action),
       },
       dispatchApp: (intent) => appCoordinator.dispatch(intent),
+      dispatchUiIntent: (intent) => coordinator.dispatch(intent),
       now: () => this.now(),
       timers: {
         setTimeout: (callback, delayMs) => this.timers.setTimeout?.(callback, delayMs) ?? setTimeout(callback, delayMs),
