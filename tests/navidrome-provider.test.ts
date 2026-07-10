@@ -332,7 +332,6 @@ describe("Navidrome Provider", () => {
       { kind: "artists-root", label: "Artists", depth: 0 },
       { kind: "artist", id: "42", label: "Alpha", albumCount: 2, coverArtId: "artist-cover", depth: 1 },
       { kind: "playlists-root", label: "Playlists", depth: 0 },
-      { kind: "search-root", label: "Search", depth: 0 },
     ]);
 
     location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[1]!);
@@ -351,7 +350,6 @@ describe("Navidrome Provider", () => {
       },
       { kind: "load-more-albums", artistId: "42", label: "Load more albums", depth: 2 },
       { kind: "playlists-root", label: "Playlists", depth: 0 },
-      { kind: "search-root", label: "Search", depth: 0 },
     ]);
     expect(provider.getLibraryBrowserEntries(navidromeRoot).some((entry) => entry.kind === "album")).toBe(false);
 
@@ -362,7 +360,6 @@ describe("Navidrome Provider", () => {
       "album",
       "album",
       "playlists-root",
-      "search-root",
     ]);
 
     location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[2]!);
@@ -374,7 +371,6 @@ describe("Navidrome Provider", () => {
       "load-more-tracks",
       "album",
       "playlists-root",
-      "search-root",
     ]);
 
     location = await openNavidromeEntry(provider, location, provider.getLibraryBrowserEntries(location)[4]!);
@@ -591,73 +587,6 @@ describe("Navidrome Provider", () => {
       "ping",
       "getPlaylists",
       "getPlaylist",
-    ]);
-  });
-
-  test("searches Tracks with lazy result pagination around the configured page size", async () => {
-    const seenRequests: Array<{ endpoint: string; params: Record<string, string> }> = [];
-    const provider = createNavidromeProvider({
-      config: navidromeConfig(),
-      fetcher: async (url) => {
-        seenRequests.push({
-          endpoint: endpointName(url),
-          params: Object.fromEntries(url.searchParams.entries()),
-        });
-        if (url.pathname.endsWith("/search3.view")) {
-          const offset = url.searchParams.get("songOffset");
-          return jsonResponse(okPayload({
-            searchResult3: {
-              song: offset === "0"
-                ? [
-                  { id: "s-1", title: "Moon One", artist: "Luna" },
-                  { id: "s-2", title: "Moon Two", artist: "Luna" },
-                ]
-                : [
-                  { id: "s-3", title: "Moon Three", artist: "Luna" },
-                ],
-            },
-          }));
-        }
-        return jsonResponse(okPayload());
-      },
-      saltFactory: () => "salt",
-      pageSize: 2,
-    });
-
-    await provider.validateConnection();
-    expect(await provider.searchTracks("moon")).toHaveLength(2);
-    expect(provider.getLibraryBrowserEntries(navidromeRoot).some((entry) => entry.kind === "search-result")).toBe(false);
-    let entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: [{ kind: "search", query: "moon" }] });
-    expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(2);
-    expect(entries.at(-1)).toEqual({ kind: "load-more-search-results", label: "Load more search results", depth: 1 });
-
-    await provider.openLibraryBrowserEntry(entries.at(-1)!);
-    entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: [{ kind: "search", query: "moon" }] });
-
-    expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(3);
-    expect(entries.some((entry) => entry.kind === "load-more-search-results")).toBe(false);
-    expect(provider.trackForLibraryBrowserEntry(entries.find((entry) => entry.kind === "search-result")!)).toMatchObject({
-      identity: { providerId: "navidrome", stableId: "Navidrome:https://music.example.test:track:s-1" },
-      title: "Moon One",
-    });
-    expect(seenRequests).toEqual([
-      expect.objectContaining({ endpoint: "ping" }),
-      expect.objectContaining({
-        endpoint: "search3",
-        params: expect.objectContaining({
-          query: "moon",
-          songCount: "2",
-          songOffset: "0",
-        }),
-      }),
-      expect.objectContaining({
-        endpoint: "search3",
-        params: expect.objectContaining({
-          query: "moon",
-          songCount: "2",
-          songOffset: "2",
-        }),
-      }),
     ]);
   });
 

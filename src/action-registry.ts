@@ -95,15 +95,7 @@ export function createActionRegistry(): ActionRegistry {
         focus: context.appState.downloads.active ? "results" : "input",
       }),
     },
-    promptAction("provider.open-local-path", "Open Local Path", "local-open-path", (query) => ({
-      type: "providerOperation", providerId: "local", operation: "open-path", path: query,
-    })),
-    promptAction("provider.query-navidrome", "Query Navidrome Tracks", "navidrome-search", (query) => ({
-      type: "providerOperation", providerId: "navidrome", operation: "browse-query", query,
-    })),
-    promptAction("download.start", "Download YouTube URL", "youtube-url", (url) => ({
-      type: "downloadOperation", operation: "start", url,
-    })),
+    youtubeUrlDownloadAction(),
     routeAction("navigation.move-down", "Move Down", ["next row"], [
       { key: "j", label: "j" }, { key: "\x1b[B", label: "Down" },
     ], "move-down", isListContext),
@@ -350,27 +342,21 @@ export function actionForBinding(
   return action ? resolveAction(action, contextForAction(action, context)) : null;
 }
 
-function promptAction(
-  id: string,
-  name: string,
-  prompt: NonNullable<UiState["activePrompt"]>,
-  createIntent: (query: string) => AppIntent,
-): ActionDefinition {
+function youtubeUrlDownloadAction(): ActionDefinition {
   return {
-    id,
+    id: "download.start",
     scope: "context",
-    name,
+    name: "Download YouTube URL",
     aliases: [],
     bindings: [{ key: "\r", label: "Enter" }],
-    applies: (context) => context.uiState.activePrompt === prompt
-      || (prompt === "youtube-url" && context.uiState.overlays.at(-1)?.kind === "youtube-url"),
+    applies: (context) => context.uiState.overlays.at(-1)?.kind === "youtube-url",
     enabled: always,
     disabledReason: neverDisabled,
-    createIntent: (context) => createIntent(
-      prompt === "youtube-url" && context.uiState.overlays.at(-1)?.kind === "youtube-url"
-        ? context.uiState.overlays.at(-1)?.query ?? ""
-        : context.uiState.promptInput,
-    ),
+    createIntent: (context) => ({
+      type: "downloadOperation",
+      operation: "start",
+      url: context.uiState.overlays.at(-1)?.query ?? "",
+    }),
   };
 }
 
