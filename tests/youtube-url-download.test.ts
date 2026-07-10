@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -513,6 +513,41 @@ describe("YouTube URL Download adapter", () => {
       expect(observedSignal).toBe(controller.signal);
       await expect(readFile(join(dir, "youtube", "CancelMe", "media", "youtube-CancelMe.webm.part"), "utf8")).rejects.toThrow();
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("communicates when cancellation cannot clean up partial files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cleanup-failure-"));
+    const controller = new AbortController();
+    const youtubeCache = join(dir, "youtube");
+
+    try {
+      const result = await downloadYouTubeUrl({
+        url: "https://www.youtube.com/watch?v=CleanupFails",
+        command: "yt-dlp",
+        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
+        metadata: { extractor: "youtube", id: "CleanupFails", title: "Cleanup Failure" },
+        progressThrottleMs: 500,
+        signal: controller.signal,
+        validateMedia: async () => ({ ok: true }),
+        runner: async () => {
+          await writeFile(join(youtubeCache, "CleanupFails", "media", "youtube-CleanupFails.webm.part"), "partial");
+          await chmod(youtubeCache, 0o555);
+          controller.abort();
+          return { exitCode: null, stdout: "", stderr: "", cancelled: true };
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        cancelled: true,
+        cleanup: "failed",
+        message: expect.stringContaining("partial file cleanup failed"),
+      });
+      await expect(access(join(youtubeCache, "CleanupFails"))).resolves.toBeNull();
+    } finally {
+      await chmod(youtubeCache, 0o755).catch(() => undefined);
       await rm(dir, { recursive: true, force: true });
     }
   });

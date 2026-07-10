@@ -442,7 +442,7 @@ describe("production tmu real PTY", () => {
     }
   }, 15_000);
 
-  test("tears down an active download and restores the terminal on an operating-system signal", async () => {
+  test("restores the terminal on an operating-system signal even when download cleanup fails", async () => {
     let output = "";
     const read = () => output;
     const { terminal, subprocess, runtimeRoot } = await spawnTmu(
@@ -458,13 +458,16 @@ describe("production tmu real PTY", () => {
       terminal.write("\r");
       await waitForOutput(read, "download 5.0%");
 
+      const youtubeCache = `${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube`;
+      await chmod(youtubeCache, 0o555);
       subprocess.kill("SIGTERM");
       expect(await subprocess.exited).toBe(143);
-      await expect(access(`${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube/PtyDownload`)).rejects.toThrow();
+      await expect(access(`${youtubeCache}/PtyDownload`)).resolves.toBeNull();
       expect(output).toContain("\x1b[?1049l");
       expect(output).toContain("\x1b[?25h");
     } finally {
       await stopTmu(terminal, subprocess);
+      await chmod(`${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube`, 0o755).catch(() => undefined);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
