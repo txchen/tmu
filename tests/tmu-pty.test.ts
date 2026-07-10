@@ -244,10 +244,12 @@ describe("production tmu real PTY", () => {
       terminal.write("\r");
       await waitForOutput(read, "PTY Search Track");
       expect(output).toContain("Offline YouTube Cache");
+      let selectionFrame = output.length;
       terminal.write("j");
-      await Bun.sleep(30);
+      await waitForNewOutput(read, selectionFrame, "› Offline YouTube Cache");
+      selectionFrame = output.length;
       terminal.write("j");
-      await Bun.sleep(30);
+      await waitForNewOutput(read, selectionFrame, "› PTY Search Track");
       terminal.write("\r");
       await waitForOutput(read, "Queue · 1 Tracks");
 
