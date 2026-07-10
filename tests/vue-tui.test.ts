@@ -139,7 +139,102 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("y");
     expect(cleanedStem).toBe("broken00002");
   });
+
+  test("YouTube Downloader exposes pending removal, active cancellation, and session summaries", async () => {
+    const { coordinator: base } = createTmuApp();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(base.appState.providers), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+      prepareDownloadBatch: async (url) => ({
+        kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] },
+      }),
+      executeDownloadBatch: async (batch, options) => {
+        if (batch.sourceUrl.endsWith("/one")) {
+          options.onEntryStart?.(0, {
+            kind: "track",
+            url: batch.sourceUrl,
+            metadata: { extractor: "youtube", id: "One00000001", title: "First Track", uploader: "Artist" },
+          });
+          await waitFor(() => options.signal?.aborted === true);
+          return { downloaded: 0, alreadyCached: 0, failed: 0, cancelled: 1, failures: [] };
+        }
+        return { downloaded: 1, alreadyCached: 0, failed: 0, cancelled: 0, failures: [] };
+      },
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    await terminal.stdin.write("3");
+    await terminal.stdin.write("https://youtu.be/one");
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.downloads.activeBatch !== undefined);
+    expect(terminal.lastFrame()).toContain("Active #1 Track 1 · First Track: https://youtu.be/one");
+    expect(coordinator.uiState.downloader.urlInput).toBe("");
+
+    await terminal.stdin.write("https://youtu.be/two");
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 1);
+    expect(terminal.lastFrame()).toContain("Pending #2: https://youtu.be/two");
+    await terminal.stdin.write("https://youtu.be/three");
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 2);
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("q");
+    expect(terminal.lastFrame()).toContain("Quit will cancel active and pending Download Batches");
+    await terminal.stdin.write("n");
+    expect(coordinator.appState.downloads.pendingBatches).toHaveLength(2);
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("x");
+    expect(coordinator.appState.downloads.pendingBatches.map((batch) => batch.id)).toEqual([2]);
+    await terminal.stdin.write("x");
+    expect(coordinator.appState.downloads.pendingBatches).toEqual([]);
+
+    await terminal.stdin.write("c");
+    await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
+    expect(terminal.lastFrame()).toContain("Summary #1: 0 downloaded · 0 cached · 0 failed · 1 cancelled");
+  });
+
+  test("YouTube Downloader confirms playlists and clears input only after acceptance", async () => {
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+    };
+    const url = "https://youtube.com/playlist?list=PL1";
+    const batch = { sourceUrl: url, kind: "playlist" as const, entries: [] };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+      prepareDownloadBatch: async () => ({
+        kind: "confirmation-required", confirmation: { title: "Road Trip", itemCount: 12 },
+        confirm: () => batch, cancel: () => ({ kind: "cancelled" }),
+      }),
+      executeDownloadBatch: async () => ({
+        downloaded: 2, alreadyCached: 1, failed: 0, cancelled: 0, failures: [],
+      }),
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    await terminal.stdin.write("3");
+    await terminal.stdin.write(url);
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
+    expect(terminal.lastFrame()).toContain("Confirm playlist Road Trip (12 source items)?");
+    await terminal.stdin.write("n");
+    expect(coordinator.uiState.downloader.urlInput).toBe(url);
+
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
+    await terminal.stdin.write("y");
+    await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
+    expect(coordinator.uiState.downloader.urlInput).toBe("");
+    expect(terminal.lastFrame()).toContain("Summary #2: 2 downloaded · 1 cached · 0 failed · 0 cancelled");
+  });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return;
+    await Bun.sleep(1);
+  }
+  throw new Error("timed out waiting for TUI state");
+}
 
 function cachedTrack(stableId: string, title: string): Track {
   return {

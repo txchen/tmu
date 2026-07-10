@@ -119,6 +119,7 @@ export type ExecuteYouTubeDownloadBatchOptions = {
   signal?: AbortSignal;
   runner?: YouTubeDownloadProcessRunner;
   onProgress?: (entryIndex: number, line: string) => void;
+  onEntryStart?: (entryIndex: number, entry: DownloadBatchEntry) => void;
   now?: () => number;
 };
 
@@ -250,6 +251,7 @@ export async function executeYouTubeDownloadBatch(
       break;
     }
     const entry = batch.entries[index]!;
+    options.onEntryStart?.(index, entry);
     if (entry.kind === "unavailable") {
       failed += 1;
       failures.push({ index, ...(entry.title ? { title: entry.title } : {}), message: entry.message });

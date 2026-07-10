@@ -37,7 +37,20 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
       const snapshot = shallowRef(publication.publishInitial());
       const unsubscribePublication = publication.subscribe((next) => { snapshot.value = next; });
+      let handledAcceptedSubmissionId: number | undefined;
       const unsubscribeCoordinator = coordinator.onStateChange((reason) => {
+        const accepted = coordinator.appState.downloads.acceptedSubmission;
+        if (accepted && accepted.id !== handledAcceptedSubmissionId) {
+          handledAcceptedSubmissionId = accepted.id;
+          if (coordinator.uiState.downloader.urlInput.trim() === accepted.input.trim()) {
+            coordinator.dispatchUi({ type: "setDownloaderInput", value: "" });
+          }
+          void coordinator.dispatch({
+            type: "downloadOperation",
+            operation: "acknowledge-accepted",
+            submissionId: accepted.id,
+          });
+        }
         publication.notify(publicationCause(reason));
       });
       const app = useApp();
@@ -53,6 +66,25 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
+        if (coordinator.appState.downloads.quitConfirmationRequired) {
+          if (input === "y" || key.return) {
+            await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
+            app.exit();
+          } else if (input === "n" || key.escape) {
+            await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-quit" });
+          }
+          publication.notify("input");
+          return;
+        }
+        if (coordinator.appState.downloads.confirmation) {
+          if (input === "y" || key.return) {
+            await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-playlist" });
+          } else if (input === "n" || key.escape) {
+            await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-playlist" });
+          }
+          publication.notify("input");
+          return;
+        }
         if (coordinator.appState.cacheConfirmation) {
           if (input === "y" || key.return) {
             await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
@@ -90,8 +122,9 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
-        if (key.ctrl && input === "c" || input === "q" && !textInputFocused) {
-          app.exit();
+        if ((key.ctrl && input === "c") || (input === "q" && !textInputFocused)) {
+          await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+          if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
           return;
         }
         if ((!textInputFocused || key.ctrl) && input === "1") coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
@@ -247,6 +280,24 @@ async function routeDownloader(
     coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: false });
   } else if (!coordinator.uiState.downloader.inputFocused && input === "u") {
     coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: true });
+  } else if (!coordinator.uiState.downloader.inputFocused && (input === "j" || input === "k")) {
+    coordinator.dispatchUi({
+      type: "setDownloaderBatchSelection",
+      index: coordinator.uiState.downloader.selectedBatchIndex + (input === "j" ? 1 : -1),
+      resultCount: coordinator.appState.downloads.pendingBatches.length,
+    });
+  } else if (!coordinator.uiState.downloader.inputFocused && input === "x") {
+    const pending = coordinator.appState.downloads.pendingBatches[coordinator.uiState.downloader.selectedBatchIndex];
+    if (pending) {
+      await coordinator.dispatch({ type: "downloadOperation", operation: "remove-pending", batchId: pending.id });
+      coordinator.dispatchUi({
+        type: "setDownloaderBatchSelection",
+        index: coordinator.uiState.downloader.selectedBatchIndex,
+        resultCount: coordinator.appState.downloads.pendingBatches.length,
+      });
+    }
+  } else if (!coordinator.uiState.downloader.inputFocused && input === "c") {
+    await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
   } else if (key.return) {
     const url = coordinator.uiState.downloader.urlInput.trim();
     if (url) await coordinator.dispatch({ type: "downloadOperation", operation: "start", url });
@@ -339,16 +390,26 @@ function downloaderView(snapshot: PublicationSnapshot) {
   const downloads = snapshot.appState.downloads;
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
     h(Text, () => `YouTube URL: ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}${snapshot.uiState.downloader.inputFocused ? " [focused]" : ""}`),
-    h(Text, { dimColor: !downloads.active }, () =>
-      downloads.active ? "Download active" : "No active downloads"),
+    downloads.confirmation ? h(Text, { bold: true }, () =>
+      `Confirm playlist ${downloads.confirmation!.title} (${downloads.confirmation!.itemCount} source items)? y All · n Cancel`) : null,
+    downloads.quitConfirmationRequired ? h(Text, { bold: true }, () =>
+      "Quit will cancel active and pending Download Batches. y Quit · n Stay") : null,
+    h(Text, { dimColor: !downloads.activeBatch }, () => downloads.activeBatch
+      ? `Active #${downloads.activeBatch.id}${downloads.activeBatch.activeTrack === undefined ? "" : ` Track ${downloads.activeBatch.activeTrack.index + 1}${downloads.activeBatch.activeTrack.title ? ` · ${downloads.activeBatch.activeTrack.title}` : ""}`}: ${downloads.activeBatch.sourceUrl}`
+      : downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "No active downloads"),
     ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
+    ...downloads.pendingBatches.map((batch, index) => h(Text, { wrap: "truncate-end" }, () =>
+      `${index === snapshot.uiState.downloader.selectedBatchIndex ? ">" : " "} Pending #${batch.id}: ${batch.sourceUrl}`)),
+    ...downloads.summaries.map((summary) => h(Text, { wrap: "truncate-end" }, () =>
+      `Summary #${summary.id}: ${summary.downloaded} downloaded · ${summary.alreadyCached} cached · ${summary.failed} failed · ${summary.cancelled} cancelled`)),
+    h(Text, { dimColor: true, wrap: "truncate-end" }, () => snapshot.appState.lastEvent),
   ]);
 }
 
 function footer(active: UiState["activeTab"]): string {
   if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
   if (active === "library") return "j/k Tracks · J/K Health · Enter Play Now · N Next · a Add · d Delete · X Clean · ? Help";
-  return "Type URL · Esc Actions  Enter Download  Ctrl+1/2/3 Tabs";
+  return "Type URL · Enter Submit · Esc Actions · j/k Pending · x Remove · c Cancel active · 1/2/3 Tabs";
 }
 
 function nextTab(active: UiState["activeTab"]): UiState["activeTab"] {

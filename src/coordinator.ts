@@ -40,6 +40,7 @@ import {
   executeYouTubeDownloadBatch,
   prepareYouTubeDownloadBatch,
   type PrepareYouTubeDownloadBatchResult,
+  type DownloadBatchEntry,
   type YouTubeDownloadBatch,
 } from "./youtube-url-download";
 import { UiStateStore, type UiStateAction } from "./ui-state";
@@ -165,6 +166,7 @@ export class AppCoordinator {
           else if (intent.operation === "confirm-playlist") this.confirmPlaylistDownload();
           else if (intent.operation === "cancel-playlist") this.cancelPlaylistDownload();
           else if (intent.operation === "remove-pending") this.removePendingDownloadBatch(intent.batchId);
+          else if (intent.operation === "acknowledge-accepted") this.acknowledgeAcceptedSubmission(intent.submissionId);
           else if (intent.operation === "confirm-quit") await this.confirmQuitWithDownloads();
           else this.cancelQuitWithDownloads();
           return;
@@ -836,7 +838,7 @@ export class AppCoordinator {
       return;
     }
 
-    this.enqueueDownloadBatch(id, prepared.batch);
+    this.enqueueDownloadBatch(id, prepared.batch, url);
   }
 
   private async runPreparedDownloadBatch(id: number, batch: YouTubeDownloadBatch, signal: AbortSignal): Promise<void> {
@@ -846,7 +848,8 @@ export class AppCoordinator {
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
       progressThrottleMs: this.appState.config.lowPower.downloadProgressThrottleMs,
       signal,
-      onProgress: (_entryIndex, line) => this.recordYouTubeDownloadProgress(line),
+      onEntryStart: (entryIndex, entry) => this.recordActiveDownloadTrack(entryIndex, entry),
+      onProgress: (entryIndex, line) => this.recordYouTubeDownloadProgress(entryIndex, line),
     });
     const categoricalSummary = {
       downloaded: summary.downloaded,
@@ -869,7 +872,7 @@ export class AppCoordinator {
     }
     this.pendingPlaylistConfirmation = null;
     delete this.appState.downloads.confirmation;
-    this.enqueueDownloadBatch(pending.id, pending.prepared.confirm());
+    this.enqueueDownloadBatch(pending.id, pending.prepared.confirm(), pending.sourceUrl);
     pending.settle();
     this.appState.lastEvent = "queued confirmed playlist Download Batch";
   }
@@ -887,10 +890,11 @@ export class AppCoordinator {
     this.appState.lastEvent = "playlist Download Batch cancelled before start";
   }
 
-  private enqueueDownloadBatch(id: number, batch: YouTubeDownloadBatch): void {
+  private enqueueDownloadBatch(id: number, batch: YouTubeDownloadBatch, submittedInput: string): void {
     this.pendingDownloadBatches.push({ id, batch });
     this.pendingDownloadBatches.sort((left, right) => left.id - right.id);
     this.syncDownloadPipelineState();
+    this.appState.downloads.acceptedSubmission = { id, input: submittedInput };
     this.pumpDownloadPipeline();
   }
 
@@ -928,6 +932,12 @@ export class AppCoordinator {
     this.pendingDownloadBatches.splice(index, 1);
     this.syncDownloadPipelineState();
     this.appState.lastEvent = "removed pending Download Batch";
+  }
+
+  private acknowledgeAcceptedSubmission(submissionId: number): void {
+    if (this.appState.downloads.acceptedSubmission?.id === submissionId) {
+      delete this.appState.downloads.acceptedSubmission;
+    }
   }
 
   private hasDownloadWork(): boolean {
@@ -976,7 +986,15 @@ export class AppCoordinator {
     }));
   }
 
-  private recordYouTubeDownloadProgress(line: string): void {
+  private recordActiveDownloadTrack(entryIndex: number, entry: DownloadBatchEntry): void {
+    if (!this.appState.downloads.activeBatch) return;
+    this.appState.downloads.activeBatch.activeTrack = entry.kind === "track"
+      ? { index: entryIndex, title: entry.metadata.title, stableId: entry.metadata.id }
+      : { index: entryIndex, ...(entry.title ? { title: entry.title } : {}) };
+    this.notifyStateChanged();
+  }
+
+  private recordYouTubeDownloadProgress(_entryIndex: number, line: string): void {
     const lines = [...this.appState.downloads.lines, line].slice(-4);
     this.appState.downloads.lines = lines;
     this.notifyStateChanged();
