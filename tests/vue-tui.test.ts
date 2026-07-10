@@ -7,6 +7,7 @@ import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
 import { createTmuRoot } from "../src/vue-tui/component";
+import type { YouTubeCacheProvider } from "../src/youtube-cache";
 
 afterEach(() => cleanup());
 
@@ -93,6 +94,50 @@ describe("TMU top-level surface smoke", () => {
 
     await terminal.stdin.write("\r");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
+  });
+
+  test("Library shows Cache Health and confirms permanent Cache Deletion", async () => {
+    const track = cachedTrack("cached00001", "Cached");
+    let deleted = false;
+    let cleanedStem: string | undefined;
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache",
+      listTracks: () => deleted ? [] : [track], searchTracks: () => deleted ? [] : [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached00001.opus" }),
+      refresh: () => undefined,
+      listCacheEntries: () => [],
+      listIncompleteEntries: () => cleanedStem ? [] : [
+        { stem: "broken00001", paths: ["/cache/broken00001.opus"], reason: "Cache media has no sidecar" },
+        { stem: "broken00002", paths: ["/cache/broken00002.opus"], reason: "Cache media has no sidecar" },
+      ],
+      findByIdentity: () => deleted ? undefined : ({
+        track, availability: { status: "available" },
+        metadata: {
+          videoId: "cached00001", title: "Cached", uploader: "Artist",
+          cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached00001.opus", container: "opus",
+        }, metadataPath: "/cache/cached00001.json", mediaPath: "/cache/cached00001.opus",
+      }),
+      deleteCacheEntry: async () => { deleted = true; return true; },
+      cleanupIncompleteEntry: async (stem) => { cleanedStem = stem; return true; },
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({ type: "playNow", target: track });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    await terminal.stdin.write("2");
+    expect(terminal.lastFrame()).toContain("Cache Health: broken00001");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("d");
+    expect(terminal.lastFrame()).toContain("Permanently delete Cached? This will stop playback.");
+    await terminal.stdin.write("y");
+    expect(deleted).toBe(true);
+    await terminal.stdin.write("J");
+    await terminal.stdin.write("X");
+    expect(terminal.lastFrame()).toContain("Clean incomplete broken00002?");
+    await terminal.stdin.write("y");
+    expect(cleanedStem).toBe("broken00002");
   });
 });
 

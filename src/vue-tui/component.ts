@@ -8,6 +8,7 @@ import {
   type PublicationSnapshot,
 } from "../state-publication";
 import { dispatchTerminalResize } from "./resize";
+import { isYouTubeCacheProvider } from "../youtube-cache";
 
 export type TmuRootOptions = {
   coordinator: AppCoordinator;
@@ -52,6 +53,15 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
+        if (coordinator.appState.cacheConfirmation) {
+          if (input === "y" || key.return) {
+            await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
+          } else if (input === "n" || key.escape) {
+            await coordinator.dispatch({ type: "cacheOperation", operation: "cancel" });
+          }
+          publication.notify("input");
+          return;
+        }
         if (ui.pendingConfirmation) {
           if (input === "y" || key.return) {
             if (ui.pendingConfirmation.kind === "clear-queue") await coordinator.dispatch({ type: "clearQueue" });
@@ -199,6 +209,19 @@ async function routeLibrary(
       type: input === "N" ? "playNext" : "addToQueue",
       target: track,
     });
+  } else if (!coordinator.uiState.library.inputFocused && input === "d") {
+    const track = tracks[coordinator.uiState.library.selectedIndex];
+    if (track) await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: track.identity });
+  } else if (!coordinator.uiState.library.inputFocused && (input === "J" || input === "K") && isYouTubeCacheProvider(provider)) {
+    const entries = provider.listIncompleteEntries();
+    coordinator.dispatchUi({
+      type: "setCacheHealthSelection",
+      index: coordinator.uiState.library.healthSelectedIndex + (input === "J" ? 1 : -1),
+      resultCount: entries.length,
+    });
+  } else if (!coordinator.uiState.library.inputFocused && input === "X" && isYouTubeCacheProvider(provider)) {
+    const incomplete = provider.listIncompleteEntries()[coordinator.uiState.library.healthSelectedIndex];
+    if (incomplete) await coordinator.dispatch({ type: "cacheOperation", operation: "request-cleanup", stem: incomplete.stem });
   } else if (key.return) {
     const track = tracks[coordinator.uiState.library.selectedIndex];
     if (track) await coordinator.dispatch({ type: "playNow", target: track });
@@ -267,6 +290,8 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
       uiState.overlays.at(-1)?.kind === "shortcut-help"
         ? `${tabLabel(uiState.activeTab)} Help · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · z Shuffle · r Repeat · 1/2/3 Tabs · Esc Close`
         : "Command Palette · Playback · Library · YouTube Downloader · Esc Close") : null,
+    appState.cacheConfirmation ? h(Text, { bold: true }, () =>
+      `${appState.cacheConfirmation!.kind === "delete-track" ? "Permanently delete" : "Clean incomplete"} ${appState.cacheConfirmation!.title ?? appState.cacheConfirmation!.stem}?${appState.cacheConfirmation!.stopsPlayback ? " This will stop playback." : ""} y Confirm · n Cancel`) : null,
     uiState.pendingConfirmation ? h(Text, { bold: true }, () => "Clear Queue permanently? y Confirm · n Cancel") : null,
     h(Text, { dimColor: true }, () => footer(uiState.activeTab)),
   ]);
@@ -295,8 +320,9 @@ function playbackView(
 }
 
 function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
-  const tracks = coordinator.appState.providers["youtube-cache"]
-    .searchTracks(snapshot.uiState.library.query);
+  const provider = coordinator.appState.providers["youtube-cache"];
+  const tracks = provider.searchTracks(snapshot.uiState.library.query);
+  const incomplete = isYouTubeCacheProvider(provider) ? provider.listIncompleteEntries() : [];
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
     h(Text, () => `Cache Search: ${snapshot.uiState.library.query || "(type to search)"}${snapshot.uiState.library.inputFocused ? " [focused]" : ""}`),
     ...tracks.map((track, index) =>
@@ -304,6 +330,8 @@ function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator)
         `${index === snapshot.uiState.library.selectedIndex ? ">" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
       )),
     tracks.length === 0 ? h(Text, { dimColor: true }, () => "No cached Tracks") : null,
+    ...incomplete.map((entry, index) => h(Text, { color: "yellow", wrap: "truncate-end" }, () =>
+      `${index === snapshot.uiState.library.healthSelectedIndex ? ">" : " "} Cache Health: ${entry.stem}${entry.title ? ` · ${entry.title}` : ""}${entry.uploader ? ` · ${entry.uploader}` : ""} · ${entry.reason}`)),
   ]);
 }
 
@@ -319,7 +347,7 @@ function downloaderView(snapshot: PublicationSnapshot) {
 
 function footer(active: UiState["activeTab"]): string {
   if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
-  if (active === "library") return "Type Search · Esc Actions · j/k Move · Enter Play Now · N Play Next · a Add · ? Help";
+  if (active === "library") return "j/k Tracks · J/K Health · Enter Play Now · N Next · a Add · d Delete · X Clean · ? Help";
   return "Type URL · Esc Actions  Enter Download  Ctrl+1/2/3 Tabs";
 }
 

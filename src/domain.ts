@@ -166,6 +166,12 @@ export type AppState = {
     quitConfirmationRequired: boolean;
     preparingSubmissions: number;
   };
+  cacheConfirmation?: {
+    kind: "delete-track" | "cleanup-incomplete";
+    stem: string;
+    title?: string;
+    stopsPlayback: boolean;
+  };
   appErrors: string[];
   lastEvent: string;
 };
@@ -180,6 +186,7 @@ export type UiState = {
     query: string;
     inputFocused: boolean;
     selectedIndex: number;
+    healthSelectedIndex: number;
     scroll: number;
   };
   downloader: {
@@ -210,6 +217,9 @@ export type AppIntent =
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
+  | { type: "cacheOperation"; operation: "request-delete"; identity: TrackIdentity }
+  | { type: "cacheOperation"; operation: "request-cleanup"; stem: string }
+  | { type: "cacheOperation"; operation: "confirm" | "cancel" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" | "cancel-active" | "confirm-quit" | "cancel-quit" }
   | { type: "downloadOperation"; operation: "remove-pending"; batchId: number }
