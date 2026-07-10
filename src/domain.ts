@@ -67,7 +67,12 @@ export type MusicCollection = {
   kind: "music-collection";
   id: string;
   label: string;
-  tracks: readonly Track[];
+  tracks?: readonly Track[];
+  resolve?: {
+    providerId: string;
+    operation: "album-tracks" | "playlist-tracks";
+    collectionId: string;
+  };
 };
 
 export type PlayableTarget = Track | MusicCollection;
@@ -140,6 +145,7 @@ export type Provider = {
   label: string;
   hint: string;
   listVisibleTracks(): readonly Track[];
+  playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
   resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator>;
 };
 
@@ -233,7 +239,7 @@ export type AppIntent =
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
   | { type: "providerOperation"; providerId: string; operation: "refresh" }
-  | { type: "providerOperation"; providerId: string; operation: "search"; query: string }
+  | { type: "providerOperation"; providerId: string; operation: "browse-query"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
   | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
   | { type: "downloadOperation"; operation: "start"; url: string }

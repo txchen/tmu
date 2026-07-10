@@ -6,7 +6,6 @@ import {
   type Track,
   type UiState,
 } from "./domain";
-import { isNavidromeProvider } from "./navidrome";
 
 export type ActionContext = {
   readonly appState: Readonly<AppState>;
@@ -47,8 +46,8 @@ export function createActionRegistry(): ActionRegistry {
     promptAction("provider.open-local-path", "Open Local Path", "local-open-path", (query) => ({
       type: "providerOperation", providerId: "local", operation: "open-path", path: query,
     })),
-    promptAction("provider.search-navidrome", "Search Navidrome", "navidrome-search", (query) => ({
-      type: "providerOperation", providerId: "navidrome", operation: "search", query,
+    promptAction("provider.query-navidrome", "Query Navidrome Tracks", "navidrome-search", (query) => ({
+      type: "providerOperation", providerId: "navidrome", operation: "browse-query", query,
     })),
     promptAction("download.start", "Download YouTube URL", "youtube-url", (url) => ({
       type: "downloadOperation", operation: "start", url,
@@ -92,7 +91,7 @@ export function createActionRegistry(): ActionRegistry {
       id: "provider.play-next",
       name: "Play Next",
       aliases: ["queue next", "add next"],
-      bindings: [{ key: "\r", label: "Enter" }, { key: "a", label: "a" }],
+      bindings: [{ key: "\r", label: "Enter" }],
       createIntent: (target) => ({ type: "playNext", target }),
     }),
     providerTargetAction({
@@ -119,6 +118,16 @@ export function createActionRegistry(): ActionRegistry {
     boundAction("provider.cancel-open", "Cancel Local Open", ["cancel open"], [
       { key: "\x1b", label: "Esc" },
     ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
+    {
+      id: "legacy.unsupported-enqueue",
+      name: "Unsupported legacy enqueue binding",
+      aliases: [],
+      bindings: [{ key: "a", label: "a" }],
+      applies: () => false,
+      enabled: () => false,
+      disabledReason: () => "Use Enter for Play Next",
+      createIntent: () => null,
+    },
     simpleAction("player.toggle-play-pause", "Play / Pause / Resume", ["play", "pause", "resume"], " ", "Space", {
       type: "playerOperation", operation: "toggle-play-pause",
     }),
@@ -293,13 +302,8 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   const providerId = context.uiState.activeTargetId;
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
-  if (isNavidromeProvider(provider)) {
-    const entries = provider.getLibraryBrowserEntries(context.uiState.providerLocation);
-    const entry = entries[context.uiState.selectedContentIndexByTarget.navidrome ?? 0];
-    if (!entry) return null;
-    return provider.trackForLibraryBrowserEntry(entry)
-      ?? provider.musicCollectionForLibraryBrowserEntry?.(entry)
-      ?? null;
-  }
-  return provider.listVisibleTracks()[context.uiState.selectedContentIndexByTarget[providerId] ?? 0] ?? null;
+  const index = context.uiState.selectedContentIndexByTarget[providerId] ?? 0;
+  return provider.playableTargetAt?.(context.uiState.providerLocation, index)
+    ?? provider.listVisibleTracks()[index]
+    ?? null;
 }

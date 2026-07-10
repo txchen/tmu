@@ -111,6 +111,7 @@ export type NavidromeProvider = Provider & {
   refreshLibraryBrowser(): Promise<void>;
   trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined;
   musicCollectionForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): MusicCollection | undefined;
+  playableTargetAt(location: ProviderLocation, index: number): Track | MusicCollection | undefined;
   reportNowPlaying(identity: TrackIdentity): Promise<void>;
   reportCompletedPlay(identity: TrackIdentity): Promise<void>;
 };
@@ -617,13 +618,26 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     const tracks = entry.kind === "album"
       ? this.albumTracks.get(entry.id)
       : this.playlistTracks.get(entry.id);
-    if (!tracks) return undefined;
     return {
       kind: "music-collection",
       id: `navidrome:${entry.kind}:${entry.id}`,
       label: entry.label,
       tracks,
+      ...(!tracks ? {
+        resolve: {
+          providerId: "navidrome",
+          operation: entry.kind === "album" ? "album-tracks" as const : "playlist-tracks" as const,
+          collectionId: entry.id,
+        },
+      } : {}),
     };
+  }
+
+  playableTargetAt(location: ProviderLocation, index: number): Track | MusicCollection | undefined {
+    const entry = this.getLibraryBrowserEntries(location)[index];
+    if (!entry) return undefined;
+    return this.trackForLibraryBrowserEntry(entry)
+      ?? this.musicCollectionForLibraryBrowserEntry(entry);
   }
 
   async reportNowPlaying(identity: TrackIdentity): Promise<void> {

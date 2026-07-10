@@ -58,7 +58,7 @@ export type DependencyHealthRefresh = (
 ) => Promise<DependencyHealthState>;
 export type AppStateChangeReason = "state" | "playback";
 
-export type LegacyTuiAdapterOptions = {
+export type AppCoordinatorOptions = {
   appState: AppState;
   uiState: UiState;
   queue: Queue;
@@ -70,7 +70,7 @@ export type LegacyTuiAdapterOptions = {
   youtubeDownloader?: YouTubeDownloader;
 };
 
-export class LegacyTuiAdapter {
+export class AppCoordinator {
   readonly appState: AppState;
   private readonly uiStateStore: UiStateStore;
   private readonly queue: Queue;
@@ -89,7 +89,7 @@ export class LegacyTuiAdapter {
   private completedPlayReported = false;
   private tornDown = false;
 
-  constructor(options: LegacyTuiAdapterOptions) {
+  constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
     this.queue = options.queue;
@@ -162,7 +162,7 @@ export class LegacyTuiAdapter {
     try {
       switch (intent.type) {
         case "playNext":
-          this.playNextTarget(intent.target);
+          await this.playNextTarget(intent.target);
           return;
         case "playNow":
           await this.playNowTarget(intent.target);
@@ -175,7 +175,7 @@ export class LegacyTuiAdapter {
           return;
         case "providerOperation":
           if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
-          else if (intent.operation === "search") await this.searchProvider(intent.providerId, intent.query);
+          else if (intent.operation === "browse-query") await this.queryProviderBrowsingSurface(intent.providerId, intent.query);
           else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
           else this.cancelLocalOpen();
           return;
@@ -393,7 +393,6 @@ export class LegacyTuiAdapter {
     this.queue.restore(snapshot);
     await this.refreshRestoredProviderAvailability();
     this.appState.volume = snapshot.volume;
-    this.selectQueueIndex(snapshot.currentIndex >= 0 ? snapshot.currentIndex : 0);
     this.syncQueueState();
   }
 
@@ -497,33 +496,30 @@ export class LegacyTuiAdapter {
     this.syncQueueState();
   }
 
-  private playNextTarget(target: PlayableTarget): void {
-    const tracks = uniqueTargetTracks(target);
-    const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
-    const upcoming = tracks.filter((track) => !sameIdentity(track.identity, currentIdentity));
-    this.removeTracksFromQueue(upcoming);
-
-    const insertionIndex = this.queue.currentIndex >= 0 ? this.queue.currentIndex + 1 : 0;
-    this.insertTracksIntoQueue(upcoming, insertionIndex);
-    this.appState.lastEvent = upcoming.length === 0
-      ? "Play Next left Current Track in place"
-      : `placed ${upcoming.length} Track${upcoming.length === 1 ? "" : "s"} next`;
+  private async playNextTarget(target: PlayableTarget): Promise<void> {
+    const tracks = uniqueTracks(this.targetTracksAlreadyResolved(target));
+    for (const track of tracks) {
+      const entry = this.queue.enqueue(track);
+      if (entry.availability.status === "unknown") this.markSelectedOfflineYouTubeCacheAvailability(entry);
+    }
+    this.appState.lastEvent = tracks.length === 0
+      ? "Music Collection must be resolved by its Provider"
+      : `accepted Play Next for ${tracks.length} Track${tracks.length === 1 ? "" : "s"}`;
     this.syncQueueState();
   }
 
   private async playNowTarget(target: PlayableTarget): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
-    const tracks = uniqueTargetTracks(target);
+    const tracks = uniqueTracks(this.targetTracksAlreadyResolved(target));
     const first = tracks[0];
     if (!first) {
       this.appState.lastEvent = "Music Collection has no Tracks";
       return;
     }
-    const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
-    const formerCurrentIsRequested = tracks.some((track) => sameIdentity(track.identity, currentIdentity));
-    this.removeTracksFromQueue(tracks);
-    const insertionIndex = currentIdentity && !formerCurrentIsRequested ? this.queue.currentIndex + 1 : 0;
-    this.insertTracksIntoQueue(tracks, insertionIndex);
+    for (const track of tracks) {
+      const entry = this.queue.enqueue(track);
+      if (entry.availability.status === "unknown") this.markSelectedOfflineYouTubeCacheAvailability(entry);
+    }
     const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, first.identity));
     const entry = index < 0 ? undefined : this.queue.startAt(index);
     if (!entry) {
@@ -538,20 +534,9 @@ export class LegacyTuiAdapter {
     await this.playQueueEntry(entry);
   }
 
-  private removeTracksFromQueue(tracks: readonly Track[]): void {
-    for (const track of tracks) {
-      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
-      if (existingIndex >= 0) this.queue.remove(existingIndex);
-    }
-  }
-
-  private insertTracksIntoQueue(tracks: readonly Track[], insertionIndex: number): void {
-    tracks.forEach((track, offset) => {
-      const entry = this.queue.enqueue(track);
-      this.markSelectedOfflineYouTubeCacheAvailability(entry);
-      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
-      this.queue.move(fromIndex, insertionIndex + offset);
-    });
+  private targetTracksAlreadyResolved(target: PlayableTarget): readonly Track[] {
+    if ("identity" in target) return [target];
+    return target.tracks ?? [];
   }
 
   private removeQueueTrack(identity: Track["identity"]): void {
@@ -590,7 +575,7 @@ export class LegacyTuiAdapter {
     await this.refreshNavidromeLibrary();
   }
 
-  private async searchProvider(providerId: string, query: string): Promise<void> {
+  private async queryProviderBrowsingSurface(providerId: string, query: string): Promise<void> {
     const provider = this.appState.providers[providerId];
     if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
       this.appState.lastEvent = `${providerId} Provider does not support search`;
@@ -908,7 +893,6 @@ export class LegacyTuiAdapter {
 
   private clearQueue(): void {
     this.queue.clear();
-    this.selectQueueIndex(0);
     this.appState.playback = {
       status: "idle",
       currentTrackIdentity: null,
@@ -1212,7 +1196,6 @@ export class LegacyTuiAdapter {
   private enqueueOfflineYouTubeCacheEntry(cacheEntry: OfflineYouTubeCacheEntry): void {
     const entry = this.queue.enqueue(cacheEntry.track);
     this.queue.markAvailability(cacheEntry.track.identity, cacheEntry.availability);
-    this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
     this.appState.lastEvent = `added ${cacheEntry.track.title} to shared Queue`;
     this.syncQueueState();
   }
@@ -1483,6 +1466,8 @@ export class LegacyTuiAdapter {
 
     const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
     const index = clampIndex(this.uiState.selectedContentIndexByTarget.navidrome ?? 0, entries.length);
+    const target = provider.playableTargetAt?.(this.uiState.providerLocation, index);
+    if (target && "identity" in target) return target;
     const entry = entries[index];
     return entry ? provider.trackForLibraryBrowserEntry(entry) : undefined;
   }
@@ -1541,38 +1526,13 @@ export class LegacyTuiAdapter {
   }
 }
 
-export class AppCoordinator {
-  constructor(private readonly application: LegacyTuiAdapter) {}
-
-  get appState(): AppState {
-    return this.application.appState;
-  }
-
-  dispatch(intent: AppIntent): Promise<void> {
-    return this.application.dispatch(intent);
-  }
-
-  teardown(): Promise<void> {
-    return this.application.teardown();
-  }
-
-  onStateChange(listener: (reason: AppStateChangeReason) => void): () => void {
-    return this.application.onStateChange(listener);
-  }
-
-  queueTrackIdentities() {
-    return this.application.queueTrackIdentities();
-  }
-}
-
 function completedPlayThresholdSeconds(durationSeconds: number | null | undefined): number {
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(240, durationSeconds / 2)
     : 240;
 }
 
-function uniqueTargetTracks(target: PlayableTarget): Track[] {
-  const tracks = "tracks" in target ? target.tracks : [target];
+function uniqueTracks(tracks: readonly Track[]): Track[] {
   const seen = new Set<string>();
   return tracks.filter((track) => {
     const key = identityKey(track.identity);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import {
-  LegacyTuiAdapter,
+  AppCoordinator,
   MemoryQueue,
   NoopPlayer,
   RenderScheduler,
@@ -529,7 +529,7 @@ describe("RenderScheduler", () => {
 describe("TerminalTui", () => {
   test("redraws when App Coordinator state changes outside key input", async () => {
     const player = new NoopPlayer();
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -586,7 +586,7 @@ describe("TerminalTui", () => {
     const output = new FakeOutput();
     const timers = new ManualTimers();
     const tui = new TerminalTui(
-      { coordinator: fakeCoordinator as unknown as LegacyTuiAdapter },
+      { coordinator: fakeCoordinator as unknown as AppCoordinator },
       input as unknown as NodeJS.ReadStream,
       output as unknown as NodeJS.WriteStream,
       timers,
@@ -606,7 +606,7 @@ describe("TerminalTui", () => {
   });
 
   test("redraws on input even when no intent is mapped", () => {
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -644,7 +644,7 @@ describe("TerminalTui", () => {
     const input = new FakeInput();
     const output = new FakeOutput();
     const tui = new TerminalTui(
-      { coordinator: fakeCoordinator as unknown as LegacyTuiAdapter },
+      { coordinator: fakeCoordinator as unknown as AppCoordinator },
       input as unknown as NodeJS.ReadStream,
       output as unknown as NodeJS.WriteStream,
       new ManualTimers(),
@@ -660,7 +660,7 @@ describe("TerminalTui", () => {
   });
 
   test("publishes resize tiers and recovers the preserved UI context", () => {
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -689,7 +689,7 @@ describe("TerminalTui", () => {
   });
 
   test("shows and expires the one-shot gg pending state without recurring redraws", () => {
-    const coordinator = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),

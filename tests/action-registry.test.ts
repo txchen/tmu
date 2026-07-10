@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   AppCoordinator,
-  LegacyTuiAdapter,
   MemoryQueue,
   NoopPlayer,
   RootInputRouter,
@@ -84,22 +83,20 @@ describe("action registry contracts", () => {
     };
     const uiState = createInitialUiState();
     uiState.selectedQueueIdentity = cinder.identity;
-    const legacy = new LegacyTuiAdapter({
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState({}),
       uiState,
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
     });
-    const coordinator = new AppCoordinator(legacy);
-    const uiBefore = structuredClone(legacy.uiState);
+    const uiBefore = structuredClone(coordinator.uiState);
 
     await coordinator.dispatch({ type: "playNext", target: amber });
     await coordinator.dispatch({ type: "playNext", target: cinder });
     await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([cinder]);
-    expect(legacy.uiState).toEqual(uiBefore);
-    expect("uiState" in coordinator).toBe(false);
+    expect(coordinator.uiState).toEqual(uiBefore);
   });
 
   test("keeps context-relevant actions discoverable with disabled reasons", () => {
@@ -126,13 +123,16 @@ describe("action registry contracts", () => {
       title: "Drift Signal",
       providerLabel: "Local",
     };
-    const coordinator = new LegacyTuiAdapter({
+    const queue = new MemoryQueue();
+    const coordinator = new AppCoordinator({
       appState: createInitialAppState({}),
       uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
+      queue,
       player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNext", target: amber });
+    await coordinator.dispatch({ type: "playNext", target: cinder });
+    queue.markAvailability(cinder.identity, { status: "unavailable", reason: "offline" });
     await coordinator.dispatch({ type: "playNow", target: amber });
 
     await coordinator.dispatch({
@@ -152,6 +152,7 @@ describe("action registry contracts", () => {
     ]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({ status: "unavailable", reason: "offline" });
 
     const registry = createActionRegistry();
     const current = context();
@@ -170,7 +171,7 @@ describe("action registry contracts", () => {
 });
 
 describe("root input router", () => {
-  test("routes legacy provider shortcut aliases through semantic registry intents", async () => {
+  test("keeps superseded legacy bindings inert", async () => {
     const current = context();
     current.uiState.activeTargetId = "local";
     current.uiState.focusedPane = "content";
@@ -192,7 +193,7 @@ describe("root input router", () => {
 
     await router.route("a");
 
-    expect(intents).toEqual([{ type: "playNext", target: amber }]);
+    expect(intents).toEqual([]);
   });
 
   test("repairs Queue selection after semantic Queue mutations", async () => {
