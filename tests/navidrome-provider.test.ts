@@ -539,6 +539,7 @@ describe("Navidrome Provider", () => {
 
     await provider.validateConnection();
     expect(await provider.searchTracks("moon")).toHaveLength(2);
+    expect(provider.getLibraryBrowserEntries(navidromeRoot).some((entry) => entry.kind === "search-result")).toBe(false);
     let entries = provider.getLibraryBrowserEntries({ providerId: "navidrome", path: ["search", "moon"] });
     expect(entries.filter((entry) => entry.kind === "search-result")).toHaveLength(2);
     expect(entries.at(-1)).toEqual({ kind: "load-more-search-results", label: "Load more search results", depth: 1 });

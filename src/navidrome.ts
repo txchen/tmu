@@ -279,6 +279,9 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     const expandedArtistId = locationSegmentId(location, "artist");
     const expandedAlbumId = locationSegmentId(location, "album");
     const expandedPlaylistId = locationSegmentId(location, "playlist");
+    const visibleSearchQuery = location.providerId === "navidrome" && location.path[0] === "search"
+      ? location.path[1]?.trim() ?? ""
+      : "";
 
     const entries: NavidromeLibraryBrowserEntry[] = [
       { kind: "artists-root", label: "Artists", depth: 0 },
@@ -388,10 +391,11 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
 
     entries.push({
       kind: "search-root",
-      label: this.searchQuery ? `Search: ${this.searchQuery}` : "Search",
+      label: visibleSearchQuery ? `Search: ${visibleSearchQuery}` : "Search",
       depth: 0,
     });
-    for (const track of this.searchResults) {
+    const visibleSearchResults = visibleSearchQuery === this.searchQuery ? this.searchResults : [];
+    for (const track of visibleSearchResults) {
       entries.push({
         kind: "search-result",
         id: this.trackIdFromIdentity(track.identity) ?? track.identity.stableId,
@@ -401,7 +405,7 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
         depth: 1,
       });
     }
-    if (this.searchHasMore) {
+    if (visibleSearchResults.length > 0 && this.searchHasMore) {
       entries.push({
         kind: "load-more-search-results",
         label: "Load more search results",

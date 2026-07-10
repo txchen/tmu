@@ -1199,12 +1199,12 @@ export class AppCoordinator {
 
     try {
       const results = await provider.searchTracks(query);
-      const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
-      const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
-      this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
       this.updateUiState({
         providerLocation: { providerId: "navidrome", path: ["search", query.trim()] },
       });
+      const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
+      const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
+      this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
       this.appState.lastEvent = results.length === 0
         ? `Navidrome search found no Tracks for ${query.trim()}`
         : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
