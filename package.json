@@ -3,10 +3,10 @@
   "version": "0.0.0",
   "type": "module",
   "bin": {
-    "tmu": "src/main.ts"
+    "tmu": "dist/cli.js"
   },
   "files": [
-    "src",
+    "dist",
     "README.md",
     "CONTEXT.md"
   ],
@@ -14,9 +14,11 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "start": "bun src/main.ts",
-    "smoke:package": "bun test tests/packaging-smoke.test.ts",
-    "test": "vitest run --exclude tests/tmu-pty.test.ts --exclude tests/packaging-smoke.test.ts",
+    "build": "tsdown",
+    "prepack": "npm run build",
+    "start": "node dist/cli.js",
+    "smoke:package": "vitest run tests/packaging-smoke.test.ts",
+    "test": "vitest run --exclude tests/packaging-smoke.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -26,6 +28,8 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@vue-tui/testing": "0.0.3",
+    "node-pty": "^1.1.0",
+    "tsdown": "^0.22.4",
     "typescript": "^5.8.3",
     "vitest": "^4.1.10"
   }
