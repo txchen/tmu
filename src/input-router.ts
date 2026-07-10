@@ -160,7 +160,7 @@ export class RootInputRouter {
           : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
         return true;
       }
-      if (overlay.kind === "shortcut-help" && key === "/") {
+      if (overlay.kind === "shortcut-help" && uiOperation === "help-filter") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
         return true;
       }

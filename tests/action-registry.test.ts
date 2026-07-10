@@ -99,6 +99,12 @@ describe("action registry contracts", () => {
       .toMatchObject({ enabled: true, intent: { type: "playNow", target: amber } });
     expect(commandPaletteActions(registry, current).find((action) => action.id === "overlay.dismiss"))
       .toMatchObject({ bindings: ["Esc", "q"], enabled: true });
+    current.uiState.overlays = [{
+      kind: "shortcut-help", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 0, scroll: 0,
+    }];
+    expect(shortcutHelpActions(registry, current).find((action) => action.id === "help.filter"))
+      .toMatchObject({ bindings: ["/"], enabled: true });
   });
 
   test("omits unsupported actions from discovery and makes their bindings inert", () => {
