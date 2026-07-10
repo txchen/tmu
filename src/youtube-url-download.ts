@@ -99,6 +99,7 @@ export type YouTubeDownloadResult =
     ok: false;
     message: string;
     cancelled?: boolean;
+    cleanup?: "complete" | "failed";
   };
 
 export type YouTubeDownloader = (options: YouTubeDownloadOptions) => Promise<YouTubeDownloadResult>;
@@ -253,7 +254,7 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
   progress.flush();
 
   if (result.cancelled || options.signal?.aborted) {
-    return cancelledYouTubeDownload();
+    return cancelledYouTubeDownload(paths.entryDir);
   }
 
   if (result.exitCode !== 0) return { ok: false, message: downloadFailureMessage(result) };
@@ -263,13 +264,13 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
     return { ok: false, message: "yt-dlp download failed: downloaded media file was not found" };
   }
 
-  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   const validation = await options.validateMedia(mediaPath);
-  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   if (!validation.ok) return { ok: false, message: validation.message };
 
   const metadata = normalizedMetadataFields(options.metadata);
-  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   let sourceMetadataPath: string;
   try {
     sourceMetadataPath = await writeYouTubeSourceMetadata(paths.sourceMetadataPath, {
@@ -278,10 +279,10 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
       ...metadata,
     }, { signal: options.signal });
   } catch (error) {
-    if (options.signal?.aborted) return cancelledYouTubeDownload();
+    if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
     throw error;
   }
-  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   let metadataPath: string;
   try {
     metadataPath = await writeOfflineYouTubeCacheMetadata(options.cache, {
@@ -290,10 +291,10 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
       mediaFileName: basename(mediaPath),
     }, { signal: options.signal });
   } catch (error) {
-    if (options.signal?.aborted) return cancelledYouTubeDownload();
+    if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
     throw error;
   }
-  if (options.signal?.aborted) return cancelledYouTubeDownload();
+  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
 
   return { ok: true, mediaPath, metadataPath, sourceMetadataPath };
 }
@@ -429,8 +430,23 @@ function normalizedMetadataFields(metadata: IdentifiedYouTubeMetadata): Omit<You
   };
 }
 
-function cancelledYouTubeDownload(): YouTubeDownloadResult {
-  return { ok: false, message: "YouTube download cancelled", cancelled: true };
+async function cancelledYouTubeDownload(entryDir: string): Promise<YouTubeDownloadResult> {
+  try {
+    await rm(entryDir, { recursive: true, force: true });
+    return {
+      ok: false,
+      message: "YouTube download cancelled; partial files cleaned up",
+      cancelled: true,
+      cleanup: "complete",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `YouTube download cancelled; partial file cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+      cancelled: true,
+      cleanup: "failed",
+    };
+  }
 }
 
 async function writeYouTubeSourceMetadata(

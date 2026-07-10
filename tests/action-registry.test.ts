@@ -535,6 +535,68 @@ describe("root input router", () => {
     expect(intents).toEqual([]);
   });
 
+  test("opens YouTube URL entry when idle and current App State progress when active", async () => {
+    const current = context();
+    const ui = new UiStateStore(current.uiState);
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async () => undefined,
+    });
+
+    await router.route("u");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "youtube-url", focus: "input", query: "" });
+    await router.route("https://youtu.be/Idle123");
+    expect(ui.snapshot.overlays.at(-1)?.query).toBe("https://youtu.be/Idle123");
+    await router.route("\x1b");
+
+    current.appState.downloads = { active: true, lines: ["download 42.0% · ETA 00:08"] };
+    await router.route("u");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "youtube-url", focus: "results" });
+    expect(current.appState.downloads.lines).toEqual(["download 42.0% · ETA 00:08"]);
+    await router.route("\x1b");
+    expect(ui.snapshot.overlays).toEqual([]);
+    expect(current.appState.downloads.active).toBe(true);
+  });
+
+  test("requires explicit download cancellation and download-aware quit confirmation", async () => {
+    const current = context();
+    current.appState.downloads = { active: true, lines: ["download 5.0%"] };
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    let quits = 0;
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+      requestQuit: () => { quits += 1; },
+    });
+
+    await router.route("u");
+    await router.route("x");
+    expect(ui.snapshot.pendingConfirmation).toEqual({ kind: "cancel-download", choice: "cancel" });
+    await router.route("\r");
+    expect(intents).toEqual([]);
+    expect(ui.snapshot.overlays.at(-1)?.kind).toBe("youtube-url");
+
+    await router.route("x");
+    await router.route("l");
+    await router.route("\r");
+    expect(intents).toEqual([{ type: "downloadOperation", operation: "cancel" }]);
+
+    await router.route("q");
+    expect(ui.snapshot.overlays).toEqual([]);
+    await router.route("q");
+    expect(ui.snapshot.pendingConfirmation).toEqual({ kind: "quit-download", choice: "cancel" });
+    await router.route("n");
+    expect(intents).toHaveLength(1);
+    expect(quits).toBe(0);
+
+    await router.route("\u0003");
+    await router.route("l");
+    await router.route("\r");
+    expect(intents.at(-1)).toEqual({ type: "playerOperation", operation: "quit" });
+    expect(quits).toBe(1);
+  });
+
   test("edits discovery fields and invokes a palette action after closing the palette", async () => {
     const current = context();
     current.uiState.overlays = [{

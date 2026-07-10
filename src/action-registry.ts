@@ -22,7 +22,7 @@ export type UiActionIntent = {
   focus: "results" | "search" | "input";
 } | {
   type: "requestConfirmation";
-  kind: "clear-queue";
+  kind: "clear-queue" | "cancel-download" | "quit-download";
 } | {
   type: "routeUi";
   operation: UiRouteOperation;
@@ -80,9 +80,20 @@ export function createActionRegistry(): ActionRegistry {
     discoveryUiAction("palette.open", "Commands", ["command palette"], ":", ":", {
       type: "openOverlay", kind: "command-palette", focus: "search",
     }),
-    uiAction("download.open", "YouTube URL Download", ["download youtube"], "u", "u", {
-      type: "openOverlay", kind: "youtube-url", focus: "input",
-    }),
+    {
+      id: "download.open",
+      scope: "context",
+      name: "YouTube URL Download",
+      aliases: ["download youtube"],
+      bindings: [{ key: "u", label: "u" }],
+      applies: (context) => context.uiState.activeTargetId === "queue" && context.uiState.overlays.length === 0,
+      enabled: always,
+      disabledReason: neverDisabled,
+      createIntent: (context) => ({
+        type: "openOverlay", kind: "youtube-url",
+        focus: context.appState.downloads.active ? "results" : "input",
+      }),
+    },
     promptAction("provider.open-local-path", "Open Local Path", "local-open-path", (query) => ({
       type: "providerOperation", providerId: "local", operation: "open-path", path: query,
     })),
@@ -286,11 +297,14 @@ export function createActionRegistry(): ActionRegistry {
       scope: "context",
       name: "Cancel YouTube Download",
       aliases: ["stop download"],
-      bindings: [{ key: "d", label: "d" }],
-      applies: (context) => context.appState.downloads.active,
+      bindings: [{ key: "x", label: "x" }],
+      contextLayer: "overlay",
+      applies: (context) => context.appState.downloads.active
+        && context.uiState.overlays.at(-1)?.kind === "youtube-url"
+        && context.uiState.overlays.at(-1)?.focus === "results",
       enabled: (context) => context.appState.downloads.active,
       disabledReason: () => "No YouTube download is active",
-      createIntent: () => ({ type: "downloadOperation", operation: "cancel" }),
+      createIntent: () => ({ type: "requestConfirmation", kind: "cancel-download" }),
     },
     boundAction("app.quit", "Quit", ["exit"], [
       { key: "q", label: "q" },

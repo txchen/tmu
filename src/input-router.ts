@@ -122,6 +122,7 @@ export class RootInputRouter {
         await this.invokeDiscoverySelection(overlay);
       } else if (key === "\r" && overlay.kind === "youtube-url") {
         await this.dispatchBinding(key);
+        if (this.appState().downloads.active) this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
       } else if (key === "\r" && overlay.kind === "shortcut-help") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
       } else if (key === "\r" && overlay.kind === "music-picker") {
@@ -189,6 +190,10 @@ export class RootInputRouter {
     }
     if (overlay?.focus === "results"
       && (resolvedBinding?.intent?.type === "playNext" || resolvedBinding?.intent?.type === "playNow")) {
+      await this.dispatchIntent(resolvedBinding.intent);
+      return true;
+    }
+    if (overlay && resolvedBinding?.intent?.type === "requestConfirmation") {
       await this.dispatchIntent(resolvedBinding.intent);
       return true;
     }
@@ -440,8 +445,19 @@ export class RootInputRouter {
       await this.route("", intent.operation);
       return;
     }
+    if (intent.type === "playerOperation" && intent.operation === "quit") {
+      if (this.appState().downloads.active) {
+        this.uiState.dispatch({ type: "requestConfirmation", kind: "quit-download" });
+        return;
+      }
+      try {
+        await this.dispatchApp(intent);
+      } finally {
+        this.requestQuit?.();
+      }
+      return;
+    }
     await this.dispatchApp(intent);
-    if (intent.type === "playerOperation" && intent.operation === "quit") this.requestQuit?.();
   }
 
   private discoveryRows(query: string) {
@@ -501,7 +517,17 @@ export class RootInputRouter {
       return;
     }
     if (key === "y" || (key === "\r" && confirmation.choice === "confirm")) {
-      await this.dispatchApp({ type: "clearQueue" });
+      if (confirmation.kind === "clear-queue") {
+        await this.dispatchApp({ type: "clearQueue" });
+      } else if (confirmation.kind === "cancel-download") {
+        await this.dispatchApp({ type: "downloadOperation", operation: "cancel" });
+      } else {
+        try {
+          await this.dispatchApp({ type: "playerOperation", operation: "quit" });
+        } finally {
+          this.requestQuit?.();
+        }
+      }
       this.uiState.dispatch({ type: "cancelConfirmation" });
       this.syncQueueSelection();
       return;

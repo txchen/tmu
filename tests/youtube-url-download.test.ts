@@ -498,6 +498,7 @@ describe("YouTube URL Download adapter", () => {
         validateMedia: async () => ({ ok: true }),
         runner: async (request) => {
           observedSignal = request.signal;
+          await writeFile(join(dir, "youtube", "CancelMe", "media", "youtube-CancelMe.webm.part"), "partial");
           controller.abort();
           return { exitCode: null, stdout: "", stderr: "", cancelled: true };
         },
@@ -505,10 +506,12 @@ describe("YouTube URL Download adapter", () => {
 
       await expect(resultPromise).resolves.toEqual({
         ok: false,
-        message: "YouTube download cancelled",
+        message: "YouTube download cancelled; partial files cleaned up",
         cancelled: true,
+        cleanup: "complete",
       });
       expect(observedSignal).toBe(controller.signal);
+      await expect(readFile(join(dir, "youtube", "CancelMe", "media", "youtube-CancelMe.webm.part"), "utf8")).rejects.toThrow();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -541,8 +544,9 @@ describe("YouTube URL Download adapter", () => {
 
       expect(result).toEqual({
         ok: false,
-        message: "YouTube download cancelled",
+        message: "YouTube download cancelled; partial files cleaned up",
         cancelled: true,
+        cleanup: "complete",
       });
       expect(validatedPath).toBe(join(dir, "youtube", "LateCancel", "media", "youtube-LateCancel.webm"));
       await expect(readFile(join(dir, "youtube", "LateCancel", "metadata.json"), "utf8")).rejects.toThrow();
@@ -582,13 +586,11 @@ describe("YouTube URL Download adapter", () => {
 
       expect(result).toEqual({
         ok: false,
-        message: "YouTube download cancelled",
+        message: "YouTube download cancelled; partial files cleaned up",
         cancelled: true,
+        cleanup: "complete",
       });
-      expect(JSON.parse(await readFile(join(dir, "youtube", "FinalCancel", "source.json"), "utf8"))).toMatchObject({
-        id: "FinalCancel",
-        title: "Final Cancel Track",
-      });
+      await expect(readFile(join(dir, "youtube", "FinalCancel", "source.json"), "utf8")).rejects.toThrow();
       await expect(readFile(join(dir, "youtube", "FinalCancel", "metadata.json"), "utf8")).rejects.toThrow();
     } finally {
       Date.now = originalDateNow;

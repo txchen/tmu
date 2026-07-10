@@ -214,6 +214,13 @@ class FailingStopPlayer extends RecordingPlayer {
   }
 }
 
+class FailingTeardownPlayer extends RecordingPlayer {
+  async teardown(): Promise<void> {
+    this.teardowns += 1;
+    throw new Error("Player teardown failed");
+  }
+}
+
 class ManualPlaybackPlayer implements Player {
   readonly loaded: PlaybackLocator[] = [];
   private state: PlayerPlaybackState = { status: "idle" };
@@ -1659,6 +1666,21 @@ describe("AppCoordinator", () => {
     await coordinator.teardown();
 
     expect(player.teardowns).toBe(1);
+  });
+
+  test("completes coordinator teardown and records cleanup failures", async () => {
+    const player = new FailingTeardownPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player,
+    });
+
+    await expect(coordinator.teardown()).resolves.toBeUndefined();
+
+    expect(player.teardowns).toBe(1);
+    expect(coordinator.appState.appErrors).toContain("Coordinator cleanup failed: Player teardown failed");
   });
 
   test("quit intent tears down the Player through the App Coordinator", async () => {

@@ -90,6 +90,7 @@ export class AppCoordinator {
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeLocalOpen: AbortController | null = null;
   private activeYouTubeDownload: AbortController | null = null;
+  private activeYouTubeDownloadTask: Promise<void> | null = null;
   private activeGlobalSearch: AbortController | null = null;
   private readonly globalSearchAttempts = new Map<string, number>();
   private reportingSessionKey: string | null = null;
@@ -304,7 +305,21 @@ export class AppCoordinator {
     this.activeYouTubeDownload = null;
     this.unsubscribeFromPlayer();
     for (const unsubscribe of this.unsubscribeFromProviders) unsubscribe();
-    await this.player.teardown();
+    const cleanupFailures: string[] = [];
+    if (this.activeYouTubeDownloadTask) {
+      await this.activeYouTubeDownloadTask.catch((error) => {
+        cleanupFailures.push(error instanceof Error ? error.message : String(error));
+      });
+    }
+    await this.player.teardown().catch((error) => {
+      cleanupFailures.push(error instanceof Error ? error.message : String(error));
+    });
+    for (const failure of cleanupFailures) {
+      this.appState.appErrors.push(`Coordinator cleanup failed: ${failure}`);
+    }
+    if (cleanupFailures.length > 0) {
+      this.appState.lastEvent = this.appState.appErrors.at(-1) ?? "Coordinator cleanup failed";
+    }
   }
 
   onStateChange(listener: (reason: AppStateChangeReason) => void): () => void {
@@ -936,15 +951,16 @@ export class AppCoordinator {
     };
     this.appState.lastEvent = "starting YouTube URL Download";
 
-    void this.submitYouTubeUrl(url, controller.signal)
+    const task = this.submitYouTubeUrl(url, controller.signal)
       .catch((error) => {
-        if (this.tornDown) return;
         this.appState.lastEvent = error instanceof Error ? error.message : String(error);
       })
       .finally(() => {
         if (this.activeYouTubeDownload === controller) this.activeYouTubeDownload = null;
+        if (this.activeYouTubeDownloadTask === task) this.activeYouTubeDownloadTask = null;
         this.notifyStateChanged();
       });
+    this.activeYouTubeDownloadTask = task;
   }
 
   private cancelYouTubeDownload(): void {
@@ -954,7 +970,7 @@ export class AppCoordinator {
     }
 
     this.activeYouTubeDownload.abort();
-    this.appState.lastEvent = "cancelling YouTube download";
+    this.appState.lastEvent = "cancelling YouTube download and cleaning up partial files";
   }
 
   private async openLocalPath(path: string, signal?: AbortSignal): Promise<void> {

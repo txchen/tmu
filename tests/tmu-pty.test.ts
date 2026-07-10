@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
 
 const decoder = new TextDecoder();
 
@@ -19,11 +19,12 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
-  options: { playbackTrack?: boolean; searchTrack?: boolean } = {},
+  options: { playbackTrack?: boolean; searchTrack?: boolean; activeDownload?: boolean } = {},
 ) {
   const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   if (options.playbackTrack) await seedPlaybackSnapshot(runtimeRoot);
   if (options.searchTrack) await seedSearchTrack(runtimeRoot);
+  if (options.activeDownload) await seedDownloadFixture(runtimeRoot);
   const terminal = new Bun.Terminal({
     cols: 120,
     rows: 24,
@@ -42,6 +43,27 @@ async function spawnTmu(
     terminal,
   });
   return { terminal, subprocess, runtimeRoot };
+}
+
+async function seedDownloadFixture(runtimeRoot: string): Promise<void> {
+  const helper = `${runtimeRoot}/fake-yt-dlp.ts`;
+  await mkdir(`${runtimeRoot}/config/tmu`, { recursive: true });
+  await writeFile(helper, `#!/usr/bin/env bun
+const args = Bun.argv.slice(2);
+if (args.includes("--version")) { console.log("2026.07.09"); process.exit(0); }
+if (args.includes("--dump-single-json")) {
+  console.log(JSON.stringify({ extractor_key: "YouTube", id: "PtyDownload", title: "PTY Download" }));
+  process.exit(0);
+}
+process.on("SIGTERM", () => process.exit(143));
+console.log("[download] 5.0% of 10.00MiB at 1.00MiB/s ETA 00:10");
+setInterval(() => console.log("[download] 25.0% of 10.00MiB at 1.00MiB/s ETA 00:08"), 100);
+`);
+  await chmod(helper, 0o755);
+  await writeFile(`${runtimeRoot}/config/tmu/config.json`, JSON.stringify({
+    helpers: { ytDlp: helper },
+    lowPower: { downloadProgressThrottleMs: 500 },
+  }));
 }
 
 async function stopTmu(
@@ -358,6 +380,92 @@ describe("production tmu real PTY", () => {
       } finally {
         await stopTmu(terminal, subprocess);
       }
+    }
+  }, 15_000);
+
+  test("keeps YouTube downloads running behind overlays and confirms cancellation and graceful quit", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [], { activeDownload: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 0 Tracks");
+      terminal.write("u");
+      await waitForOutput(read, "URL:");
+      terminal.write("https://youtu.be/PtyDownload");
+      await waitForOutput(read, "https://youtu.be/PtyDownload");
+      terminal.write("\r");
+      await waitForOutput(read, "download 5.0%");
+
+      let nextFrame = output.length;
+      terminal.write("\x1b");
+      await waitForNewOutput(read, nextFrame, "Queue · 0 Tracks");
+      nextFrame = output.length;
+      terminal.write("u");
+      await waitForNewOutput(read, nextFrame, "download 5.0%");
+
+      terminal.write("x");
+      await waitForOutput(read, "Cancel YouTube download?");
+      nextFrame = output.length;
+      terminal.write("\r");
+      await waitForNewOutput(read, nextFrame, "Download in progress");
+      expect(subprocess.exitCode).toBeNull();
+      expect(output).toContain("Download in progress");
+
+      nextFrame = output.length;
+      terminal.write("q");
+      await waitForNewOutput(read, nextFrame, "Queue · 0 Tracks");
+      nextFrame = output.length;
+      terminal.write("q");
+      await waitForNewOutput(read, nextFrame, "Quit during YouTube download?");
+      nextFrame = output.length;
+      terminal.write("\r");
+      await waitForNewOutput(read, nextFrame, "Queue · 0 Tracks");
+      expect(subprocess.exitCode).toBeNull();
+
+      nextFrame = output.length;
+      terminal.write("q");
+      await waitForNewOutput(read, nextFrame, "Quit during YouTube download?");
+      nextFrame = output.length;
+      terminal.write("l");
+      await waitForNewOutput(read, nextFrame, "[Quit]");
+      terminal.write("\r");
+      expect(await subprocess.exited).toBe(0);
+      await expect(access(`${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube/PtyDownload`)).rejects.toThrow();
+      expect(output).toContain("\x1b[?1049l");
+      expect(output).toContain("\x1b[?25h");
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("tears down an active download and restores the terminal on an operating-system signal", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [], { activeDownload: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 0 Tracks");
+      terminal.write("u");
+      await waitForOutput(read, "URL:");
+      terminal.write("https://youtu.be/PtyDownload");
+      await waitForOutput(read, "https://youtu.be/PtyDownload");
+      terminal.write("\r");
+      await waitForOutput(read, "download 5.0%");
+
+      subprocess.kill("SIGTERM");
+      expect(await subprocess.exited).toBe(143);
+      await expect(access(`${runtimeRoot}/cache/tmu/offline-youtube-cache/youtube/PtyDownload`)).rejects.toThrow();
+      expect(output).toContain("\x1b[?1049l");
+      expect(output).toContain("\x1b[?25h");
+    } finally {
+      await stopTmu(terminal, subprocess);
+      await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
 

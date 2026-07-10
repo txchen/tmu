@@ -137,6 +137,28 @@ async function productionHarness(options: {
 }
 
 describe("production vue-tui", () => {
+  test("presents YouTube URL entry and current App State download progress responsively", async () => {
+    const { coordinator } = await productionHarness({ tracks: [] });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 70, rows: 20 });
+
+    await terminal.stdin.write("u");
+    expect(terminal.lastFrame()).toContain("URL:");
+    expect(terminal.lastFrame()).toContain("Enter download");
+    await terminal.stdin.write("\x1b");
+
+    coordinator.appState.downloads = { active: true, lines: ["download 42.0% · ETA 00:08"] };
+    coordinator.appState.lastEvent = "downloading YouTube audio";
+    coordinator.dispatchUi({ type: "updateView", patch: {} });
+    await terminal.stdin.write("u");
+    expect(terminal.lastFrame()).toContain("Download in progress");
+    expect(terminal.lastFrame()).toContain("download 42.0% · ETA 00:08");
+    expect(terminal.lastFrame()).toContain("x cancel · Esc/q dismiss · download continues");
+
+    await terminal.stdin.write("x");
+    expect(terminal.lastFrame()).toContain("Cancel YouTube download?");
+    expect(terminal.lastFrame()).toContain("clean up partial files");
+  });
+
   test("restores Queue Home without autoplay, resumes through registry dispatch, and traps overlay input", async () => {
     const { coordinator, player } = await productionHarness();
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
