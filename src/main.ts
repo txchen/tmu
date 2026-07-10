@@ -1,6 +1,3 @@
-#!/usr/bin/env bun
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
@@ -75,5 +72,3 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
     await coordinator.teardown();
   }
 }
-
-if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) await main();

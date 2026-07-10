@@ -16,17 +16,17 @@ YouTube URL Download stores downloaded audio in the YouTube Cache without adding
 
 ## Install and run
 
-TMU requires [Bun](https://bun.sh/). Run it directly from the npm package:
+TMU requires Node.js 24 or newer. Run it directly from the npm package:
 
 ```sh
-bunx tmu
+npx tmu
 ```
 
 Or install it globally and use the sole production launch form:
 
 ```sh
-bun install --global tmu
+npm install --global tmu
 tmu
 ```
 
-The npm executable uses Bun at runtime. `mpv` and `yt-dlp` remain external helpers discovered through TMU Config and dependency health checks.
+The npm package contains a prebuilt JavaScript executable, so no TypeScript loader or build step is needed after installation. `mpv` and `yt-dlp` remain optional External Tools discovered through TMU Config and dependency health checks; when either is missing, only its corresponding feature is disabled.
