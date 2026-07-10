@@ -67,6 +67,7 @@ export type AppCoordinatorOptions = {
 };
 
 export class AppCoordinator {
+  private readonly checkedHelpers = new Set<HelperName>();
   readonly appState: AppState;
   private readonly uiStateStore: UiStateStore;
   private readonly queue: Queue;
@@ -772,6 +773,9 @@ export class AppCoordinator {
   }
 
   private async playQueueEntry(entry: QueueEntry): Promise<boolean> {
+    await this.refreshHelperDependency("mpv");
+    if (this.blockPlaybackActionIfUnavailable()) return false;
+
     const provider = this.appState.providers[entry.track.identity.providerId];
     if (!provider) {
       this.markUnavailable(entry, `Provider ${entry.track.identity.providerId} is unavailable`);
@@ -1129,7 +1133,11 @@ export class AppCoordinator {
   }
 
   private async refreshHelperDependency(helper: HelperName): Promise<void> {
+    if (this.checkedHelpers.has(helper)) return;
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
+    if (this.appState.dependencyHealth.helpers[helper].status === "present") {
+      this.checkedHelpers.add(helper);
+    }
   }
 
 
