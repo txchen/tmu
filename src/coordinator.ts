@@ -832,7 +832,7 @@ export class AppCoordinator {
     }
 
     const removingCurrent = sameIdentity(entry.track.identity, this.appState.playback.currentTrackIdentity);
-    if (removingCurrent) await this.runPlayerCommand(() => this.player.stop());
+    if (removingCurrent && !await this.runPlayerCommand(() => this.player.stop())) return;
     const removed = this.queue.remove(index);
     if (!removed) return;
 
@@ -858,7 +858,7 @@ export class AppCoordinator {
   }
 
   private async clearQueue(): Promise<void> {
-    await this.runPlayerCommand(() => this.player.stop());
+    if (!await this.runPlayerCommand(() => this.player.stop())) return;
     this.queue.clear();
     this.appState.playback = {
       status: "idle",
