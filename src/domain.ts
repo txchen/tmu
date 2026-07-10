@@ -9,6 +9,27 @@ export type NavigationTargetId =
   | "queue";
 
 export type FocusedPane = "targets" | "content" | "queue";
+export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
+
+export type FocusReturnToken = {
+  focusedPane: FocusedPane;
+  query: string;
+  filterText: string;
+  selectedQueueIdentity: TrackIdentity | null;
+  providerLocation: readonly string[];
+  scrollByPane: Record<FocusedPane, number>;
+};
+
+export type UiOverlay = {
+  kind: string;
+  focus: string;
+  query: string;
+  selectedIdentity: TrackIdentity | null;
+  scroll: number;
+  filterText?: string;
+  providerLocation?: readonly string[];
+  returnTo?: FocusReturnToken;
+};
 
 export type StartupMode = "empty" | "cli-seeded";
 
@@ -172,6 +193,22 @@ export type UiState = {
   promptInput: string;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
+  overlays: readonly UiOverlay[];
+  selectedQueueIdentity: TrackIdentity | null;
+  providerLocation: readonly string[];
+  terminal: {
+    columns: number;
+    rows: number;
+    tier: ResponsiveTier;
+  };
+  pendingConfirmation: null | {
+    kind: string;
+    choice: "cancel" | "confirm";
+  };
+  pendingVimChord: null | {
+    key: "g";
+    expiresAtMs: number;
+  };
 };
 
 export type AppIntent =

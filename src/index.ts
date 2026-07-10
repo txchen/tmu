@@ -16,4 +16,6 @@ export * from "./renderer";
 export * from "./snapshot";
 export * from "./state";
 export * from "./tui";
+export { UiStateStore, reduceUiState, responsiveTier } from "./ui-state";
+export type { InitialUiStateOptions, UiStateAction } from "./ui-state";
 export * from "./youtube-url-download";

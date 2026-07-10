@@ -1,10 +1,9 @@
 import {
-  NAVIGATION_TARGETS,
   type AppState,
   type Provider,
-  type NavigationTargetId,
   type UiState,
 } from "./domain";
+import { createInitialUiState as createFrameworkNeutralUiState } from "./ui-state";
 import {
   createDefaultTmuConfig,
   defaultConfigPath,
@@ -60,23 +59,5 @@ export function createInitialAppState(
 }
 
 export function createInitialUiState(): UiState {
-  const selectedContentIndexByTarget = Object.fromEntries(
-    NAVIGATION_TARGETS.map((target) => [target.id, 0]),
-  ) as Record<NavigationTargetId, number>;
-
-  return {
-    activeTargetId: "local",
-    focusedPane: "targets",
-    selectedTargetIndex: 0,
-    selectedContentIndexByTarget,
-    selectedQueueIndex: 0,
-    activePrompt: null,
-    promptInput: "",
-    filterText: "",
-    scrollByPane: {
-      targets: 0,
-      content: 0,
-      queue: 0,
-    },
-  };
+  return createFrameworkNeutralUiState();
 }

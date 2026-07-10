@@ -48,6 +48,7 @@ import {
   identifyYouTubeUrl,
   type YouTubeDownloader,
 } from "./youtube-url-download";
+import { UiStateStore } from "./ui-state";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -69,7 +70,7 @@ export type AppCoordinatorOptions = {
 
 export class AppCoordinator {
   readonly appState: AppState;
-  readonly uiState: UiState;
+  private readonly uiStateStore: UiStateStore;
   private readonly queue: Queue;
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
@@ -88,7 +89,7 @@ export class AppCoordinator {
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
-    this.uiState = options.uiState;
+    this.uiStateStore = new UiStateStore(options.uiState);
     this.queue = options.queue;
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
@@ -114,15 +115,21 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
+  get uiState(): UiState {
+    return this.uiStateStore.snapshot as UiState;
+  }
+
   async start(cliArgs: readonly string[]): Promise<void> {
     const fileArgs = cliArgs.filter((arg) => arg.trim());
 
     if (fileArgs.length > 0) {
       await this.restoreAppPreferences({ restoreProvider: false });
       this.appState.startupMode = "cli-seeded";
-      this.uiState.activeTargetId = "queue";
-      this.uiState.focusedPane = "queue";
-      this.uiState.selectedTargetIndex = navigationTargetIndex("queue");
+      this.updateUiState({
+        activeTargetId: "queue",
+        focusedPane: "queue",
+        selectedTargetIndex: navigationTargetIndex("queue"),
+      });
       this.appState.lastEvent = "CLI args seeded the shared Queue";
     } else {
       await this.restoreQueueSnapshotIfPresent();
@@ -274,16 +281,20 @@ export class AppCoordinator {
     if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
 
     if (options.restoreProvider) {
-      this.uiState.activeTargetId = "local";
-      this.uiState.selectedTargetIndex = navigationTargetIndex("local");
-      this.uiState.focusedPane = "targets";
+      this.updateUiState({
+        activeTargetId: "local",
+        selectedTargetIndex: navigationTargetIndex("local"),
+        focusedPane: "targets",
+      });
       this.appState.lastEvent = "opened Local";
 
       if (record?.lastSelectedProviderId) {
         const targetId = record.lastSelectedProviderId;
-        this.uiState.activeTargetId = targetId;
-        this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
-        this.uiState.focusedPane = "targets";
+        this.updateUiState({
+          activeTargetId: targetId,
+          selectedTargetIndex: navigationTargetIndex(targetId),
+          focusedPane: "targets",
+        });
         this.appState.lastEvent = `restored last selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
       }
     }
@@ -338,29 +349,30 @@ export class AppCoordinator {
     this.queue.restore(snapshot);
     await this.refreshRestoredProviderAvailability();
     this.appState.volume = snapshot.volume;
-    this.uiState.selectedQueueIndex = snapshot.currentIndex >= 0
-      ? snapshot.currentIndex
-      : 0;
+    this.selectQueueIndex(snapshot.currentIndex >= 0 ? snapshot.currentIndex : 0);
     this.syncQueueState();
   }
 
   private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
-    this.uiState.activeTargetId = targetId;
-    this.uiState.selectedTargetIndex = navigationTargetIndex(targetId);
-    this.uiState.focusedPane = targetId === "queue" ? "queue" : "content";
+    this.updateUiState({
+      activeTargetId: targetId,
+      selectedTargetIndex: navigationTargetIndex(targetId),
+      focusedPane: targetId === "queue" ? "queue" : "content",
+    });
     await this.persistLastSelectedTarget(targetId);
     await this.refreshEnteredTarget(targetId);
-    this.uiState.activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
+    const activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
       ? "youtube-url"
       : null;
-    if (!this.uiState.activePrompt) this.uiState.promptInput = "";
+    this.updateUiState({ activePrompt, ...(!activePrompt ? { promptInput: "" } : {}) });
     this.appState.lastEvent = `switched to ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
   }
 
   private async moveSelection(delta: number): Promise<void> {
     if (this.uiState.focusedPane === "targets") {
-      this.uiState.selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
-      this.uiState.activeTargetId = NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.id ?? "local";
+      const selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
+      const activeTargetId = NAVIGATION_TARGETS[selectedTargetIndex]?.id ?? "local";
+      this.updateUiState({ selectedTargetIndex, activeTargetId });
       await this.persistLastSelectedTarget(this.uiState.activeTargetId);
       await this.refreshEnteredTarget(this.uiState.activeTargetId);
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
@@ -368,14 +380,14 @@ export class AppCoordinator {
     }
 
     if (this.uiState.focusedPane === "queue" || this.uiState.activeTargetId === "queue") {
-      this.uiState.selectedQueueIndex = clampIndex(this.uiState.selectedQueueIndex + delta, this.queue.entries.length);
+      this.selectQueueIndex(clampIndex(this.uiState.selectedQueueIndex + delta, this.queue.entries.length));
       this.appState.lastEvent = "moved queue selection";
       return;
     }
 
     const targetId = this.uiState.activeTargetId;
     const current = this.uiState.selectedContentIndexByTarget[targetId] ?? 0;
-    this.uiState.selectedContentIndexByTarget[targetId] = clampIndex(current + delta, this.visibleContentLength(targetId));
+    this.selectContentIndex(targetId, clampIndex(current + delta, this.visibleContentLength(targetId)));
     this.appState.lastEvent = "moved Provider Browsing Surface selection";
   }
 
@@ -385,7 +397,7 @@ export class AppCoordinator {
       : this.uiState.focusedPane === "content"
         ? "queue"
         : "targets";
-    this.uiState.focusedPane = next;
+    this.updateUiState({ focusedPane: next });
     this.appState.lastEvent = `focus ${next}`;
   }
 
@@ -403,7 +415,7 @@ export class AppCoordinator {
       }
 
       const entry = this.queue.enqueue(selected);
-      this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
+      this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
       this.appState.lastEvent = `added ${selected.title} to shared Queue`;
       this.syncQueueState();
       return;
@@ -413,13 +425,13 @@ export class AppCoordinator {
       await this.refreshHelperDependency("yt-dlp");
       const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
       if (healthMessage) {
-        this.uiState.activePrompt = null;
+        this.updateUiState({ activePrompt: null });
         this.appState.lastEvent = healthMessage;
         return;
       }
 
       this.appState.lastEvent = "would open YouTube URL prompt, download into Offline YouTube Cache, then enqueue";
-      this.uiState.activePrompt = "youtube-url";
+      this.updateUiState({ activePrompt: "youtube-url" });
       return;
     }
 
@@ -431,7 +443,7 @@ export class AppCoordinator {
 
     const entry = this.queue.enqueue(selected);
     this.markSelectedOfflineYouTubeCacheAvailability(entry);
-    this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
+    this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
     this.appState.lastEvent = `added ${selected.title} to shared Queue`;
     this.syncQueueState();
   }
@@ -476,11 +488,13 @@ export class AppCoordinator {
   }
 
   private async openLocalPathPrompt(): Promise<void> {
-    this.uiState.activeTargetId = "local";
-    this.uiState.selectedTargetIndex = navigationTargetIndex("local");
-    this.uiState.focusedPane = "content";
-    this.uiState.activePrompt = "local-open-path";
-    this.uiState.promptInput = "";
+    this.updateUiState({
+      activeTargetId: "local",
+      selectedTargetIndex: navigationTargetIndex("local"),
+      focusedPane: "content",
+      activePrompt: "local-open-path",
+      promptInput: "",
+    });
     this.appState.lastEvent = "opened Local path prompt";
     await this.persistLastSelectedTarget("local");
   }
@@ -491,38 +505,33 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.focusedPane = "content";
-    this.uiState.activePrompt = "navidrome-search";
-    this.uiState.promptInput = "";
+    this.updateUiState({ focusedPane: "content", activePrompt: "navidrome-search", promptInput: "" });
     this.appState.lastEvent = "opened Navidrome search prompt";
   }
 
   private setPromptInput(value: string): void {
     if (!this.uiState.activePrompt) return;
-    this.uiState.promptInput = value;
+    this.updateUiState({ promptInput: value });
   }
 
   private async submitPrompt(): Promise<void> {
     if (this.uiState.activePrompt === "local-open-path") {
       const path = this.uiState.promptInput;
-      this.uiState.activePrompt = null;
-      this.uiState.promptInput = "";
+      this.updateUiState({ activePrompt: null, promptInput: "" });
       this.startLocalOpen(path);
       return;
     }
 
     if (this.uiState.activePrompt === "youtube-url") {
       const url = this.uiState.promptInput;
-      this.uiState.activePrompt = null;
-      this.uiState.promptInput = "";
+      this.updateUiState({ activePrompt: null, promptInput: "" });
       this.startYouTubeUrlDownload(url);
       return;
     }
 
     if (this.uiState.activePrompt === "navidrome-search") {
       const query = this.uiState.promptInput;
-      this.uiState.activePrompt = null;
-      this.uiState.promptInput = "";
+      this.updateUiState({ activePrompt: null, promptInput: "" });
       await this.searchNavidromeTracks(query);
     }
   }
@@ -530,8 +539,7 @@ export class AppCoordinator {
   private cancelPrompt(): void {
     if (!this.uiState.activePrompt) return;
 
-    this.uiState.activePrompt = null;
-    this.uiState.promptInput = "";
+    this.updateUiState({ activePrompt: null, promptInput: "" });
     this.appState.lastEvent = "cancelled prompt";
   }
 
@@ -604,11 +612,13 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.activeTargetId = "local";
-    this.uiState.selectedTargetIndex = navigationTargetIndex("local");
-    this.uiState.focusedPane = "content";
-    this.uiState.activePrompt = null;
-    this.uiState.promptInput = "";
+    this.updateUiState({
+      activeTargetId: "local",
+      selectedTargetIndex: navigationTargetIndex("local"),
+      focusedPane: "content",
+      activePrompt: null,
+      promptInput: "",
+    });
     await this.persistLastSelectedTarget("local");
 
     const result = await localProvider.createTracksFromOpenPath(path, {
@@ -621,7 +631,7 @@ export class AppCoordinator {
     }
 
     if (selectedEntry) {
-      this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(selectedEntry));
+      this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(selectedEntry)));
     }
 
     this.syncQueueState();
@@ -669,7 +679,7 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.selectedQueueIndex = clampIndex(this.uiState.selectedQueueIndex, this.queue.entries.length);
+    this.selectQueueIndex(clampIndex(this.uiState.selectedQueueIndex, this.queue.entries.length));
     if (sameIdentity(removed.track.identity, this.appState.playback.currentTrackIdentity)) {
       this.appState.playback = {
         status: "idle",
@@ -690,14 +700,14 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.selectedQueueIndex = toIndex;
+    this.selectQueueIndex(toIndex);
     this.appState.lastEvent = `moved ${moved.track.title}`;
     this.syncQueueState();
   }
 
   private clearQueue(): void {
     this.queue.clear();
-    this.uiState.selectedQueueIndex = 0;
+    this.selectQueueIndex(0);
     this.appState.playback = {
       status: "idle",
       currentTrackIdentity: null,
@@ -724,7 +734,6 @@ export class AppCoordinator {
         return;
       }
 
-      this.uiState.selectedQueueIndex = this.queue.currentIndex;
       if (entry.availability.status === "unavailable") {
         skippedUnavailable = true;
         continue;
@@ -755,7 +764,6 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.selectedQueueIndex = this.queue.currentIndex;
     await this.playQueueEntry(entry);
   }
 
@@ -1003,7 +1011,7 @@ export class AppCoordinator {
   private enqueueOfflineYouTubeCacheEntry(cacheEntry: OfflineYouTubeCacheEntry): void {
     const entry = this.queue.enqueue(cacheEntry.track);
     this.queue.markAvailability(cacheEntry.track.identity, cacheEntry.availability);
-    this.uiState.selectedQueueIndex = Math.max(0, this.queue.entries.indexOf(entry));
+    this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
     this.appState.lastEvent = `added ${cacheEntry.track.title} to shared Queue`;
     this.syncQueueState();
   }
@@ -1059,7 +1067,7 @@ export class AppCoordinator {
   private enqueueCliTrack(track: QueueEntry["track"]): void {
     const entry = this.queue.enqueue(track);
     const index = this.queue.entries.indexOf(entry);
-    this.uiState.selectedQueueIndex = Math.max(0, index);
+    this.selectQueueIndex(Math.max(0, index));
     this.appState.lastEvent = `added ${track.title} to shared Queue`;
   }
 
@@ -1147,7 +1155,7 @@ export class AppCoordinator {
       return;
     }
 
-    this.uiState.selectedContentIndexByTarget.navidrome = 0;
+    this.selectContentIndex("navidrome", 0);
     this.appState.lastEvent = "refreshed Navidrome Library Browser";
   }
 
@@ -1159,16 +1167,18 @@ export class AppCoordinator {
     }
 
     if (this.uiState.activeTargetId !== "navidrome") {
-      this.uiState.activeTargetId = "navidrome";
-      this.uiState.selectedTargetIndex = navigationTargetIndex("navidrome");
+      this.updateUiState({
+        activeTargetId: "navidrome",
+        selectedTargetIndex: navigationTargetIndex("navidrome"),
+      });
     }
-    this.uiState.focusedPane = "content";
+    this.updateUiState({ focusedPane: "content" });
 
     try {
       const results = await provider.searchTracks(query);
       const entries = provider.getLibraryBrowserEntries();
       const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
-      this.uiState.selectedContentIndexByTarget.navidrome = firstResultIndex === -1 ? 0 : firstResultIndex;
+      this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
       this.appState.lastEvent = results.length === 0
         ? `Navidrome search found no Tracks for ${query.trim()}`
         : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
@@ -1291,6 +1301,32 @@ export class AppCoordinator {
 
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
+    this.uiStateStore.dispatch({
+      type: "syncQueue",
+      identities: this.queue.entries.map((entry) => entry.track.identity),
+    });
+  }
+
+  private updateUiState(patch: Partial<UiState>): void {
+    this.uiStateStore.dispatch({ type: "updateView", patch });
+  }
+
+  private selectContentIndex(targetId: NavigationTargetId, index: number): void {
+    this.updateUiState({
+      selectedContentIndexByTarget: {
+        ...this.uiState.selectedContentIndexByTarget,
+        [targetId]: index,
+      },
+    });
+  }
+
+  private selectQueueIndex(index: number): void {
+    const selectedQueueIndex = clampIndex(index, this.queue.entries.length);
+    this.uiStateStore.dispatch({
+      type: "syncQueue",
+      identities: this.queue.entries.map((entry) => entry.track.identity),
+      preferredIdentity: this.queue.entries[selectedQueueIndex]?.track.identity ?? null,
+    });
   }
 
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {

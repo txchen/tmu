@@ -1,0 +1,134 @@
+import { describe, expect, test } from "bun:test";
+import { UiStateStore, createInitialUiState, reduceUiState } from "../src/ui-state";
+
+const alpha = { providerId: "local", stableId: "alpha" };
+const beta = { providerId: "navidrome", stableId: "beta" };
+const gamma = { providerId: "local", stableId: "gamma" };
+
+describe("UI State reducer", () => {
+  test("classifies responsive tiers and preserves context while the terminal is too small", () => {
+    let state = createInitialUiState({ columns: 120, rows: 30 });
+
+    expect(state.terminal.tier).toBe("wide");
+    state = reduceUiState(state, { type: "resize", columns: 100, rows: 30 });
+    expect(state.terminal.tier).toBe("medium");
+    state = reduceUiState(state, { type: "resize", columns: 70, rows: 30 });
+    expect(state.terminal.tier).toBe("narrow");
+
+    state = reduceUiState(state, {
+      type: "openOverlay",
+      overlay: { kind: "music-picker", focus: "search", query: "moon", selectedIdentity: null, scroll: 2 },
+    });
+    const contextBeforeFreeze = state.overlays;
+    state = reduceUiState(state, { type: "resize", columns: 59, rows: 30 });
+    expect(state.terminal.tier).toBe("terminal-too-small");
+
+    const frozen = reduceUiState(state, { type: "setQuery", query: "must not apply" });
+    expect(frozen).toBe(state);
+
+    state = reduceUiState(state, { type: "resize", columns: 80, rows: 16 });
+    expect(state.terminal.tier).toBe("medium");
+    expect(state.overlays).toEqual(contextBeforeFreeze);
+  });
+
+  test("repairs Queue selection and scroll by Track Identity across restore, reorder, removal, and resize", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, {
+      type: "syncQueue",
+      identities: [alpha, beta, gamma],
+      preferredIdentity: beta,
+      visibleRows: 2,
+    });
+    expect(state.selectedQueueIdentity).toEqual(beta);
+    expect(state.selectedQueueIndex).toBe(1);
+
+    state = reduceUiState(state, {
+      type: "syncQueue",
+      identities: [gamma, alpha, beta],
+      visibleRows: 2,
+    });
+    expect(state.selectedQueueIndex).toBe(2);
+    expect(state.scrollByPane.queue).toBe(1);
+
+    state = reduceUiState(state, {
+      type: "syncQueue",
+      identities: [gamma, alpha],
+      visibleRows: 2,
+    });
+    expect(state.selectedQueueIdentity).toEqual(alpha);
+    expect(state.selectedQueueIndex).toBe(1);
+
+    state = reduceUiState(state, {
+      type: "resize",
+      columns: 60,
+      rows: 16,
+      queueIdentities: [gamma, alpha],
+      visibleQueueRows: 1,
+    });
+    expect(state.selectedQueueIdentity).toEqual(alpha);
+    expect(state.scrollByPane.queue).toBe(1);
+  });
+
+  test("dismisses layered overlays and restores the exact prior Queue and Provider context", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, { type: "setFocus", focusedPane: "queue" });
+    state = reduceUiState(state, { type: "setQuery", query: "prior query" });
+    state = reduceUiState(state, { type: "setFilter", filterText: "Tracks" });
+    state = reduceUiState(state, { type: "setProviderLocation", location: ["local", "albums"] });
+    state = reduceUiState(state, { type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta });
+    state = reduceUiState(state, { type: "setScroll", pane: "queue", offset: 1 });
+
+    state = reduceUiState(state, {
+      type: "openOverlay",
+      overlay: {
+        kind: "music-picker",
+        focus: "search",
+        query: "new query",
+        filterText: "Albums",
+        providerLocation: ["navidrome", "artist:1"],
+        selectedIdentity: alpha,
+        scroll: 8,
+      },
+    });
+    state = reduceUiState(state, {
+      type: "openOverlay",
+      overlay: { kind: "help", focus: "filter", query: "play", selectedIdentity: null, scroll: 3 },
+    });
+    state = reduceUiState(state, { type: "dismissOverlay" });
+    expect(state.overlays.at(-1)).toMatchObject({ kind: "music-picker", query: "new query", scroll: 8 });
+
+    state = reduceUiState(state, { type: "dismissOverlay" });
+    expect(state.overlays).toEqual([]);
+    expect(state.focusedPane).toBe("queue");
+    expect(state.promptInput).toBe("prior query");
+    expect(state.filterText).toBe("Tracks");
+    expect(state.providerLocation).toEqual(["local", "albums"]);
+    expect(state.selectedQueueIdentity).toEqual(beta);
+    expect(state.scrollByPane.queue).toBe(1);
+  });
+
+  test("owns confirmation choice and requires an explicit confirmation", () => {
+    let state = createInitialUiState();
+    state = reduceUiState(state, { type: "requestConfirmation", kind: "clear-queue" });
+    expect(state.pendingConfirmation).toEqual({ kind: "clear-queue", choice: "cancel" });
+    state = reduceUiState(state, { type: "chooseConfirmation", choice: "confirm" });
+    expect(state.pendingConfirmation?.choice).toBe("confirm");
+    state = reduceUiState(state, { type: "cancelConfirmation" });
+    expect(state.pendingConfirmation).toBeNull();
+  });
+
+  test("exposes a one-shot 750 ms gg state without scheduling a recurring timer", () => {
+    const store = new UiStateStore(createInitialUiState());
+    store.dispatch({ type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta });
+    store.dispatch({ type: "pressVimG", atMs: 1_000, identities: [alpha, beta] });
+    expect(store.snapshot.pendingVimChord).toEqual({ key: "g", expiresAtMs: 1_750 });
+
+    store.dispatch({ type: "pressVimG", atMs: 1_750, identities: [alpha, beta] });
+    expect(store.snapshot.pendingVimChord).toBeNull();
+    expect(store.snapshot.selectedQueueIdentity).toEqual(alpha);
+
+    store.dispatch({ type: "pressVimG", atMs: 2_000, identities: [alpha, beta] });
+    store.dispatch({ type: "expireVimChord", atMs: 2_751 });
+    expect(store.snapshot.pendingVimChord).toBeNull();
+  });
+});
