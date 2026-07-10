@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AppCoordinator,
+  LegacyTuiController,
   FileAppPreferencesPersistence,
   FileLastQueueSnapshotPersistence,
   InMemoryAppPreferencesPersistence,
@@ -317,9 +317,9 @@ class VolumeFailingPlayer extends RecordingPlayer {
   }
 }
 
-describe("AppCoordinator", () => {
+describe("LegacyTuiController", () => {
   test("starts empty on the target switcher with separate app and UI state", async () => {
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -340,7 +340,7 @@ describe("AppCoordinator", () => {
     const preferencesPath = join(dir, "preferences.json");
 
     try {
-      const first = new AppCoordinator({
+      const first = new LegacyTuiController({
         appState: createInitialAppState({
           local: fakeProvider("local"),
           navidrome: fakeProvider("navidrome"),
@@ -355,7 +355,7 @@ describe("AppCoordinator", () => {
       await first.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
       await first.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
 
-      const second = new AppCoordinator({
+      const second = new LegacyTuiController({
         appState: createInitialAppState({
           local: fakeProvider("local"),
           navidrome: fakeProvider("navidrome"),
@@ -405,7 +405,7 @@ describe("AppCoordinator", () => {
         volume: { percent: 42, ready: true },
       });
 
-      const coordinator = new AppCoordinator({
+      const coordinator = new LegacyTuiController({
         appState: createInitialAppState(createDefaultProviders()),
         uiState: createInitialUiState(),
         queue: new MemoryQueue(),
@@ -432,7 +432,7 @@ describe("AppCoordinator", () => {
 
   test("startup restores shuffle repeat-all and volume from preferences without a Last Queue Snapshot", async () => {
     const appPreferencesPersistence = new InMemoryAppPreferencesPersistence();
-    const first = new AppCoordinator({
+    const first = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -445,7 +445,7 @@ describe("AppCoordinator", () => {
     await first.dispatch({ type: "toggleRepeatAll" });
     await first.dispatch({ type: "setVolume", percent: 36, ready: true });
 
-    const second = new AppCoordinator({
+    const second = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -528,7 +528,7 @@ describe("AppCoordinator", () => {
     try {
       await writeFile(snapshotPath, "{not-json");
       await writeFile(preferencesPath, "{not-json");
-      const coordinator = new AppCoordinator({
+      const coordinator = new LegacyTuiController({
         appState: createInitialAppState({
           local: fakeProvider("local"),
         }),
@@ -565,7 +565,7 @@ describe("AppCoordinator", () => {
     try {
       await writeFile(amber, "not real audio");
       await writeFile(cinder, "not real audio");
-      const coordinator = new AppCoordinator({
+      const coordinator = new LegacyTuiController({
         appState: createInitialAppState(createDefaultProviders()),
         uiState: createInitialUiState(),
         queue: new MemoryQueue(),
@@ -762,7 +762,7 @@ describe("AppCoordinator", () => {
 
   test("cancels an active Local open submitted from the prompt", async () => {
     const local = cancellableLocalProvider();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ local }),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -786,7 +786,7 @@ describe("AppCoordinator", () => {
   });
 
   test("routes navigation intents through the coordinator into UI State", async () => {
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         navidrome: fakeProvider("navidrome", [
           track("navidrome", "track-1", "Remote Track 1"),
@@ -811,7 +811,7 @@ describe("AppCoordinator", () => {
   test("uses Provider, Queue, and Player boundaries to start the selected queue entry", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -849,7 +849,7 @@ describe("AppCoordinator", () => {
     };
     const player = new RecordingPlayer();
     const queue = new MemoryQueue();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ "broken-provider": provider }),
       uiState: createInitialUiState(),
       queue,
@@ -979,7 +979,7 @@ describe("AppCoordinator", () => {
       fetcher: async () => navidromeJson({ status: "ok" }),
       saltFactory: () => "failure-salt",
     });
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
       uiState: createInitialUiState(),
       queue,
@@ -1143,7 +1143,7 @@ describe("AppCoordinator", () => {
       },
       saltFactory: () => "salt",
     });
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
       uiState: createInitialUiState(),
       queue,
@@ -1177,7 +1177,7 @@ describe("AppCoordinator", () => {
       },
       saltFactory: () => "salt",
     });
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
       uiState: createInitialUiState(),
       queue,
@@ -1215,7 +1215,7 @@ describe("AppCoordinator", () => {
       },
       saltFactory: () => "salt",
     });
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ navidrome: provider }, { config }),
       uiState: createInitialUiState(),
       queue,
@@ -1243,7 +1243,7 @@ describe("AppCoordinator", () => {
       },
       saltFactory: () => "salt",
     });
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ navidrome: provider }, { config: connectedNavidromeConfig() }),
       uiState: createInitialUiState(),
       queue,
@@ -1320,7 +1320,7 @@ describe("AppCoordinator", () => {
   test("routes playback controls through the Player after a Track is resolved", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -1353,7 +1353,7 @@ describe("AppCoordinator", () => {
   test("keeps recoverable Player command errors in App State and allows later controls", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new FailingThenRecoveringPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -1381,7 +1381,7 @@ describe("AppCoordinator", () => {
   test("does not overwrite failed Player control errors with success events", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const stopPlayer = new StopFailingPlayer();
-    const stopCoordinator = new AppCoordinator({
+    const stopCoordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -1400,7 +1400,7 @@ describe("AppCoordinator", () => {
     expect(stopCoordinator.appState.lastEvent).toBe("mpv error: stop failed");
 
     const volumePlayer = new VolumeFailingPlayer();
-    const volumeCoordinator = new AppCoordinator({
+    const volumeCoordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -1419,7 +1419,7 @@ describe("AppCoordinator", () => {
   test("marks Player load failures visible without removing the Track from the Queue", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new LoadFailingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }),
@@ -1452,7 +1452,7 @@ describe("AppCoordinator", () => {
     const first = track("local", "/music/first.flac", "First File");
     const second = track("local", "/music/second.flac", "Second File");
     const player = new LoadFailingOncePlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [first, second]),
       }),
@@ -1496,7 +1496,7 @@ describe("AppCoordinator", () => {
     const broken = track("local", "/music/broken.flac", "Broken File");
     const third = track("local", "/music/third.flac", "Third File");
     const player = new LoadFailingForPathPlayer("/resolved/local//music/broken.flac");
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [first, broken, third]),
       }),
@@ -1536,7 +1536,7 @@ describe("AppCoordinator", () => {
 
   test("tears down the Player boundary when the coordinator exits", async () => {
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1550,7 +1550,7 @@ describe("AppCoordinator", () => {
 
   test("quit intent tears down the Player through the App Coordinator", async () => {
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1566,7 +1566,7 @@ describe("AppCoordinator", () => {
 
   test("notifies subscribers when Player state changes outside input dispatch", async () => {
     const player = new NoopPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1590,7 +1590,7 @@ describe("AppCoordinator", () => {
     const cinder = track("local", "/music/cinder.mp3", "Cinder Room");
     const drift = track("local", "/music/drift.ogg", "Drift Signal");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [amber, cinder, drift]),
       }),
@@ -1656,7 +1656,7 @@ describe("AppCoordinator", () => {
       unavailableStableIds: [missing.identity.stableId],
     });
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ local }),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1712,7 +1712,7 @@ describe("AppCoordinator", () => {
   test("saves and restores Last Queue Snapshot through a persistence adapter", async () => {
     const amber = track("local", "/music/amber.flac", "Amber Path");
     const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
-    const first = new AppCoordinator({
+    const first = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [amber]),
       }),
@@ -1731,7 +1731,7 @@ describe("AppCoordinator", () => {
     await first.dispatch({ type: "setVolume", percent: 64, ready: true });
     await first.dispatch({ type: "saveLastQueueSnapshot" });
 
-    const second = new AppCoordinator({
+    const second = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [amber]),
       }),
@@ -1768,7 +1768,7 @@ describe("AppCoordinator", () => {
     });
     const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ local }),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1827,7 +1827,7 @@ describe("AppCoordinator", () => {
       unavailableStableIds: [missing.identity.stableId],
     });
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({ local }),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -1917,7 +1917,7 @@ describe("AppCoordinator", () => {
   test("blocks playback actions when mpv dependency health is missing", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }, {
@@ -1962,7 +1962,7 @@ describe("AppCoordinator", () => {
   test("allows playback when only ffprobe dependency health is missing", async () => {
     const localTrack = track("local", "/music/amber.flac", "Amber Path");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
       }, {
@@ -2002,7 +2002,7 @@ describe("AppCoordinator", () => {
       },
     });
     const refreshes: string[] = [];
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -2030,7 +2030,7 @@ describe("AppCoordinator", () => {
   test("rechecks yt-dlp when target-rail movement enters YouTube URL Download", async () => {
     const refreshedHealth = createDefaultDependencyHealth();
     const refreshes: string[] = [];
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -2053,7 +2053,7 @@ describe("AppCoordinator", () => {
     const navidromeTrack = track("navidrome", "song-1", "Remote Track");
     const cachedTrack = track("offline-youtube-cache", "youtube:abc123", "Cached Track");
     const player = new RecordingPlayer();
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({
         local: fakeProvider("local", [localTrack]),
         navidrome: fakeProvider("navidrome", [navidromeTrack]),

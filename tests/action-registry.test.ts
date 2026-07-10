@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AppCoordinator,
+  LegacyTuiController,
   MemoryQueue,
   NoopPlayer,
   RootInputRouter,
@@ -83,20 +84,22 @@ describe("action registry contracts", () => {
     };
     const uiState = createInitialUiState();
     uiState.selectedQueueIdentity = cinder.identity;
-    const coordinator = new AppCoordinator({
+    const legacy = new LegacyTuiController({
       appState: createInitialAppState({}),
       uiState,
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
     });
-    const uiBefore = structuredClone(coordinator.uiState);
+    const coordinator = new AppCoordinator(legacy);
+    const uiBefore = structuredClone(legacy.uiState);
 
     await coordinator.dispatch({ type: "playNext", target: amber });
     await coordinator.dispatch({ type: "playNext", target: cinder });
     await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([cinder]);
-    expect(coordinator.uiState).toEqual(uiBefore);
+    expect(legacy.uiState).toEqual(uiBefore);
+    expect("uiState" in coordinator).toBe(false);
   });
 
   test("keeps context-relevant actions discoverable with disabled reasons", () => {
@@ -123,7 +126,7 @@ describe("action registry contracts", () => {
       title: "Drift Signal",
       providerLabel: "Local",
     };
-    const coordinator = new AppCoordinator({
+    const coordinator = new LegacyTuiController({
       appState: createInitialAppState({}),
       uiState: createInitialUiState(),
       queue: new MemoryQueue(),
@@ -149,6 +152,20 @@ describe("action registry contracts", () => {
     ]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+
+    const registry = createActionRegistry();
+    const current = context();
+    current.uiState.activeTargetId = "local";
+    const collection = {
+      kind: "music-collection" as const,
+      id: "night-drive",
+      label: "Night Drive",
+      tracks: [cinder, drift],
+    };
+    expect(actionForBinding(registry, "\r", { ...current, selectedPlayableTarget: collection })?.intent)
+      .toEqual({ type: "playNext", target: collection });
+    expect(actionForBinding(registry, "\x1b[13;2u", { ...current, selectedPlayableTarget: collection })?.intent)
+      .toEqual({ type: "playNow", target: collection });
   });
 });
 
@@ -231,12 +248,17 @@ describe("root input router", () => {
     const current = context();
     const ui = new UiStateStore(current.uiState);
     let now = 1_000;
+    let expiry: (() => void) | null = null;
     const router = new RootInputRouter({
       registry: createActionRegistry(),
       appState: () => current.appState,
       uiState: ui,
       dispatchApp: async () => undefined,
       now: () => now,
+      timers: {
+        setTimeout: (callback) => { expiry = callback; return callback; },
+        clearTimeout: () => { expiry = null; },
+      },
     });
 
     await router.route("g");
@@ -247,6 +269,12 @@ describe("root input router", () => {
 
     await router.route("g");
     await router.route("x");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
+
+    await router.route("g");
+    now = 2_000;
+    const expire = expiry as (() => void) | null;
+    if (expire) expire();
     expect(ui.snapshot.pendingVimChord).toBeNull();
   });
 });

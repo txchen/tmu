@@ -58,7 +58,7 @@ export type DependencyHealthRefresh = (
 ) => Promise<DependencyHealthState>;
 export type AppStateChangeReason = "state" | "playback";
 
-export type AppCoordinatorOptions = {
+export type LegacyTuiControllerOptions = {
   appState: AppState;
   uiState: UiState;
   queue: Queue;
@@ -70,7 +70,7 @@ export type AppCoordinatorOptions = {
   youtubeDownloader?: YouTubeDownloader;
 };
 
-export class AppCoordinator {
+export class LegacyTuiController {
   readonly appState: AppState;
   private readonly uiStateStore: UiStateStore;
   private readonly queue: Queue;
@@ -89,7 +89,7 @@ export class AppCoordinator {
   private completedPlayReported = false;
   private tornDown = false;
 
-  constructor(options: AppCoordinatorOptions) {
+  constructor(options: LegacyTuiControllerOptions) {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
     this.queue = options.queue;
@@ -500,18 +500,10 @@ export class AppCoordinator {
     const tracks = uniqueTargetTracks(target);
     const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
     const upcoming = tracks.filter((track) => !sameIdentity(track.identity, currentIdentity));
-    for (const track of upcoming) {
-      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
-      if (existingIndex >= 0) this.queue.remove(existingIndex);
-    }
+    this.removeTracksFromQueue(upcoming);
 
     const insertionIndex = this.queue.currentIndex >= 0 ? this.queue.currentIndex + 1 : 0;
-    upcoming.forEach((track, offset) => {
-      const entry = this.queue.enqueue(track);
-      this.markSelectedOfflineYouTubeCacheAvailability(entry);
-      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
-      this.queue.move(fromIndex, insertionIndex + offset);
-    });
+    this.insertTracksIntoQueue(upcoming, insertionIndex);
     this.appState.lastEvent = upcoming.length === 0
       ? "Play Next left Current Track in place"
       : `placed ${upcoming.length} Track${upcoming.length === 1 ? "" : "s"} next`;
@@ -528,17 +520,9 @@ export class AppCoordinator {
     }
     const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
     const formerCurrentIsRequested = tracks.some((track) => sameIdentity(track.identity, currentIdentity));
-    for (const track of tracks) {
-      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
-      if (existingIndex >= 0) this.queue.remove(existingIndex);
-    }
+    this.removeTracksFromQueue(tracks);
     const insertionIndex = currentIdentity && !formerCurrentIsRequested ? this.queue.currentIndex + 1 : 0;
-    tracks.forEach((track, offset) => {
-      const entry = this.queue.enqueue(track);
-      this.markSelectedOfflineYouTubeCacheAvailability(entry);
-      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
-      this.queue.move(fromIndex, insertionIndex + offset);
-    });
+    this.insertTracksIntoQueue(tracks, insertionIndex);
     const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, first.identity));
     const entry = index < 0 ? undefined : this.queue.startAt(index);
     if (!entry) {
@@ -551,6 +535,22 @@ export class AppCoordinator {
       return;
     }
     await this.playQueueEntry(entry);
+  }
+
+  private removeTracksFromQueue(tracks: readonly Track[]): void {
+    for (const track of tracks) {
+      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
+      if (existingIndex >= 0) this.queue.remove(existingIndex);
+    }
+  }
+
+  private insertTracksIntoQueue(tracks: readonly Track[], insertionIndex: number): void {
+    tracks.forEach((track, offset) => {
+      const entry = this.queue.enqueue(track);
+      this.markSelectedOfflineYouTubeCacheAvailability(entry);
+      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
+      this.queue.move(fromIndex, insertionIndex + offset);
+    });
   }
 
   private removeQueueTrack(identity: Track["identity"]): void {
@@ -1537,6 +1537,30 @@ export class AppCoordinator {
 
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
     for (const listener of this.stateListeners) listener(reason);
+  }
+}
+
+export class AppCoordinator {
+  constructor(private readonly application: LegacyTuiController) {}
+
+  get appState(): AppState {
+    return this.application.appState;
+  }
+
+  dispatch(intent: AppIntent): Promise<void> {
+    return this.application.dispatch(intent);
+  }
+
+  teardown(): Promise<void> {
+    return this.application.teardown();
+  }
+
+  onStateChange(listener: (reason: AppStateChangeReason) => void): () => void {
+    return this.application.onStateChange(listener);
+  }
+
+  queueTrackIdentities() {
+    return this.application.queueTrackIdentities();
   }
 }
 

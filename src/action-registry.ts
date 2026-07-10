@@ -2,14 +2,16 @@ import {
   identityKey,
   type AppIntent,
   type AppState,
+  type PlayableTarget,
   type Track,
   type UiState,
 } from "./domain";
-import { UiStateStore } from "./ui-state";
+import type { UiStateAction } from "./ui-state";
 
 export type ActionContext = {
   readonly appState: Readonly<AppState>;
   readonly uiState: Readonly<UiState>;
+  readonly selectedPlayableTarget?: PlayableTarget | null;
 };
 
 type ActionBinding = { key: string; label: string };
@@ -42,6 +44,15 @@ const neverDisabled = () => null;
 
 export function createActionRegistry(): ActionRegistry {
   return [
+    promptAction("provider.open-local-path", "Open Local Path", "local-open-path", (query) => ({
+      type: "providerOperation", providerId: "local", operation: "open-path", path: query,
+    })),
+    promptAction("provider.search-navidrome", "Search Navidrome", "navidrome-search", (query) => ({
+      type: "providerOperation", providerId: "navidrome", operation: "search", query,
+    })),
+    promptAction("download.start", "Download YouTube URL", "youtube-url", (url) => ({
+      type: "downloadOperation", operation: "start", url,
+    })),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -82,12 +93,25 @@ export function createActionRegistry(): ActionRegistry {
       name: "Play Next",
       aliases: ["queue next", "add next"],
       bindings: [{ key: "\r", label: "Enter" }],
-      applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTrack(context) !== null,
-      enabled: (context) => selectedProviderTrack(context) !== null,
-      disabledReason: (context) => selectedProviderTrack(context) ? null : "No playable Track selected",
+      applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
+      enabled: (context) => selectedProviderTarget(context) !== null,
+      disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
       createIntent: (context) => {
-        const track = selectedProviderTrack(context);
-        return track ? { type: "playNext", target: track } : null;
+        const target = selectedProviderTarget(context);
+        return target ? { type: "playNext", target } : null;
+      },
+    },
+    {
+      id: "provider.play-now",
+      name: "Play Now",
+      aliases: ["play immediately"],
+      bindings: [{ key: "\x1b[13;2u", label: "Shift+Enter" }],
+      applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
+      enabled: (context) => selectedProviderTarget(context) !== null,
+      disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
+      createIntent: (context) => {
+        const target = selectedProviderTarget(context);
+        return target ? { type: "playNow", target } : null;
       },
     },
     {
@@ -169,17 +193,26 @@ export function actionForBinding(
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
   appState: () => Readonly<AppState>;
-  uiState: UiStateStore;
+  uiState: {
+    readonly snapshot: Readonly<UiState>;
+    dispatch(action: UiStateAction): Readonly<UiState>;
+  };
   dispatchApp: (intent: AppIntent) => Promise<void> | void;
   now?: () => number;
+  timers?: {
+    setTimeout(callback: () => void, delayMs: number): unknown;
+    clearTimeout(timer: unknown): void;
+  };
 };
 
 export class RootInputRouter {
   private readonly registry: ActionRegistry;
   private readonly appState: () => Readonly<AppState>;
-  private readonly uiState: UiStateStore;
+  private readonly uiState: RootInputRouterOptions["uiState"];
   private readonly dispatchApp: (intent: AppIntent) => Promise<void> | void;
   private readonly now: () => number;
+  private readonly timers: NonNullable<RootInputRouterOptions["timers"]>;
+  private pendingChordTimer: unknown | null = null;
 
   constructor(options: RootInputRouterOptions) {
     this.registry = options.registry;
@@ -187,12 +220,16 @@ export class RootInputRouter {
     this.uiState = options.uiState;
     this.dispatchApp = options.dispatchApp;
     this.now = options.now ?? Date.now;
+    this.timers = options.timers ?? {
+      setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+      clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    };
   }
 
-  async route(key: string): Promise<void> {
+  async route(key: string): Promise<boolean> {
     if (key === "\u0003") {
-      await this.dispatchApp({ type: "playerOperation", operation: "quit" });
-      return;
+      await this.dispatchBinding(key);
+      return true;
     }
 
     const overlay = this.uiState.snapshot.overlays.at(-1);
@@ -204,45 +241,89 @@ export class RootInputRouter {
       } else if (isPrintableKey(key)) {
         this.uiState.dispatch({ type: "setQuery", query: `${overlay.query}${key}` });
       }
-      return;
+      return true;
     }
 
     if (overlay && (key === "\x1b" || key === "q")) {
       this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
-      return;
+      return true;
     }
-    if (overlay) return;
+    if (overlay) return true;
 
     if (this.uiState.snapshot.activePrompt) {
       const query = this.uiState.snapshot.promptInput;
-      const prompt = this.uiState.snapshot.activePrompt;
       if (key === "\r") {
+        await this.dispatchBinding(key);
         this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-        if (prompt === "local-open-path") {
-          await this.dispatchApp({ type: "providerOperation", providerId: "local", operation: "open-path", path: query });
-        } else if (prompt === "navidrome-search") {
-          await this.dispatchApp({ type: "providerOperation", providerId: "navidrome", operation: "search", query });
-        } else {
-          await this.dispatchApp({ type: "downloadOperation", operation: "start", url: query });
-        }
       } else if (key === "\x1b") this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
       else if (key === "\x7f" || key === "\b") this.uiState.dispatch({ type: "setQuery", query: query.slice(0, -1) });
       else if (isPrintableKey(key)) this.uiState.dispatch({ type: "setQuery", query: `${query}${key}` });
-      return;
+      return true;
     }
 
     const identities = queueIdentities(this.appState());
     if (key === "g") {
+      const completing = Boolean(this.uiState.snapshot.pendingVimChord
+        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
       this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities });
-      return;
+      this.clearPendingChordTimer();
+      if (!completing) {
+        this.pendingChordTimer = this.timers.setTimeout(() => {
+          this.pendingChordTimer = null;
+          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
+        }, 751);
+      }
+      return true;
     }
-    if (this.uiState.snapshot.pendingVimChord) this.uiState.dispatch({ type: "cancelVimChord" });
+    if (this.uiState.snapshot.pendingVimChord) {
+      this.clearPendingChordTimer();
+      this.uiState.dispatch({ type: "cancelVimChord" });
+    }
 
     const context = { appState: this.appState(), uiState: this.uiState.snapshot };
     const action = actionForBinding(this.registry, key, context);
-    if (!action?.enabled || !action.intent) return;
+    if (!action) return false;
+    if (!action.enabled || !action.intent) return true;
     await this.dispatchApp(action.intent);
+    return true;
   }
+
+  cancelPendingSequence(): void {
+    this.clearPendingChordTimer();
+    if (this.uiState.snapshot.pendingVimChord) this.uiState.dispatch({ type: "cancelVimChord" });
+  }
+
+  private async dispatchBinding(key: string): Promise<void> {
+    const action = actionForBinding(this.registry, key, {
+      appState: this.appState(),
+      uiState: this.uiState.snapshot,
+    });
+    if (action?.enabled && action.intent) await this.dispatchApp(action.intent);
+  }
+
+  private clearPendingChordTimer(): void {
+    if (this.pendingChordTimer === null) return;
+    this.timers.clearTimeout(this.pendingChordTimer);
+    this.pendingChordTimer = null;
+  }
+}
+
+function promptAction(
+  id: string,
+  name: string,
+  prompt: NonNullable<UiState["activePrompt"]>,
+  createIntent: (query: string) => AppIntent,
+): ActionDefinition {
+  return {
+    id,
+    name,
+    aliases: [],
+    bindings: [{ key: "\r", label: "Enter" }],
+    applies: (context) => context.uiState.activePrompt === prompt,
+    enabled: always,
+    disabledReason: neverDisabled,
+    createIntent: (context) => createIntent(context.uiState.promptInput),
+  };
 }
 
 function queueTrackAction(options: {
@@ -315,7 +396,8 @@ function selectedQueueTrack(context: ActionContext): Track | null {
   return context.appState.queue.entries.find((entry) => identityKey(entry.track.identity) === selectedKey)?.track ?? null;
 }
 
-function selectedProviderTrack(context: ActionContext): Track | null {
+function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
+  if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
   const providerId = context.uiState.activeTargetId;
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
