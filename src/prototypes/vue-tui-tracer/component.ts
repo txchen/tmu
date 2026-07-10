@@ -111,7 +111,6 @@ export function createVueTuiTracer(options: VueTuiTracerOptions) {
         unsubscribeCoordinator();
         unsubscribePublication();
         publication.stop();
-        void coordinator.teardown();
       });
 
       return () => renderTracer(snapshot.value);

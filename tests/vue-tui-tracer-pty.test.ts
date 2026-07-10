@@ -42,9 +42,18 @@ describe("development-only vue-tui real PTY", () => {
       await Bun.sleep(150);
       expect(output).toHaveLength(idleBytes);
 
+      let nextFrame = output.length;
+      terminal.write(" ");
+      await waitForNewOutput(read, nextFrame, "Playing");
+      await Bun.sleep(80);
+      const beforePosition = output.length;
+      subprocess.kill("SIGUSR1");
+      await Bun.sleep(150);
+      expect(output).toHaveLength(beforePosition);
+
       terminal.write("o");
       await waitForOutput(read, "Picker Overlay · music-picker");
-      let nextFrame = output.length;
+      nextFrame = output.length;
       terminal.resize(70, 24);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
@@ -85,21 +94,27 @@ describe("development-only vue-tui real PTY", () => {
     }
   });
 
-  test("restores cursor and alternate screen when terminated by an operating-system signal", async () => {
-    let output = "";
-    const read = () => output;
-    const { terminal, subprocess } = spawnTracer((text) => { output += text; });
+  test("restores cursor and alternate screen for operating-system termination signals", async () => {
+    for (const [signal, exitCode] of [
+      ["SIGINT", 130],
+      ["SIGHUP", 129],
+      ["SIGTERM", 143],
+    ] as const) {
+      let output = "";
+      const read = () => output;
+      const { terminal, subprocess } = spawnTracer((text) => { output += text; });
 
-    try {
-      await waitForOutput(read, "Queue Home · wide");
-      subprocess.kill("SIGTERM");
-      expect(await subprocess.exited).toBe(143);
-      await waitForOutput(read, "\x1b[?1049l");
-      expect(subprocess.signalCode).toBeNull();
-      expect(output).toContain("\x1b[?25h");
-    } finally {
-      if (subprocess.exitCode === null) subprocess.kill();
-      terminal.close();
+      try {
+        await waitForOutput(read, "Queue Home · wide");
+        subprocess.kill(signal);
+        expect(await subprocess.exited).toBe(exitCode);
+        await waitForOutput(read, "\x1b[?1049l");
+        expect(subprocess.signalCode).toBeNull();
+        expect(output).toContain("\x1b[?25h");
+      } finally {
+        if (subprocess.exitCode === null) subprocess.kill();
+        terminal.close();
+      }
     }
   });
 });

@@ -1,116 +1,17 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { render, cleanup } from "@vue-tui/testing";
-import {
-  AppCoordinator,
-  InMemoryLastQueueSnapshotPersistence,
-  MemoryQueue,
-  createDefaultDependencyHealth,
-  createInitialAppState,
-  createInitialUiState,
-  type PlaybackLocator,
-  type Player,
-  type PlayerPlaybackState,
-  type Track,
-} from "../src/index";
 import { createVueTuiTracer } from "../src/prototypes/vue-tui-tracer/component";
+import {
+  DevelopmentTracerPlayer,
+  createDevelopmentTracerRuntime,
+  developmentTracerTrack,
+} from "../src/prototypes/vue-tui-tracer/app";
 
 afterEach(() => cleanup());
 
-const restoredTrack: Track = {
-  identity: { providerId: "tracer", stableId: "restored-track" },
-  title: "Restored Track",
-  artist: "Tracer Artist",
-  providerLabel: "Development Tracer",
-};
-
-class TracerPlayer implements Player {
-  toggles = 0;
-  private state: PlayerPlaybackState = { status: "idle" };
-  private readonly listeners = new Set<(state: PlayerPlaybackState) => void>();
-
-  get playback(): PlayerPlaybackState {
-    return this.state;
-  }
-
-  async start(): Promise<PlayerPlaybackState> {
-    return this.state;
-  }
-
-  async load(_locator: PlaybackLocator): Promise<void> {
-    this.publish({ status: "playing" });
-  }
-
-  async togglePause(): Promise<PlayerPlaybackState> {
-    this.toggles += 1;
-    this.publish({ ...this.state, status: this.state.status === "playing" ? "paused" : "playing" });
-    return this.state;
-  }
-
-  async setPaused(paused: boolean): Promise<PlayerPlaybackState> {
-    this.publish({ ...this.state, status: paused ? "paused" : "playing" });
-    return this.state;
-  }
-
-  async stop(): Promise<PlayerPlaybackState> {
-    this.publish({ status: "stopped" });
-    return this.state;
-  }
-
-  async seekBy(_seconds: number): Promise<PlayerPlaybackState> {
-    return this.state;
-  }
-
-  async setVolume(percent: number): Promise<PlayerPlaybackState> {
-    this.publish({ ...this.state, volumePercent: percent });
-    return this.state;
-  }
-
-  async teardown(): Promise<void> {}
-
-  onPlaybackStateChange(listener: (state: PlayerPlaybackState) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  publishPosition(positionSeconds: number): void {
-    this.publish({ ...this.state, status: "playing", positionSeconds });
-  }
-
-  private publish(state: PlayerPlaybackState): void {
-    this.state = state;
-    for (const listener of this.listeners) listener(state);
-  }
-}
-
 async function developmentTracerHarness() {
-  const snapshots = new InMemoryLastQueueSnapshotPersistence();
-  await snapshots.save({
-    version: 1,
-    entries: [{ track: restoredTrack, availability: { status: "available" } }],
-    currentIndex: 0,
-    shuffle: false,
-    repeatAll: false,
-    volume: { percent: 72, ready: true },
-  });
-  const player = new TracerPlayer();
-  const health = createDefaultDependencyHealth();
-  health.playback = { enabled: true, message: "Development tracer Player ready" };
-  const coordinator = new AppCoordinator({
-    appState: createInitialAppState({
-      tracer: {
-        id: "tracer",
-        label: "Development Tracer",
-        hint: "one restored Track",
-        listVisibleTracks: () => [restoredTrack],
-        resolvePlaybackLocator: async () => ({ kind: "file", path: "/dev/null" }),
-      },
-    }, { dependencyHealth: health }),
-    uiState: createInitialUiState(),
-    queue: new MemoryQueue(),
-    player,
-    snapshotPersistence: snapshots,
-  });
-  await coordinator.start([]);
+  const player = new DevelopmentTracerPlayer();
+  const { coordinator } = await createDevelopmentTracerRuntime({ player });
   return { coordinator, player };
 }
 
@@ -151,8 +52,8 @@ describe("development-only vue-tui tracer", () => {
       await terminal.terminal.resize(columns, rows);
       await terminal.waitUntilRenderFlush();
       expect(coordinator.uiState.terminal.tier).toBe(tier);
-      expect(coordinator.uiState.selectedQueueIdentity).toEqual(restoredTrack.identity);
-      expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
+      expect(coordinator.uiState.selectedQueueIdentity).toEqual(developmentTracerTrack.identity);
+      expect(coordinator.appState.playback.currentTrackIdentity).toEqual(developmentTracerTrack.identity);
       expect(coordinator.uiState.overlays.at(-1)?.kind).toBe("music-picker");
     }
   });

@@ -393,10 +393,6 @@ export class AppCoordinator {
     this.queue.restore(snapshot);
     await this.refreshRestoredProviderAvailability();
     this.appState.volume = snapshot.volume;
-    const restoredCurrentTrack = this.queue.entries[this.queue.currentIndex]?.track;
-    this.appState.playback = restoredCurrentTrack
-      ? { status: "paused", currentTrackIdentity: restoredCurrentTrack.identity }
-      : { status: "idle", currentTrackIdentity: null };
     this.syncQueueState();
   }
 
