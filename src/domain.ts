@@ -164,11 +164,13 @@ export type UiState = {
   selectedQueueIdentity: TrackIdentity | null;
   library: {
     query: string;
+    inputFocused: boolean;
     selectedIndex: number;
     scroll: number;
   };
   downloader: {
     urlInput: string;
+    inputFocused: boolean;
     selectedBatchIndex: number;
     scroll: number;
   };

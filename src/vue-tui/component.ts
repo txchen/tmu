@@ -67,21 +67,36 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
-        if (key.ctrl && input === "c" || input === "q" && ui.activeTab === "playback") {
+        const textInputFocused = ui.activeTab === "library"
+          ? ui.library.inputFocused
+          : ui.activeTab === "downloader" && ui.downloader.inputFocused;
+        if (!textInputFocused && input === "?") {
+          coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
+          publication.notify("input");
+          return;
+        }
+        if (!textInputFocused && input === ":") {
+          coordinator.dispatchUi({ type: "openOverlay", kind: "command-palette" });
+          publication.notify("input");
+          return;
+        }
+        if (key.ctrl && input === "c" || input === "q" && !textInputFocused) {
           app.exit();
           return;
         }
-        if (input === "1") coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
-        else if (input === "2") coordinator.dispatchUi({ type: "switchTab", tab: "library" });
-        else if (input === "3") coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
-        else if (key.tab) coordinator.dispatchUi({ type: "switchTab", tab: nextTab(ui.activeTab) });
-        else if (input === " " && ui.activeTab !== "downloader") {
+        if ((!textInputFocused || key.ctrl) && input === "1") coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
+        else if ((!textInputFocused || key.ctrl) && input === "2") coordinator.dispatchUi({ type: "switchTab", tab: "library" });
+        else if ((!textInputFocused || key.ctrl) && input === "3") coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
+        else if (!textInputFocused && key.tab) coordinator.dispatchUi({ type: "switchTab", tab: nextTab(ui.activeTab) });
+        else if (input === " " && !textInputFocused) {
           const selected = coordinator.appState.queue.entries[ui.selectedQueueIndex];
           if (coordinator.appState.queue.currentIndex < 0 && selected) {
             await coordinator.dispatch({ type: "playNow", target: selected.track });
           } else {
             await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
           }
+        } else if (!textInputFocused && await routeGlobalPlayback(input, key, coordinator)) {
+          // Global playback action handled before tab-local routing.
         } else if (ui.activeTab === "playback") {
           await routePlayback(input, key, coordinator);
         } else if (ui.activeTab === "library") {
@@ -98,9 +113,27 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.stop();
       });
 
-      return () => render(snapshot.value);
+      return () => render(snapshot.value, coordinator);
     },
   });
+}
+
+async function routeGlobalPlayback(
+  input: string,
+  key: InputKey,
+  coordinator: AppCoordinator,
+): Promise<boolean> {
+  if (input === "n") await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
+  else if (input === "p") await coordinator.dispatch({ type: "playerOperation", operation: "previous-track" });
+  else if (input === "s") await coordinator.dispatch({ type: "playerOperation", operation: "stop" });
+  else if (input === "h" || key.leftArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: -5 });
+  else if (input === "l" || key.rightArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: 5 });
+  else if (input === "+") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: 5 });
+  else if (input === "-") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: -5 });
+  else if (input === "z") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
+  else if (input === "r") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
+  else return false;
+  return true;
 }
 
 async function routePlayback(
@@ -135,17 +168,6 @@ async function routePlayback(
       delta: input === "J" ? 1 : -1,
     });
   } else if (input === "C") coordinator.dispatchUi({ type: "requestConfirmation", kind: "clear-queue" });
-  else if (input === "z") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
-  else if (input === "r") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
-  else if (input === "h" || key.leftArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: -5 });
-  else if (input === "l" || key.rightArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: 5 });
-  else if (input === "+") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: 5 });
-  else if (input === "-") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: -5 });
-  else if (input === "?") coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
-  else if (input === ":") coordinator.dispatchUi({ type: "openOverlay", kind: "command-palette" });
-  else if (input === "n") await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
-  else if (input === "p") await coordinator.dispatch({ type: "playerOperation", operation: "previous-track" });
-  else if (input === "s") await coordinator.dispatch({ type: "playerOperation", operation: "stop" });
 }
 
 async function routeLibrary(
@@ -155,15 +177,19 @@ async function routeLibrary(
 ): Promise<void> {
   const provider = coordinator.appState.providers["youtube-cache"];
   const tracks = provider.searchTracks(coordinator.uiState.library.query);
-  if (key.return) {
+  if (key.escape) {
+    coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
+  } else if (!coordinator.uiState.library.inputFocused && input === "/") {
+    coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: true });
+  } else if (key.return) {
     const track = tracks[coordinator.uiState.library.selectedIndex];
     if (track) await coordinator.dispatch({ type: "playNow", target: track });
-  } else if (key.backspace || key.delete) {
+  } else if (coordinator.uiState.library.inputFocused && (key.backspace || key.delete)) {
     coordinator.dispatchUi({
       type: "setLibraryQuery",
       query: coordinator.uiState.library.query.slice(0, -1),
     });
-  } else if (input.length > 0 && !key.ctrl && !key.meta) {
+  } else if (coordinator.uiState.library.inputFocused && input.length > 0 && !key.ctrl && !key.meta) {
     coordinator.dispatchUi({
       type: "setLibraryQuery",
       query: coordinator.uiState.library.query + input,
@@ -176,15 +202,19 @@ async function routeDownloader(
   key: InputKey,
   coordinator: AppCoordinator,
 ): Promise<void> {
-  if (key.return) {
+  if (key.escape) {
+    coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: false });
+  } else if (!coordinator.uiState.downloader.inputFocused && input === "u") {
+    coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: true });
+  } else if (key.return) {
     const url = coordinator.uiState.downloader.urlInput.trim();
     if (url) await coordinator.dispatch({ type: "downloadOperation", operation: "start", url });
-  } else if (key.backspace || key.delete) {
+  } else if (coordinator.uiState.downloader.inputFocused && (key.backspace || key.delete)) {
     coordinator.dispatchUi({
       type: "setDownloaderInput",
       value: coordinator.uiState.downloader.urlInput.slice(0, -1),
     });
-  } else if (input.length > 0 && !key.ctrl && !key.meta) {
+  } else if (coordinator.uiState.downloader.inputFocused && input.length > 0 && !key.ctrl && !key.meta) {
     coordinator.dispatchUi({
       type: "setDownloaderInput",
       value: coordinator.uiState.downloader.urlInput + input,
@@ -192,7 +222,7 @@ async function routeDownloader(
   }
 }
 
-function render(snapshot: PublicationSnapshot) {
+function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
   const { appState, uiState } = snapshot;
   if (uiState.terminal.tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
@@ -210,14 +240,14 @@ function render(snapshot: PublicationSnapshot) {
     uiState.activeTab === "playback"
       ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState)
       : uiState.activeTab === "library"
-        ? libraryView(snapshot)
+        ? libraryView(snapshot, coordinator)
         : downloaderView(snapshot),
     appState.appErrors.at(-1)
       ? h(Text, { color: "yellow", wrap: "truncate-end" }, () => `! ${appState.appErrors.at(-1)}`)
       : null,
     uiState.overlays.at(-1) ? h(Text, { bold: true }, () =>
       uiState.overlays.at(-1)?.kind === "shortcut-help"
-        ? "Playback Help · j/k Move · Space Play · x Remove · J/K Reorder · C Clear · Esc Close"
+        ? `${tabLabel(uiState.activeTab)} Help · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · z Shuffle · r Repeat · 1/2/3 Tabs · Esc Close`
         : "Command Palette · Playback · Library · YouTube Downloader · Esc Close") : null,
     uiState.pendingConfirmation ? h(Text, { bold: true }, () => "Clear Queue permanently? y Confirm · n Cancel") : null,
     h(Text, { dimColor: true }, () => footer(uiState.activeTab)),
@@ -246,15 +276,11 @@ function playbackView(
     lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)));
 }
 
-function libraryView(snapshot: PublicationSnapshot) {
-  const provider = snapshot.appState.providers["youtube-cache"];
-  const query = snapshot.uiState.library.query.toLocaleLowerCase();
-  const tracks = (provider?.tracks ?? []).filter((track) =>
-    !query || [track.title, track.artist, track.identity.stableId]
-      .some((value) => value?.toLocaleLowerCase().includes(query))
-  );
+function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
+  const tracks = coordinator.appState.providers["youtube-cache"]
+    .searchTracks(snapshot.uiState.library.query);
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, () => `Cache Search: ${snapshot.uiState.library.query || "(type to search)"}`),
+    h(Text, () => `Cache Search: ${snapshot.uiState.library.query || "(type to search)"}${snapshot.uiState.library.inputFocused ? " [focused]" : ""}`),
     ...tracks.map((track, index) =>
       h(Text, { wrap: "truncate-end" }, () =>
         `${index === snapshot.uiState.library.selectedIndex ? ">" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
@@ -266,7 +292,7 @@ function libraryView(snapshot: PublicationSnapshot) {
 function downloaderView(snapshot: PublicationSnapshot) {
   const downloads = snapshot.appState.downloads;
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, () => `YouTube URL: ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`),
+    h(Text, () => `YouTube URL: ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}${snapshot.uiState.downloader.inputFocused ? " [focused]" : ""}`),
     h(Text, { dimColor: !downloads.active }, () =>
       downloads.active ? "Download active" : "No active downloads"),
     ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
@@ -275,12 +301,22 @@ function downloaderView(snapshot: PublicationSnapshot) {
 
 function footer(active: UiState["activeTab"]): string {
   if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
-  if (active === "library") return "Type Cache Search  Enter Play Now  Space Play/Pause  1/2/3 Tabs  q Quit";
-  return "Type URL  Enter Download  1/2/3 Tabs  q Quit";
+  if (active === "library") return "Type Cache Search · Esc Actions  Enter Play Now  Ctrl+1/2/3 Tabs";
+  return "Type URL · Esc Actions  Enter Download  Ctrl+1/2/3 Tabs";
 }
 
 function nextTab(active: UiState["activeTab"]): UiState["activeTab"] {
   return active === "playback" ? "library" : active === "library" ? "downloader" : "playback";
+}
+
+function tabLabel(active: UiState["activeTab"]): string {
+  return active === "playback" ? "Playback" : active === "library" ? "Library" : "YouTube Downloader";
+}
+
+function contextualHelp(active: UiState["activeTab"]): string {
+  if (active === "playback") return "j/k Move · x Remove · J/K Reorder · C Clear";
+  if (active === "library") return "/ Focus Cache Search · Enter Play Now";
+  return "u Focus URL · Enter Submit";
 }
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
