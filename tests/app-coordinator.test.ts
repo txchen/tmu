@@ -379,6 +379,37 @@ describe("AppCoordinator", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/resolved/local/c" }]);
   });
 
+  test("Play Now keeps the requested Track Current when playback is unavailable", async () => {
+    const former = track("local", "former", "Former");
+    const requested = track("local", "requested", "Requested");
+    const queue = new MemoryQueue();
+    queue.enqueue(former);
+    queue.startAt(0);
+    const dependencyHealth = createDefaultDependencyHealth();
+    dependencyHealth.playback = { enabled: false, message: "Playback disabled: mpv not found" };
+    const appState = createInitialAppState({ local: fakeProvider("local") }, { dependencyHealth });
+    appState.playback.currentTrackIdentity = former.identity;
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState,
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    await coordinator.dispatch({ type: "playNow", target: requested });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([former, requested]);
+    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    expect(coordinator.appState.playback).toMatchObject({
+      status: "error",
+      positionSeconds: 0,
+      currentTrackIdentity: requested.identity,
+      message: "Playback disabled: mpv not found",
+    });
+    expect(player.loaded).toEqual([]);
+  });
+
   test("resolves a Music Collection completely before applying its Queue transformation", async () => {
     const a = track("local", "a", "A");
     const b = track("remote", "b", "B");

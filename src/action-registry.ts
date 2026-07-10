@@ -266,7 +266,8 @@ function queueTrackAction(options: {
 }): ActionDefinition {
   return {
     ...options,
-    applies: (context) => context.uiState.activeTargetId === "queue",
+    applies: (context) => context.uiState.activeTargetId === "queue"
+      && context.uiState.overlays.length === 0,
     enabled: (context) => selectedQueueTrack(context) !== null,
     disabledReason: (context) => selectedQueueTrack(context) ? null : "Queue is empty",
     createIntent: (context) => {
@@ -285,7 +286,8 @@ function providerTargetAction(options: {
 }): ActionDefinition {
   return {
     ...options,
-    applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTarget(context) !== null,
+    applies: (context) => selectedProviderTarget(context) !== null
+      && (context.uiState.activeTargetId !== "queue" || selectedOverlayTarget(context) !== null),
     enabled: (context) => selectedProviderTarget(context) !== null,
     disabledReason: (context) => selectedProviderTarget(context) ? null : "No playable target selected",
     createIntent: (context) => {
@@ -368,6 +370,8 @@ function selectedQueueTrack(context: ActionContext): Track | null {
 
 function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
   if (context.selectedPlayableTarget) return context.selectedPlayableTarget;
+  const overlayTarget = selectedOverlayTarget(context);
+  if (overlayTarget) return overlayTarget;
   const providerId = context.uiState.activeTargetId;
   const provider = context.appState.providers[providerId];
   if (!provider) return null;
@@ -378,4 +382,9 @@ function selectedProviderTarget(context: ActionContext): PlayableTarget | null {
       ?? null;
   }
   return provider.visibleTracks[index] ?? null;
+}
+
+function selectedOverlayTarget(context: ActionContext): PlayableTarget | null {
+  const overlay = context.uiState.overlays.at(-1);
+  return overlay?.focus === "results" ? overlay.selectedPlayableTarget ?? null : null;
 }

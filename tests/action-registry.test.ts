@@ -219,6 +219,7 @@ describe("root input router", () => {
       resolve: { providerId: "navidrome", operation: "album-tracks" as const, collectionId: "night-drive" },
     };
     let resolutions = 0;
+    let cancelResolution = true;
     const appState = createInitialAppState({
       navidrome: {
         id: "navidrome",
@@ -228,15 +229,24 @@ describe("root input router", () => {
         playableTargetAt: () => collection,
         resolveMusicCollection: async () => {
           resolutions += 1;
+          if (cancelResolution) return { status: "cancelled" as const };
           return { status: "resolved" as const, tracks: [cinder, drift] };
         },
         resolvePlaybackLocator: async (identity) => ({ kind: "file" as const, path: `/remote/${identity.stableId}` }),
       },
     });
     const uiState = createInitialUiState();
-    uiState.activeTargetId = "navidrome";
-    uiState.focusedPane = "content";
+    uiState.activeTargetId = "queue";
+    uiState.focusedPane = "queue";
     uiState.providerLocation = { providerId: "navidrome", path: [] };
+    uiState.overlays = [{
+      kind: "music-picker",
+      focus: "results",
+      query: "night",
+      selectedIdentity: null,
+      selectedPlayableTarget: collection,
+      scroll: 0,
+    }];
     const queue = new MemoryQueue();
     queue.enqueue(amber);
     queue.startAt(0);
@@ -253,12 +263,19 @@ describe("root input router", () => {
     });
 
     await router.route("\r");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([amber.title]);
+    expect(coordinator.appState.lastEvent).toBe("Music Collection resolution cancelled");
+    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+
+    cancelResolution = false;
+    await router.route("\r");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
       amber.title,
       cinder.title,
       drift.title,
     ]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
 
     await router.route("\x1b[13;2u");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
@@ -267,7 +284,8 @@ describe("root input router", () => {
       drift.title,
     ]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cinder.identity);
-    expect(resolutions).toBe(2);
+    expect(coordinator.uiState.overlays.at(-1)?.selectedPlayableTarget).toEqual(collection);
+    expect(resolutions).toBe(3);
   });
 
   test("keeps superseded legacy bindings inert", async () => {

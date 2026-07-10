@@ -85,6 +85,10 @@ export class RootInputRouter {
       this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
       return true;
     }
+    if (overlay?.focus === "results" && (key === "\r" || key === "\x1b[13;2u")) {
+      await this.dispatchBinding(key);
+      return true;
+    }
     if (overlay) return true;
 
     if (this.uiState.snapshot.activePrompt) {
