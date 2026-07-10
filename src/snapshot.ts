@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { LastQueueSnapshot, LastQueueSnapshotEntry, QueueEntry, SnapshotTrack, Track, VolumeState } from "./domain";
+import { YOUTUBE_CACHE_PROVIDER_ID, type LastQueueSnapshot, type LastQueueSnapshotEntry, type QueueState, type SnapshotTrack, type Track, type VolumeState } from "./domain";
 import { JsonRecoveryMessages } from "./json-persistence";
 
 export type LastQueueSnapshotPersistence = {
@@ -100,7 +100,7 @@ export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersis
 }
 
 export function createLastQueueSnapshot(
-  queue: Omit<LastQueueSnapshot, "version" | "volume">,
+  queue: Pick<QueueState, "entries" | "currentIndex" | "shuffle" | "repeatAll">,
   volume: VolumeState,
   positionSeconds: number | null | undefined = 0,
 ): LastQueueSnapshot {
@@ -108,7 +108,6 @@ export function createLastQueueSnapshot(
     version: 1,
     entries: queue.entries.map((entry) => ({
       track: snapshotTrackFromTrack(entry.track),
-      availability: entry.availability,
     })),
     currentIndex: queue.currentIndex,
     shuffle: queue.shuffle,
@@ -123,7 +122,6 @@ function cloneSnapshot(snapshot: LastQueueSnapshot): LastQueueSnapshot {
     version: 1,
     entries: snapshot.entries.map((entry) => ({
       track: snapshotTrackFromTrack(entry.track),
-      availability: cloneAvailability(entry.availability),
     })),
     currentIndex: snapshot.currentIndex,
     shuffle: snapshot.shuffle,
@@ -167,17 +165,13 @@ function parseSnapshot(value: unknown): LastQueueSnapshot | null {
 
 function parseSnapshotEntry(value: unknown): LastQueueSnapshotEntry | null {
   if (!isObject(value) || !isObject(value.track) || !isObject(value.track.identity)) return null;
-  if (typeof value.track.identity.providerId !== "string") return null;
+  if ("availability" in value) return null;
+  if (value.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) return null;
   if (typeof value.track.identity.stableId !== "string") return null;
   if (typeof value.track.title !== "string") return null;
   if (typeof value.track.providerLabel !== "string") return null;
-  if (!isObject(value.availability) || typeof value.availability.status !== "string") return null;
-  if (!["unknown", "available", "unavailable"].includes(value.availability.status)) return null;
-  if (value.availability.status === "unavailable" && typeof value.availability.reason !== "string") return null;
-
   return {
     track: snapshotTrackFromTrack(value.track as Track),
-    availability: cloneAvailability(value.availability as QueueEntry["availability"]),
   };
 }
 
@@ -205,11 +199,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function cloneAvailability(entry: QueueEntry["availability"]): QueueEntry["availability"] {
-  if (entry.status === "unavailable") return { status: "unavailable", reason: entry.reason };
-  return { status: entry.status };
-}
-
 function snapshotTrackFromTrack(track: Track | SnapshotTrack): SnapshotTrack {
   const snapshotTrack: SnapshotTrack = {
     identity: {
@@ -220,9 +209,7 @@ function snapshotTrackFromTrack(track: Track | SnapshotTrack): SnapshotTrack {
     providerLabel: track.providerLabel,
   };
   if (track.artist !== undefined) snapshotTrack.artist = track.artist;
-  if (track.album !== undefined) snapshotTrack.album = track.album;
   if (track.durationSeconds !== undefined) snapshotTrack.durationSeconds = track.durationSeconds;
-  if (track.coverArtId !== undefined) snapshotTrack.coverArtId = track.coverArtId;
   return snapshotTrack;
 }
 

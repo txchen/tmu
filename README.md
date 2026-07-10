@@ -1,10 +1,10 @@
 # TMU
 
-TMU is a lean terminal music player focused on a shared Queue across Local, Navidrome, and Offline YouTube Cache Providers, with a YouTube URL Download Flow for adding cached Tracks.
+TMU is a lean terminal music player focused on downloading YouTube media, caching it on disk, and playing Tracks from that YouTube Cache.
 
 ## YouTube URL Download
 
-YouTube URL Download stores downloaded audio in the Offline YouTube Cache. Users are responsible for downloading and keeping only content they have the right to download and keep.
+YouTube URL Download stores downloaded audio in the YouTube Cache without adding it to the Queue. Users are responsible for downloading and keeping only content they have the right to download and keep.
 
 ## Install and run
 

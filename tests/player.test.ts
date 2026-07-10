@@ -311,10 +311,13 @@ describe("MpvPlayer", () => {
     });
 
     await player.start();
-    await player.load({ kind: "url", url: "https://example.test/song.flac" });
+    await player.load({ kind: "file", path: "/cache/song.flac" });
 
     expect(adapter.ipc.sent.at(-1)).toEqual({
-      command: ["loadfile", "https://example.test/song.flac", "replace"],
+      command: ["loadfile", "/cache/song.flac", "replace", -1, {
+        "audio-pitch-correction": "no",
+        "demuxer-thread": "no",
+      }],
       request_id: 6,
     });
 

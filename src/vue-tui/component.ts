@@ -1,24 +1,13 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
-import {
-  createActionRegistry,
-  footerActions,
-  searchDiscoveryActions,
-  type ActionRegistry,
-  type ResolvedAction,
-} from "../action-registry";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
-import { isRestoredPlayback, sameIdentity, type ConfirmationKind, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
-import { RootInputRouter } from "../input-router";
-import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
-import { dispatchTerminalResize } from "./resize";
-import { overlayContentRows, overlayGeometry } from "../provider-navigation";
-import { globalSearchRows, type GlobalSearchRow } from "../global-search";
+import type { QueueEntry, UiState } from "../domain";
 import {
   StatePublicationGate,
   type PublicationCause,
   type PublicationSnapshot,
 } from "../state-publication";
+import { dispatchTerminalResize } from "./resize";
 
 export type TmuRootOptions = {
   coordinator: AppCoordinator;
@@ -27,8 +16,6 @@ export type TmuRootOptions = {
 };
 
 export function createTmuRoot(options: TmuRootOptions) {
-  const presentation = createPresentation(options);
-  const registry = createActionRegistry();
   return defineComponent({
     name: "TmuRoot",
     setup() {
@@ -38,533 +25,278 @@ export function createTmuRoot(options: TmuRootOptions) {
         identities: coordinator.queueTrackIdentities(),
         preferredIdentity: coordinator.appState.playback.currentTrackIdentity,
       });
-
       const cadence = coordinator.appState.config.lowPower;
       const publication = new StatePublicationGate({
         readState: () => ({ appState: coordinator.appState, uiState: coordinator.uiState }),
         cadence: {
           playbackCadenceMs: cadence.playbackProgressMs,
           downloadProgressMs: cadence.downloadProgressThrottleMs,
-          providerProgressMs: cadence.providerProgressThrottleMs,
+          providerProgressMs: cadence.libraryProgressThrottleMs,
         },
       });
-      const snapshot = shallowRef<PublicationSnapshot>(publication.publishInitial());
-      const publishSnapshot = (next: PublicationSnapshot) => {
-        snapshot.value = next;
-      };
-      const unsubscribePublication = publication.subscribe(publishSnapshot);
+      const snapshot = shallowRef(publication.publishInitial());
+      const unsubscribePublication = publication.subscribe((next) => { snapshot.value = next; });
       const unsubscribeCoordinator = coordinator.onStateChange((reason) => {
         publication.notify(publicationCause(reason));
       });
-
       const app = useApp();
-      const router = new RootInputRouter({
-        registry,
-        appState: () => coordinator.appState,
-        uiState: {
-          get snapshot() {
-            return coordinator.uiState;
-          },
-          dispatch(action) {
-            return coordinator.dispatchUi(action);
-          },
-        },
-        dispatchApp: (intent) => coordinator.dispatch(intent),
-        requestQuit: () => app.exit(),
-      });
       const { columns, rows } = useWindowSize();
-
       watch([columns, rows], ([nextColumns, nextRows]) => {
         dispatchTerminalResize(coordinator, nextColumns, nextRows);
         publication.notify("resize");
       }, { immediate: true });
 
       useInput((input, key) => {
-        const routedKey = terminalKey(input, key);
-        void routeInput(routedKey);
+        void routeInput(input, key);
       });
 
-      async function routeInput(key: string): Promise<void> {
-        await router.route(key);
+      async function routeInput(input: string, key: InputKey): Promise<void> {
+        const ui = coordinator.uiState;
+        if (ui.pendingConfirmation) {
+          if (input === "y" || key.return) {
+            if (ui.pendingConfirmation.kind === "clear-queue") await coordinator.dispatch({ type: "clearQueue" });
+            coordinator.dispatchUi({ type: "cancelConfirmation" });
+          } else if (input === "n" || key.escape) {
+            coordinator.dispatchUi({ type: "cancelConfirmation" });
+          }
+          publication.notify("input");
+          return;
+        }
+        if (ui.overlays.length > 0) {
+          if (key.escape || input === "q") coordinator.dispatchUi({ type: "dismissOverlay" });
+          publication.notify("input");
+          return;
+        }
+        if (key.ctrl && input === "c" || input === "q" && ui.activeTab === "playback") {
+          app.exit();
+          return;
+        }
+        if (input === "1") coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
+        else if (input === "2") coordinator.dispatchUi({ type: "switchTab", tab: "library" });
+        else if (input === "3") coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
+        else if (key.tab) coordinator.dispatchUi({ type: "switchTab", tab: nextTab(ui.activeTab) });
+        else if (input === " " && ui.activeTab !== "downloader") {
+          const selected = coordinator.appState.queue.entries[ui.selectedQueueIndex];
+          if (coordinator.appState.queue.currentIndex < 0 && selected) {
+            await coordinator.dispatch({ type: "playNow", target: selected.track });
+          } else {
+            await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
+          }
+        } else if (ui.activeTab === "playback") {
+          await routePlayback(input, key, coordinator);
+        } else if (ui.activeTab === "library") {
+          await routeLibrary(input, key, coordinator);
+        } else {
+          await routeDownloader(input, key, coordinator);
+        }
         publication.notify("input");
       }
 
       onScopeDispose(() => {
-        router.cancelPendingSequence();
         unsubscribeCoordinator();
         unsubscribePublication();
         publication.stop();
       });
 
-      return () => renderTmu(snapshot.value, presentation, registry);
+      return () => render(snapshot.value);
     },
   });
 }
 
-type Presentation = {
-  markers: { selected: string; current: string; unavailable: string };
-  useColor: boolean;
-  dimmed: boolean;
-};
-
-function createPresentation(options: TmuRootOptions): Presentation {
-  const measure = options.measureCellWidth ?? Bun.stringWidth;
-  const locale = process.env.LC_ALL ?? process.env.LC_CTYPE ?? process.env.LANG;
-  const unicodeEnvironment = locale !== "C" && locale !== "POSIX" && process.env.TERM !== "dumb";
-  const unicode = unicodeEnvironment && ["›", "●", "!"].every((marker) => measure(marker) === 1);
-  return {
-    markers: unicode
-      ? { selected: "›", current: "●", unavailable: "!" }
-      : { selected: ">", current: "*", unavailable: "!" },
-    useColor: !(options.noColor ?? process.env.NO_COLOR !== undefined),
-    dimmed: false,
-  };
+async function routePlayback(
+  input: string,
+  key: InputKey,
+  coordinator: AppCoordinator,
+): Promise<void> {
+  const identities = coordinator.queueTrackIdentities();
+  if (input === "j" || key.downArrow) {
+    coordinator.dispatchUi({
+      type: "selectQueue",
+      index: coordinator.uiState.selectedQueueIndex + 1,
+      identities,
+    });
+  } else if (input === "k" || key.upArrow) {
+    coordinator.dispatchUi({
+      type: "selectQueue",
+      index: coordinator.uiState.selectedQueueIndex - 1,
+      identities,
+    });
+  } else if (key.return) {
+    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    if (selected) await coordinator.dispatch({ type: "playNext", target: selected.track });
+  } else if (input === "x") {
+    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    if (selected) await coordinator.dispatch({ type: "removeQueueTrack", identity: selected.track.identity });
+  } else if (input === "J" || input === "K") {
+    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    if (selected) await coordinator.dispatch({
+      type: "moveQueueTrack",
+      identity: selected.track.identity,
+      delta: input === "J" ? 1 : -1,
+    });
+  } else if (input === "C") coordinator.dispatchUi({ type: "requestConfirmation", kind: "clear-queue" });
+  else if (input === "z") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
+  else if (input === "r") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
+  else if (input === "h" || key.leftArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: -5 });
+  else if (input === "l" || key.rightArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: 5 });
+  else if (input === "+") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: 5 });
+  else if (input === "-") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: -5 });
+  else if (input === "?") coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
+  else if (input === ":") coordinator.dispatchUi({ type: "openOverlay", kind: "command-palette" });
+  else if (input === "n") await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
+  else if (input === "p") await coordinator.dispatch({ type: "playerOperation", operation: "previous-track" });
+  else if (input === "s") await coordinator.dispatch({ type: "playerOperation", operation: "stop" });
 }
 
-function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, registry: ActionRegistry) {
-  const { appState, uiState } = snapshot;
-  const tier = uiState.terminal.tier;
-  const current = appState.queue.entries[appState.queue.currentIndex];
-  const overlay = uiState.overlays.at(-1);
-  const underlyingPresentation = { ...presentation, dimmed: Boolean(overlay || uiState.pendingConfirmation) };
+async function routeLibrary(
+  input: string,
+  key: InputKey,
+  coordinator: AppCoordinator,
+): Promise<void> {
+  const provider = coordinator.appState.providers["youtube-cache"];
+  const tracks = provider.searchTracks(coordinator.uiState.library.query);
+  if (key.return) {
+    const track = tracks[coordinator.uiState.library.selectedIndex];
+    if (track) await coordinator.dispatch({ type: "playNow", target: track });
+  } else if (key.backspace || key.delete) {
+    coordinator.dispatchUi({
+      type: "setLibraryQuery",
+      query: coordinator.uiState.library.query.slice(0, -1),
+    });
+  } else if (input.length > 0 && !key.ctrl && !key.meta) {
+    coordinator.dispatchUi({
+      type: "setLibraryQuery",
+      query: coordinator.uiState.library.query + input,
+    });
+  }
+}
 
-  if (tier === "terminal-too-small") {
+async function routeDownloader(
+  input: string,
+  key: InputKey,
+  coordinator: AppCoordinator,
+): Promise<void> {
+  if (key.return) {
+    const url = coordinator.uiState.downloader.urlInput.trim();
+    if (url) await coordinator.dispatch({ type: "downloadOperation", operation: "start", url });
+  } else if (key.backspace || key.delete) {
+    coordinator.dispatchUi({
+      type: "setDownloaderInput",
+      value: coordinator.uiState.downloader.urlInput.slice(0, -1),
+    });
+  } else if (input.length > 0 && !key.ctrl && !key.meta) {
+    coordinator.dispatchUi({
+      type: "setDownloaderInput",
+      value: coordinator.uiState.downloader.urlInput + input,
+    });
+  }
+}
+
+function render(snapshot: PublicationSnapshot) {
+  const { appState, uiState } = snapshot;
+  if (uiState.terminal.tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
       h(Text, { bold: true }, () => "Terminal too small"),
       h(Text, () => "Need 60×16 · state preserved · resize to continue"),
     ]);
   }
 
-  const settings = queueSettings(appState.queue.shuffle, appState.queue.repeatAll, appState.volume);
-  const queueWidth = queuePaneWidth(tier, uiState.terminal.columns);
-  const selectedEntry = selectedUnavailableQueueEntry(appState.queue.entries, uiState.selectedQueueIdentity);
-  const exceptionalGuidance = selectedEntry?.availability.status === "unavailable"
-    ? `${selectedEntry.availability.reason} · Retry`
-    : "";
-  const diagnostic = appState.appErrors.at(-1) ?? "";
-  const visibleRows = queueHomeVisibleRows(
-    tier,
-    uiState.terminal.rows,
-    exceptionalGuidance.length > 0 || diagnostic.length > 0,
-  );
-  const start = Math.min(uiState.queueScroll, Math.max(0, appState.queue.entries.length - visibleRows));
-  const entries = appState.queue.entries.slice(start, start + visibleRows);
-  const currentState = playingTrackState(current, appState.playback);
-  const hasLayer = Boolean(overlay || uiState.pendingConfirmation);
-  const footer = footerText(
-    tier,
-    uiState.pendingVimChord !== null,
-    uiState.terminal.columns,
-    footerActions(registry, {
-      appState,
-      uiState,
-      selectedProviderId: overlay?.kind === "music-picker"
-        ? snapshot.providerNavigationRows[overlay.selectedResultIndex ?? 0]?.providerId ?? overlay.providerLocation?.providerId
-        : null,
-    }),
-  );
-
   return h(Box, {
     flexDirection: "column",
     width: uiState.terminal.columns,
     height: uiState.terminal.rows,
-    position: "relative",
   }, () => [
-    h(Box, { flexDirection: "row", justifyContent: "space-between", width: "100%" }, () => [
-      h(Text, { bold: true, dimColor: hasLayer, wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
-      tier === "narrow" ? null : h(Text, { dimColor: true, wrap: "truncate-start" }, () => settings),
-    ]),
-    tier === "narrow"
-      ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, settings, start, exceptionalGuidance)
-      : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
-    diagnostic ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => `! ${diagnostic}`) : null,
-    h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
-    overlay ? overlayView(overlay, snapshot, registry, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
-    uiState.pendingConfirmation ? confirmationView(
-      uiState.pendingConfirmation.kind,
-      uiState.pendingConfirmation.choice,
-      tier,
-      uiState.terminal.columns,
-      uiState.terminal.rows,
-    ) : null,
+    h(Text, { bold: true }, () => tabHeader(uiState.activeTab)),
+    uiState.activeTab === "playback"
+      ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState)
+      : uiState.activeTab === "library"
+        ? libraryView(snapshot)
+        : downloaderView(snapshot),
+    appState.appErrors.at(-1)
+      ? h(Text, { color: "yellow", wrap: "truncate-end" }, () => `! ${appState.appErrors.at(-1)}`)
+      : null,
+    uiState.overlays.at(-1) ? h(Text, { bold: true }, () =>
+      uiState.overlays.at(-1)?.kind === "shortcut-help"
+        ? "Playback Help · j/k Move · Space Play · x Remove · J/K Reorder · C Clear · Esc Close"
+        : "Command Palette · Playback · Library · YouTube Downloader · Esc Close") : null,
+    uiState.pendingConfirmation ? h(Text, { bold: true }, () => "Clear Queue permanently? y Confirm · n Cancel") : null,
+    h(Text, { dimColor: true }, () => footer(uiState.activeTab)),
   ]);
 }
 
-function horizontalContent(
-  entries: readonly QueueEntry[],
-  current: QueueEntry | undefined,
-  state: PlayingTrackState,
-  currentIndex: number,
-  uiState: PublicationSnapshot["uiState"],
-  queueWidth: number,
-  presentation: Presentation,
-  tier: "wide" | "medium",
-  start: number,
-) {
-  return h(Box, { flexDirection: "row", gap: 2, flexGrow: 1 }, () => [
-    queuePane(entries, currentIndex, uiState, queueWidth, presentation, tier, start),
-    h(Box, { flexDirection: "column", flexGrow: tier === "wide" ? 2 : 1, flexBasis: 0 }, () => [
-      h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Playing Track"),
-      h(Text, { bold: state.kind === "playing", dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.headline),
-      current?.track.artist ? h(Text, { dimColor: presentation.dimmed, wrap: "truncate-end" }, () => current.track.artist) : null,
-      tier === "wide" && current?.track.album ? h(Text, { dimColor: presentation.dimmed, wrap: "truncate-end" }, () => current.track.album) : null,
-      tier === "wide" && current ? h(Text, { dimColor: true, wrap: "truncate-end" }, () => `${current.track.providerLabel} · ${formatDuration(current.track.durationSeconds)}`) : null,
-      state.guidance ? h(Text, { dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.guidance) : null,
-      state.kind === "unavailable" ? h(Text, { dimColor: presentation.dimmed, color: presentation.useColor ? "yellow" : undefined }, () => "Retry or choose another Track") : null,
-    ]),
-  ]);
+function tabHeader(active: UiState["activeTab"]): string {
+  const tab = (id: UiState["activeTab"], label: string) => active === id ? `[${label}]` : label;
+  return `${tab("playback", "1 Playback")}  ${tab("library", "2 Library")}  ${tab("downloader", "3 YouTube Downloader")}`;
 }
 
-function narrowContent(
+function playbackView(
   entries: readonly QueueEntry[],
-  current: QueueEntry | undefined,
-  state: PlayingTrackState,
   currentIndex: number,
   uiState: PublicationSnapshot["uiState"],
-  queueWidth: number,
-  presentation: Presentation,
-  settings: string,
-  start: number,
-  exceptionalGuidance: string,
 ) {
+  const lines = entries.length === 0
+    ? ["Queue is empty"]
+    : entries.map((entry, index) => {
+      const selected = index === uiState.selectedQueueIndex ? ">" : " ";
+      const current = index === currentIndex ? "*" : " ";
+      const unavailable = entry.availability.status === "unavailable" ? "!" : " ";
+      return `${selected}${current}${unavailable} ${entry.track.title} · ${entry.track.providerLabel}`;
+    });
+  return h(Box, { flexDirection: "column", flexGrow: 1 }, () =>
+    lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)));
+}
+
+function libraryView(snapshot: PublicationSnapshot) {
+  const provider = snapshot.appState.providers["youtube-cache"];
+  const query = snapshot.uiState.library.query.toLocaleLowerCase();
+  const tracks = (provider?.tracks ?? []).filter((track) =>
+    !query || [track.title, track.artist, track.identity.stableId]
+      .some((value) => value?.toLocaleLowerCase().includes(query))
+  );
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, { bold: true, dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => current
-      ? `Current: ${current.track.title} · ${state.shortLabel} · ${settings}`
-      : `Current: No Current Track · ${settings}`),
-    queuePane(entries, currentIndex, uiState, queueWidth, presentation, "narrow", start),
-    exceptionalGuidance ? h(Text, { dimColor: presentation.dimmed, color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => exceptionalGuidance) : null,
+    h(Text, () => `Cache Search: ${snapshot.uiState.library.query || "(type to search)"}`),
+    ...tracks.map((track, index) =>
+      h(Text, { wrap: "truncate-end" }, () =>
+        `${index === snapshot.uiState.library.selectedIndex ? ">" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
+      )),
+    tracks.length === 0 ? h(Text, { dimColor: true }, () => "No cached Tracks") : null,
   ]);
 }
 
-function queuePane(
-  entries: readonly QueueEntry[],
-  currentIndex: number,
-  uiState: PublicationSnapshot["uiState"],
-  width: number,
-  presentation: Presentation,
-  tier: "wide" | "medium" | "narrow",
-  start: number,
-) {
-  return h(Box, { flexDirection: "column", flexGrow: tier === "wide" ? 3 : 2, flexBasis: 0, overflow: "hidden" }, () => [
-    h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Queue"),
-    entries.length === 0
-      ? h(Box, { flexDirection: "column" }, () => [
-          h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Queue is empty"),
-          h(Text, { dimColor: presentation.dimmed }, () => "/ Global Search"),
-          h(Text, { dimColor: presentation.dimmed }, () => "o Music Providers"),
-          h(Text, { dimColor: presentation.dimmed }, () => "u YouTube URL Download"),
-        ])
-      : entries.map((entry, visibleIndex) => {
-          const index = start + visibleIndex;
-          const selected = sameIdentity(entry.track.identity, uiState.selectedQueueIdentity);
-          const isCurrent = index === currentIndex;
-          const unavailable = entry.availability.status === "unavailable";
-          return h(Text, {
-            inverse: selected,
-            dimColor: presentation.dimmed,
-            bold: isCurrent,
-            color: unavailable && presentation.useColor ? "yellow" : undefined,
-            wrap: "truncate-end",
-          }, () => formatQueueRow(entry, tier, width, presentation.markers, { selected, current: isCurrent, unavailable }));
-        }),
+function downloaderView(snapshot: PublicationSnapshot) {
+  const downloads = snapshot.appState.downloads;
+  return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
+    h(Text, () => `YouTube URL: ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`),
+    h(Text, { dimColor: !downloads.active }, () =>
+      downloads.active ? "Download active" : "No active downloads"),
+    ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
   ]);
 }
 
-function formatQueueRow(
-  entry: QueueEntry,
-  tier: "wide" | "medium" | "narrow",
-  width: number,
-  markers: Presentation["markers"],
-  state: { selected: boolean; current: boolean; unavailable: boolean },
-): string {
-  const prefix = `${state.selected ? markers.selected : " "} ${state.current ? markers.current : " "} ${state.unavailable ? markers.unavailable : " "} `;
-  const duration = formatDuration(entry.track.durationSeconds);
-  if (tier === "narrow") {
-    const status = state.unavailable ? "Unavailable" : duration;
-    return columnLine(prefix, width, [entry.track.title, status], [Math.max(8, width - Bun.stringWidth(prefix) - Bun.stringWidth(status) - 1), Bun.stringWidth(status)]);
-  }
-  if (state.unavailable) {
-    const reason = entry.availability.status === "unavailable" ? entry.availability.reason : "Unavailable";
-    const reasonWidth = tier === "wide" ? 26 : 20;
-    return columnLine(prefix, width, [entry.track.title, reason], [Math.max(8, width - Bun.stringWidth(prefix) - reasonWidth - 1), reasonWidth]);
-  }
-  if (tier === "medium") {
-    return columnLine(prefix, width, [entry.track.title, entry.track.artist ?? "Unknown Artist", duration], [Math.max(8, width - Bun.stringWidth(prefix) - 20), 13, 5]);
-  }
-  return columnLine(prefix, width, [entry.track.title, entry.track.artist ?? "Unknown Artist", entry.track.providerLabel, duration], [Math.max(8, width - Bun.stringWidth(prefix) - 32), 13, 10, 5]);
+function footer(active: UiState["activeTab"]): string {
+  if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
+  if (active === "library") return "Type Cache Search  Enter Play Now  Space Play/Pause  1/2/3 Tabs  q Quit";
+  return "Type URL  Enter Download  1/2/3 Tabs  q Quit";
 }
 
-function columnLine(prefix: string, width: number, values: readonly string[], widths: readonly number[]): string {
-  const columns = values.map((value, index) => padCell(truncateCell(value, widths[index] ?? 1), widths[index] ?? 1));
-  return truncateCell(`${prefix}${columns.join(" ")}`.trimEnd(), width);
-}
-
-function truncateCell(value: string, width: number): string {
-  if (width <= 0) return "";
-  if (Bun.stringWidth(value) <= width) return value;
-  if (width === 1) return "…";
-  let result = "";
-  for (const character of value) {
-    if (Bun.stringWidth(result + character) > width - 1) break;
-    result += character;
-  }
-  return `${result}…`;
-}
-
-function padCell(value: string, width: number): string {
-  return `${value}${" ".repeat(Math.max(0, width - Bun.stringWidth(value)))}`;
-}
-
-type PlayingTrackState = { kind: "empty" | "playing" | "paused" | "stopped" | "restored" | "unavailable"; headline: string; shortLabel: string; guidance: string };
-
-function playingTrackState(current: QueueEntry | undefined, playback: PublicationSnapshot["appState"]["playback"]): PlayingTrackState {
-  if (!current) return { kind: "empty", headline: "No Current Track", shortLabel: "Idle", guidance: "Choose a Track to begin" };
-  if (current.availability.status === "unavailable" || playback.status === "error") {
-    const reason = current.availability.status === "unavailable"
-      ? current.availability.reason
-      : playback.message ?? "Playback failed";
-    return { kind: "unavailable", headline: `Unavailable · ${current.track.title}`, shortLabel: "Unavailable", guidance: reason };
-  }
-  if (playback.status === "playing") {
-    const position = typeof playback.positionSeconds === "number" ? ` · ${formatDuration(playback.positionSeconds)}` : "";
-    return { kind: "playing", headline: `Playing · ${current.track.title}${position}`, shortLabel: "Playing", guidance: "" };
-  }
-  if (playback.status === "stopped") return { kind: "stopped", headline: `Stopped · starts from beginning`, shortLabel: "Stopped", guidance: "Space to Play from the beginning" };
-  if (isRestoredPlayback(playback)) {
-    const position = formatDuration(playback.positionSeconds ?? 0);
-    return { kind: "restored", headline: `Restored · Resume from ${position}`, shortLabel: `Resume ${position}`, guidance: "Space to Resume" };
-  }
-  if (playback.status === "paused") return { kind: "paused", headline: "Paused · Space to Resume", shortLabel: "Paused", guidance: "Resume keeps the current position" };
-  return { kind: "stopped", headline: `Stopped · starts from beginning`, shortLabel: "Stopped", guidance: "Space to Play from the beginning" };
-}
-
-function queuePaneWidth(tier: ResponsiveTier, columns: number): number {
-  if (tier === "narrow") return columns;
-  const usable = Math.max(1, columns - 2);
-  return tier === "wide" ? Math.floor(usable * 0.6) : Math.floor(usable * (2 / 3));
-}
-
-function queueSettings(shuffle: boolean, repeatAll: boolean, volume: PublicationSnapshot["appState"]["volume"]): string {
-  return `Shuffle ${shuffle ? "On" : "Off"} · Repeat ${repeatAll ? "All" : "Off"} · Vol ${volume.ready ? `${volume.percent}%` : "—"}`;
-}
-
-function footerText(
-  tier: ResponsiveTier,
-  pendingG: boolean,
-  columns: number,
-  actions: readonly ResolvedAction[],
-): string {
-  if (pendingG) {
-    const discovery = actions.filter((action) => action.enabled
-      && (action.id === "help.open" || action.id === "palette.open"));
-    return truncateCell(["g… Go to first", ...discovery.map(formatFooterAction)].join("  "), columns);
-  }
-  const tierIds = tier === "narrow"
-    ? ["player.toggle-play-pause", "help.open", "palette.open"]
-    : tier === "medium"
-      ? ["player.toggle-play-pause", "queue.play-next", "picker.open-navigation", "help.open", "palette.open"]
-      : ["player.toggle-play-pause", "queue.play-next", "queue.remove", "picker.open-navigation", "help.open", "palette.open"];
-  const enabled = new Map(actions.filter((action) => action.enabled).map((action) => [action.id, action]));
-  return truncateCell(tierIds.flatMap((id) => {
-    const action = enabled.get(id);
-    return action ? [formatFooterAction(action)] : [];
-  }).join("  "), columns);
-}
-
-function formatFooterAction(action: ResolvedAction): string {
-  const label = action.name.replaceAll(" / ", "/");
-  return `${action.bindings[0] ?? ""} ${label}`.trim();
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "--:--";
-  const rounded = Math.floor(seconds);
-  return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
-}
-
-function overlayView(
-  overlay: PickerOverlay,
-  snapshot: PublicationSnapshot,
-  registry: ActionRegistry,
-  tier: ResponsiveTier,
-  columns: number,
-  terminalRows: number,
-) {
-  const searchActive = overlay.kind === "music-picker" && Boolean(snapshot.appState.globalSearch.query);
-  const rows = searchActive
-    ? globalSearchRows(snapshot.appState.globalSearch)
-    : snapshot.providerNavigationRows;
-  const discoveryRows = overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
-      ? searchDiscoveryActions(registry, {
-        appState: snapshot.appState,
-        uiState: snapshot.uiState,
-      }, overlay.query)
-    : [];
-  const geometry = overlayGeometry(overlay.kind, tier, columns, terminalRows);
-  const contentRows = overlayContentRows(overlay.kind, tier, columns, terminalRows);
-  const visibleRows = overlay.kind === "music-picker"
-    ? rows.slice(overlay.scroll, overlay.scroll + contentRows)
-    : discoveryRows.slice(overlay.scroll, overlay.scroll + contentRows);
-  const locationSegment = overlay.providerLocation?.path.at(-1);
-  const locationDetail = locationSegment
-    ? "path" in locationSegment ? locationSegment.path
-      : "id" in locationSegment ? locationSegment.id : locationSegment.kind
-    : "";
-  const location = overlay.providerLocation?.providerId
-    ? `${overlay.providerLocation.providerId}${locationDetail ? ` · ${locationDetail}` : ""}`
-    : "Providers";
-  return h(Box, {
-    flexDirection: "column",
-    borderStyle: "single",
-    paddingX: 1,
-    width: geometry.width,
-    height: geometry.height,
-    position: "absolute",
-    left: Math.max(0, Math.floor((columns - geometry.width) / 2)),
-    top: Math.max(0, Math.floor((terminalRows - geometry.height) / 2)),
-  }, () => [
-    h(Text, { bold: true }, () => `Picker Overlay · ${overlay.kind}`),
-    overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
-      ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} ${overlay.kind === "shortcut-help" ? "Filter" : "Search"}: ${overlay.query}`)
-      : null,
-    overlay.kind === "youtube-url" && overlay.focus === "input" ? h(Text, () => `> URL: ${overlay.query}`) : null,
-    overlay.kind === "youtube-url" && overlay.focus === "results"
-      ? h(Text, { bold: true }, () => snapshot.appState.downloads.active
-        ? "Download in progress"
-        : "Download finished")
-      : null,
-    ...(overlay.kind === "youtube-url" && overlay.focus === "results"
-      ? snapshot.appState.downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line))
-      : []),
-    overlay.kind === "youtube-url" && overlay.focus === "results"
-      ? h(Text, { wrap: "truncate-end" }, () => snapshot.appState.lastEvent)
-      : null,
-    overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
-    overlay.kind === "music-picker" ? h(Text, { inverse: overlay.focus === "filter", dimColor: overlay.focus !== "filter" }, () =>
-      `Filters: Provider ${overlay.providerFilter ?? "all"} · Type ${overlay.resultTypeFilter ?? "all"}`) : null,
-    overlay.kind === "music-picker" ? h(Text, { dimColor: true }, () => location) : null,
-    overlay.kind === "music-picker" && overlay.message
-      ? h(Text, { wrap: "truncate-end" }, () => `! ${overlay.message}`)
-      : null,
-    ...(overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
-      ? visibleRows.map((action, visibleIndex) => {
-          const resolved = action as ResolvedAction;
-          const index = overlay.scroll + visibleIndex;
-          const selected = index === (overlay.selectedResultIndex ?? 0);
-          const bindings = resolved.bindings.length ? resolved.bindings.join(", ") : "Palette only";
-          const aliases = resolved.aliases.length ? ` · aliases: ${resolved.aliases.join(", ")}` : "";
-          const disabled = resolved.enabled ? "" : ` · Disabled: ${resolved.disabledReason ?? "Unavailable"}`;
-          return h(Text, {
-            inverse: selected,
-            dimColor: !resolved.enabled,
-            wrap: "truncate-end",
-          }, () => `${selected ? "›" : " "} ${resolved.name} · ${bindings}${aliases}${disabled}`);
-        })
-      : visibleRows.map((row, visibleIndex) => {
-      const index = overlay.scroll + visibleIndex;
-      const selected = index === (overlay.selectedResultIndex ?? 0);
-      if (searchActive) return globalSearchRowView(row as GlobalSearchRow, selected);
-      const navigationRow = row as PublicationSnapshot["providerNavigationRows"][number];
-      const suffix = navigationRow.detail ? ` · ${navigationRow.detail}` : "";
-      return h(Text, { inverse: selected, wrap: "truncate-end" }, () => `${selected ? "›" : " "} ${navigationRow.label}${suffix}`);
-    })),
-    (overlay.kind === "shortcut-help" || overlay.kind === "command-palette") && discoveryRows.length === 0
-      ? h(Text, { dimColor: true }, () => "No matching actions")
-      : null,
-    overlay.kind === "music-picker" && rows.length === 0
-      ? h(Text, { dimColor: true }, () => "No Tracks or navigation entries")
-      : null,
-    h(Text, { dimColor: true }, () => overlay.kind === "shortcut-help"
-      ? overlay.focus === "results" ? "j/k move · / filter · q/Esc dismiss" : "Enter results · Esc results · Ctrl-w word · Ctrl-u clear"
-      : overlay.kind === "command-palette"
-        ? "Enter invoke · Esc dismiss · Ctrl-w word · Ctrl-u clear"
-        : overlay.kind === "youtube-url"
-          ? overlay.focus === "input"
-            ? "Enter download · Esc dismiss · Ctrl-w word · Ctrl-u clear"
-            : "x cancel · Esc/q dismiss · download continues"
-        : overlay.focus === "results"
-          ? searchActive ? "j/k move · Enter Play Next · l/→ open · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
-          : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
-  ]);
-}
-
-function globalSearchRowView(row: GlobalSearchRow, selected: boolean) {
-  if (row.kind === "type-heading") return h(Text, { bold: true }, () => row.label);
-  if (row.kind === "provider-heading") return h(Text, { bold: true, inverse: selected }, () => `${selected ? "› " : "  "}${row.label}`);
-  if (row.kind === "provider-status") {
-    const status = row.state.status === "loading" ? "Loading"
-      : row.state.status === "empty" ? "No results"
-      : row.state.status === "auth" ? "Authentication failed"
-      : row.state.status === "offline" ? "Offline"
-      : "Failed";
-    const retry = " · Retry";
-    return h(Text, { inverse: selected, wrap: "truncate-end" }, () =>
-      `${selected ? "› " : "  "}${row.label} · ${status}${row.state.message ? `: ${row.state.message}` : ""}${retry}`);
-  }
-  return h(Text, { inverse: selected, wrap: "truncate-end" }, () =>
-    `${selected ? "› " : "  "}${row.result.label} · ${row.result.providerLabel}${row.result.detail ? ` · ${row.result.detail}` : ""}`);
-}
-
-const CONFIRMATION_COPY: Record<ConfirmationKind, {
-  title: string; detail: string; cancel: string; action: string;
-}> = {
-  "clear-queue": {
-    title: "Clear Queue?", detail: "Stop playback, clear Current Track, and remove every Track.", cancel: "Cancel", action: "Clear",
-  },
-  "cancel-download": {
-    title: "Cancel YouTube download?", detail: "Stop the download and clean up partial files.", cancel: "Keep session", action: "Cancel download",
-  },
-  "quit-download": {
-    title: "Quit during YouTube download?", detail: "Quit will cancel the download and clean up partial files first.", cancel: "Keep session", action: "Quit",
-  },
-};
-
-function confirmationView(
-  kind: ConfirmationKind,
-  choice: "cancel" | "confirm",
-  tier: ResponsiveTier,
-  columns: number,
-  rows: number,
-) {
-  const copy = CONFIRMATION_COPY[kind];
-  const geometry = overlayGeometry("confirmation", tier, columns, rows);
-  return h(Box, {
-    flexDirection: "column", borderStyle: "single", paddingX: 1,
-    width: geometry.width, height: geometry.height, position: "absolute",
-    left: Math.max(0, Math.floor((columns - geometry.width) / 2)),
-    top: Math.max(0, Math.floor((rows - geometry.height) / 2)),
-  }, () => [
-    h(Text, { bold: true }, () => copy.title),
-    h(Text, () => copy.detail),
-    h(Text, { inverse: choice === "cancel" }, () => choice === "cancel" ? `[${copy.cancel}]  ${copy.action}` : `${copy.cancel}  [${copy.action}]`),
-    h(Text, { dimColor: true }, () => "h/l or ←/→ · Tab changes · Enter activates · y yes · n/Esc/q cancel"),
-  ]);
-}
-
-function terminalKey(input: string, key: {
-  ctrl: boolean; shift: boolean; escape: boolean; return: boolean; upArrow: boolean; downArrow: boolean;
-  leftArrow: boolean; rightArrow: boolean; home: boolean; end: boolean; pageUp: boolean; pageDown: boolean;
-  tab: boolean; delete: boolean;
-}): string {
-  if (key.ctrl && input === "c") return "\u0003";
-  if (key.ctrl && input === "d") return "\x04";
-  if (key.ctrl && input === "u") return "\x15";
-  if (key.escape) return "\x1b";
-  if (key.return && key.shift) return "\x1b[13;2u";
-  if (key.return) return "\r";
-  if (key.upArrow) return "\x1b[A";
-  if (key.downArrow) return "\x1b[B";
-  if (key.rightArrow) return "\x1b[C";
-  if (key.leftArrow) return "\x1b[D";
-  if (key.home) return "\x1b[H";
-  if (key.end) return "\x1b[F";
-  if (key.pageUp) return "\x1b[5~";
-  if (key.pageDown) return "\x1b[6~";
-  if (key.tab) return "\t";
-  if (key.delete) return input === "\x7f" || input === "\b" ? input : "\x1b[3~";
-  return input;
+function nextTab(active: UiState["activeTab"]): UiState["activeTab"] {
+  return active === "playback" ? "library" : active === "library" ? "downloader" : "playback";
 }
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
   return reason === "playback" ? "playback" : "state";
 }
+
+type InputKey = {
+  ctrl?: boolean;
+  meta?: boolean;
+  tab?: boolean;
+  return?: boolean;
+  backspace?: boolean;
+  delete?: boolean;
+  upArrow?: boolean;
+  downArrow?: boolean;
+  leftArrow?: boolean;
+  rightArrow?: boolean;
+  escape?: boolean;
+};

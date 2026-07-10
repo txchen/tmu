@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   MemoryQueue,
-  type LastQueueSnapshot,
+  type QueueState,
   type Track,
 } from "../src/index";
 
@@ -16,7 +16,7 @@ function track(providerId: string, stableId: string, title: string): Track {
 describe("MemoryQueue", () => {
   test("dedupes canonical Tracks by durable Track Identity", () => {
     const queue = new MemoryQueue();
-    const first = track("local", "/music/amber.flac", "Amber");
+    const first = track("youtube-cache", "/music/amber.flac", "Amber");
     const duplicateWithFreshMetadata = {
       ...first,
       title: "Amber remastered",
@@ -31,12 +31,12 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().entries[0]?.track).toEqual(first);
   });
 
-  test("Play Next moves one identity-deduplicated Music Collection block after Current Track", () => {
+  test("Play Next moves one identity-deduplicated Track block after Current Track", () => {
     const queue = new MemoryQueue();
-    const a = track("local", "a", "A");
-    const b = track("local", "b", "B");
-    const c = track("local", "c", "C");
-    const d = track("local", "d", "D");
+    const a = track("youtube-cache", "a", "A");
+    const b = track("youtube-cache", "b", "B");
+    const c = track("youtube-cache", "c", "C");
+    const d = track("youtube-cache", "d", "D");
     for (const value of [a, b, c, d]) queue.enqueue(value);
     queue.startAt(1);
     queue.markAvailability(d.identity, { status: "unavailable", reason: "offline" });
@@ -56,9 +56,9 @@ describe("MemoryQueue", () => {
 
   test("Play Next puts a Track block at Queue head when no Current Track exists", () => {
     const queue = new MemoryQueue();
-    const a = track("local", "a", "A");
-    const b = track("local", "b", "B");
-    const c = track("local", "c", "C");
+    const a = track("youtube-cache", "a", "A");
+    const b = track("youtube-cache", "b", "B");
+    const c = track("youtube-cache", "c", "C");
     for (const value of [a, b]) queue.enqueue(value);
 
     queue.playNext([b, c]);
@@ -67,12 +67,12 @@ describe("MemoryQueue", () => {
     expect(queue.currentIndex).toBe(-1);
   });
 
-  test("Play Now keeps a different former Current Track immediately before its collection block", () => {
+  test("Play Now keeps a different former Current Track immediately before its Track block", () => {
     const queue = new MemoryQueue();
-    const a = track("local", "a", "A");
-    const b = track("local", "b", "B");
-    const c = track("local", "c", "C");
-    const d = track("local", "d", "D");
+    const a = track("youtube-cache", "a", "A");
+    const b = track("youtube-cache", "b", "B");
+    const c = track("youtube-cache", "c", "C");
+    const d = track("youtube-cache", "d", "D");
     for (const value of [a, b, c, d]) queue.enqueue(value);
     queue.startAt(1);
 
@@ -84,11 +84,11 @@ describe("MemoryQueue", () => {
     expect(queue.previous()?.track).toEqual(b);
   });
 
-  test("Play Now puts a collection at Queue head without a former Current Track", () => {
+  test("Play Now puts a Track at Queue head without a former Current Track", () => {
     const queue = new MemoryQueue();
-    const a = track("local", "a", "A");
-    const b = track("local", "b", "B");
-    const c = track("local", "c", "C");
+    const a = track("youtube-cache", "a", "A");
+    const b = track("youtube-cache", "b", "B");
+    const c = track("youtube-cache", "c", "C");
     for (const value of [a, b]) queue.enqueue(value);
 
     queue.playNow([b, c]);
@@ -99,9 +99,9 @@ describe("MemoryQueue", () => {
 
   test("removes, moves, clears, and preserves the current Track selection", () => {
     const queue = new MemoryQueue();
-    const amber = track("local", "/music/amber.flac", "Amber");
-    const cinder = track("navidrome", "song-1", "Cinder");
-    const drift = track("offline-youtube-cache", "youtube:drift", "Drift");
+    const amber = track("youtube-cache", "/music/amber.flac", "Amber");
+    const cinder = track("youtube-cache", "song-1", "Cinder");
+    const drift = track("youtube-cache", "drift", "Drift");
     queue.enqueue(amber);
     queue.enqueue(cinder);
     queue.enqueue(drift);
@@ -126,9 +126,9 @@ describe("MemoryQueue", () => {
 
   test("removing the Current Track clears its designation without advancing", () => {
     const queue = new MemoryQueue();
-    queue.enqueue(track("local", "a", "A"));
-    queue.enqueue(track("local", "b", "B"));
-    queue.enqueue(track("local", "c", "C"));
+    queue.enqueue(track("youtube-cache", "a", "A"));
+    queue.enqueue(track("youtube-cache", "b", "B"));
+    queue.enqueue(track("youtube-cache", "c", "C"));
     queue.startAt(1);
 
     expect(queue.remove(1)?.track.title).toBe("B");
@@ -138,8 +138,8 @@ describe("MemoryQueue", () => {
 
   test("navigates next and previous with repeat-all wrapping", () => {
     const queue = new MemoryQueue();
-    queue.enqueue(track("local", "a", "A"));
-    queue.enqueue(track("local", "b", "B"));
+    queue.enqueue(track("youtube-cache", "a", "A"));
+    queue.enqueue(track("youtube-cache", "b", "B"));
 
     expect(queue.next()?.track.title).toBe("A");
     expect(queue.next()?.track.title).toBe("B");
@@ -154,10 +154,10 @@ describe("MemoryQueue", () => {
 
   test("shuffle visibly randomizes only Tracks after Current Track and keeps that order when disabled", () => {
     const queue = new MemoryQueue({ random: () => 0 });
-    queue.enqueue(track("local", "a", "A"));
-    queue.enqueue(track("local", "b", "B"));
-    queue.enqueue(track("local", "c", "C"));
-    queue.enqueue(track("local", "d", "D"));
+    queue.enqueue(track("youtube-cache", "a", "A"));
+    queue.enqueue(track("youtube-cache", "b", "B"));
+    queue.enqueue(track("youtube-cache", "c", "C"));
+    queue.enqueue(track("youtube-cache", "d", "D"));
     queue.startAt(0);
 
     queue.setShuffle(true);
@@ -171,9 +171,9 @@ describe("MemoryQueue", () => {
 
   test("shuffle mode stops after every Track has played unless repeat-all is enabled", () => {
     const queue = new MemoryQueue({ random: () => 0 });
-    queue.enqueue(track("local", "a", "A"));
-    queue.enqueue(track("local", "b", "B"));
-    queue.enqueue(track("local", "c", "C"));
+    queue.enqueue(track("youtube-cache", "a", "A"));
+    queue.enqueue(track("youtube-cache", "b", "B"));
+    queue.enqueue(track("youtube-cache", "c", "C"));
     queue.startAt(0);
     queue.setShuffle(true);
 
@@ -189,7 +189,7 @@ describe("MemoryQueue", () => {
 
   test("keeps unavailable Tracks visible in snapshots", () => {
     const queue = new MemoryQueue();
-    const missing = track("local", "/missing.flac", "Missing");
+    const missing = track("youtube-cache", "/missing.flac", "Missing");
     queue.enqueue(missing);
 
     queue.markAvailability(missing.identity, { status: "unavailable", reason: "file no longer exists" });
@@ -202,23 +202,21 @@ describe("MemoryQueue", () => {
     ]);
   });
 
-  test("restores queue contents, current position, and modes from Last Queue Snapshot", () => {
-    const snapshot: LastQueueSnapshot = {
-      version: 1,
+  test("restores queue contents and modes from runtime queue state", () => {
+    const snapshot: QueueState = {
       entries: [
         {
-          track: track("navidrome", "song-1", "Remote Song"),
+          track: track("youtube-cache", "song-1", "Cached Song One"),
           availability: { status: "unknown" },
         },
         {
-          track: track("offline-youtube-cache", "youtube:abc", "Cached Song"),
+          track: track("youtube-cache", "abc", "Cached Song Two"),
           availability: { status: "available" },
         },
       ],
       currentIndex: 1,
       shuffle: true,
       repeatAll: true,
-      volume: { percent: 73, ready: true },
     };
 
     const queue = new MemoryQueue();

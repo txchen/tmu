@@ -8,35 +8,13 @@ export type TmuConfig = {
     ffprobe: string;
     ytDlp: string;
   };
-  providers: {
-    local: {
-      enabled: boolean;
-    };
-    navidrome: {
-      enabled: boolean;
-      serverUrl: string;
-      username: string;
-      password?: string;
-      token?: string;
-      salt?: string;
-      apiVersion: string;
-      clientName: string;
-      scrobble: boolean;
-    };
-    offlineYouTubeCache: {
-      enabled: boolean;
-    };
-    youtubeUrlDownload: {
-      enabled: boolean;
-    };
-  };
   lowPower: {
     playbackTickMs: number;
     playbackProgressMs: number | null;
     downloadProgressThrottleMs: number;
-    providerProgressThrottleMs: number;
+    libraryProgressThrottleMs: number;
   };
-  offlineYouTubeCache: {
+  youtubeCache: {
     cacheDir: string;
     mediaDirName: string;
     metadataFileName: string;
@@ -54,15 +32,7 @@ export type TmuConfig = {
   };
 };
 
-export type RedactedTmuConfig = Omit<TmuConfig, "providers"> & {
-  providers: Omit<TmuConfig["providers"], "navidrome"> & {
-    navidrome: Omit<TmuConfig["providers"]["navidrome"], "password" | "token" | "salt"> & {
-      password?: "[redacted]";
-      token?: "[redacted]";
-      salt?: "[redacted]";
-    };
-  };
-};
+export type RedactedTmuConfig = TmuConfig;
 export type TmuConfigInput = PartialDeep<TmuConfig>;
 
 export type LoadedTmuConfig = {
@@ -87,33 +57,14 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
       ffprobe: "ffprobe",
       ytDlp: "yt-dlp",
     },
-    providers: {
-      local: {
-        enabled: true,
-      },
-      navidrome: {
-        enabled: false,
-        serverUrl: "",
-        username: "",
-        apiVersion: "1.16.1",
-        clientName: "tmu",
-        scrobble: true,
-      },
-      offlineYouTubeCache: {
-        enabled: true,
-      },
-      youtubeUrlDownload: {
-        enabled: true,
-      },
-    },
     lowPower: {
       playbackTickMs: 1000,
       playbackProgressMs: null,
       downloadProgressThrottleMs: 1000,
-      providerProgressThrottleMs: 1000,
+      libraryProgressThrottleMs: 1000,
     },
-    offlineYouTubeCache: {
-      cacheDir: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "tmu", "offline-youtube-cache"),
+    youtubeCache: {
+      cacheDir: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "tmu", "youtube-cache"),
       mediaDirName: "media",
       metadataFileName: "metadata.json",
     },
@@ -165,19 +116,8 @@ export function redactTmuConfig(config: TmuConfig): RedactedTmuConfig {
   return {
     ...config,
     helpers: { ...config.helpers },
-    providers: {
-      local: { ...config.providers.local },
-      navidrome: {
-        ...config.providers.navidrome,
-        password: redactSecret(config.providers.navidrome.password),
-        token: redactSecret(config.providers.navidrome.token),
-        salt: redactSecret(config.providers.navidrome.salt),
-      },
-      offlineYouTubeCache: { ...config.providers.offlineYouTubeCache },
-      youtubeUrlDownload: { ...config.providers.youtubeUrlDownload },
-    },
     lowPower: { ...config.lowPower },
-    offlineYouTubeCache: { ...config.offlineYouTubeCache },
+    youtubeCache: { ...config.youtubeCache },
     youtube: { ...config.youtube },
     dependencyPolicy: { ...config.dependencyPolicy },
     persistence: { ...config.persistence },
@@ -190,31 +130,13 @@ function mergeConfig(base: TmuConfig, overrides: TmuConfigInput): TmuConfig {
       ...base.helpers,
       ...overrides.helpers,
     },
-    providers: {
-      local: {
-        ...base.providers.local,
-        ...overrides.providers?.local,
-      },
-      navidrome: {
-        ...base.providers.navidrome,
-        ...overrides.providers?.navidrome,
-      },
-      offlineYouTubeCache: {
-        ...base.providers.offlineYouTubeCache,
-        ...overrides.providers?.offlineYouTubeCache,
-      },
-      youtubeUrlDownload: {
-        ...base.providers.youtubeUrlDownload,
-        ...overrides.providers?.youtubeUrlDownload,
-      },
-    },
     lowPower: {
       ...base.lowPower,
       ...overrides.lowPower,
     },
-    offlineYouTubeCache: {
-      ...base.offlineYouTubeCache,
-      ...overrides.offlineYouTubeCache,
+    youtubeCache: {
+      ...base.youtubeCache,
+      ...overrides.youtubeCache,
     },
     youtube: {
       ...base.youtube,
@@ -242,10 +164,6 @@ function normalizeConfigInput(input: TmuConfigInput): TmuConfigInput {
       cookiesFromBrowser: maybeYoutube.cookiesFromBrowser ?? maybeYoutube.cookies_from_browser,
     },
   };
-}
-
-function redactSecret(value: string | undefined): "[redacted]" | undefined {
-  return value ? "[redacted]" : undefined;
 }
 
 function isMissingFileError(error: unknown): boolean {

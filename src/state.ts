@@ -14,7 +14,6 @@ import {
   createDefaultDependencyHealth,
   type DependencyHealthState,
 } from "./dependencies";
-import { createEmptyGlobalSearchState } from "./global-search";
 
 export type InitialAppStateOptions = {
   config?: TmuConfigInput;
@@ -53,7 +52,6 @@ export function createInitialAppState(
       active: false,
       lines: [],
     },
-    globalSearch: createEmptyGlobalSearchState(),
     appErrors: [],
     lastEvent: "opened target switcher",
   };

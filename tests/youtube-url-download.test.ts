@@ -85,8 +85,8 @@ describe("YouTube URL Download adapter", () => {
     expect(result).toEqual({
       ok: true,
       identity: {
-        providerId: "offline-youtube-cache",
-        stableId: "youtube:AbC123",
+        providerId: "youtube-cache",
+        stableId: "AbC123",
       },
       metadata: {
         extractor: "youtube",
