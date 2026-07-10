@@ -218,6 +218,34 @@ export type UiState = {
 };
 
 export type AppIntent =
+  | { type: "enqueueTrack"; track: Track }
+  | { type: "playQueueTrack"; track: Track }
+  | { type: "removeQueueTrack"; identity: TrackIdentity }
+  | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
+  | { type: "clearQueue" }
+  | { type: "providerOperation"; providerId: string; operation: "refresh" }
+  | { type: "providerOperation"; providerId: string; operation: "search"; query: string }
+  | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
+  | { type: "downloadOperation"; operation: "start"; url: string }
+  | { type: "downloadOperation"; operation: "cancel" }
+  | { type: "persistenceOperation"; operation: "save" | "restore" }
+  | {
+    type: "playerOperation";
+    operation:
+      | "toggle-play-pause"
+      | "stop"
+      | "next-track"
+      | "previous-track"
+      | "toggle-shuffle"
+      | "toggle-repeat-all"
+      | "quit";
+  }
+  | { type: "playerOperation"; operation: "seek"; seconds: number }
+  | { type: "playerOperation"; operation: "adjust-volume"; delta: number }
+  | { type: "playerOperation"; operation: "set-volume"; percent: number; ready: boolean };
+
+/** @deprecated Legacy ANSI TUI migration surface. New UI actions create AppIntent values. */
+export type LegacyAppIntent =
   | { type: "selectNavigationTarget"; targetId: NavigationTargetId }
   | { type: "moveSelection"; delta: number }
   | { type: "activateSelectedContent" }

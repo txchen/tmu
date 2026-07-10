@@ -1,6 +1,6 @@
 import {
   NAVIGATION_TARGETS,
-  type AppIntent,
+  type LegacyAppIntent,
   type AppState,
   type NavigationTargetId,
   type UiState,
@@ -548,7 +548,8 @@ export class TerminalTui {
   }
 }
 
-export function intentFromKey(key: string): AppIntent | null {
+/** @deprecated The legacy ANSI TUI is replaced by RootInputRouter during the vue-tui cutover. */
+export function intentFromKey(key: string): LegacyAppIntent | null {
   if (key === "q" || key === "\u0003") return { type: "quit" };
   if (key === "\x1b") return { type: "cancelLocalOpen" };
   if (key === "\t") return { type: "cycleFocus" };
