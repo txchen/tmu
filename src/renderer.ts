@@ -201,7 +201,7 @@ function providerSurfaceStatusLinesFor(appState: AppState, uiState: UiState): st
     const state = provider.getConnectionState();
     return [
       navidromeConnectionStateLine(state),
-      ...provider.getLibraryBrowserEntries().map((entry, index) => navidromeLibraryBrowserEntryLine(
+      ...provider.getLibraryBrowserEntries(uiState.providerLocation).map((entry, index) => navidromeLibraryBrowserEntryLine(
         entry,
         index === selectedContentIndex(uiState),
         uiState.focusedPane === "content",

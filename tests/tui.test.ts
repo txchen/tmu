@@ -580,6 +580,7 @@ describe("TerminalTui", () => {
       },
       dispatch: async () => undefined,
       dispatchUi: () => undefined,
+      queueTrackIdentities: () => [],
     };
     const input = new FakeInput();
     const output = new FakeOutput();
@@ -635,6 +636,7 @@ describe("TerminalTui", () => {
       uiState: createInitialUiState(),
       onStateChange: () => () => undefined,
       dispatchUi: () => undefined,
+      queueTrackIdentities: () => [],
       dispatch: () => new Promise<void>((resolve) => {
         resolveDispatch = () => resolve();
       }),
