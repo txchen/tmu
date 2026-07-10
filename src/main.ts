@@ -2,6 +2,7 @@
 import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
+import { dispatchTerminalResize } from "./vue-tui/resize";
 
 export async function main(): Promise<void> {
   const runtime = await createTmuRuntime();
@@ -10,13 +11,11 @@ export async function main(): Promise<void> {
 
   const app = createApp(createTmuRoot({ coordinator }));
   const handleBunPtyResize = () => {
-    coordinator.dispatchUi({
-      type: "resize",
-      columns: process.stdout.columns ?? coordinator.uiState.terminal.columns,
-      rows: process.stdout.rows ?? coordinator.uiState.terminal.rows,
-      queueIdentities: coordinator.queueTrackIdentities(),
-      visibleQueueRows: Math.max(1, (process.stdout.rows ?? 24) - 5),
-    });
+    dispatchTerminalResize(
+      coordinator,
+      process.stdout.columns ?? coordinator.uiState.terminal.columns,
+      process.stdout.rows ?? coordinator.uiState.terminal.rows,
+    );
   };
   process.on("SIGWINCH", handleBunPtyResize);
   app.mount({

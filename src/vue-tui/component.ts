@@ -4,6 +4,7 @@ import { createActionRegistry } from "../action-registry";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
 import { sameIdentity, type PickerOverlay } from "../domain";
 import { RootInputRouter } from "../input-router";
+import { dispatchTerminalResize } from "./resize";
 import {
   StatePublicationGate,
   type PublicationCause,
@@ -65,13 +66,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       const { columns, rows } = useWindowSize();
 
       watch([columns, rows], ([nextColumns, nextRows]) => {
-        coordinator.dispatchUi({
-          type: "resize",
-          columns: nextColumns,
-          rows: nextRows,
-          queueIdentities: coordinator.queueTrackIdentities(),
-          visibleQueueRows: visibleQueueRows(nextRows),
-        });
+        dispatchTerminalResize(coordinator, nextColumns, nextRows);
         publication.notify("resize");
       }, { immediate: true });
 
@@ -178,8 +173,4 @@ function playbackLabel(status: PublicationSnapshot["appState"]["playback"]["stat
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
   return reason === "playback" ? "playback" : "state";
-}
-
-function visibleQueueRows(rows: number): number {
-  return Math.max(1, rows - 5);
 }

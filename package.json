@@ -15,7 +15,6 @@
   },
   "scripts": {
     "start": "bun src/main.ts",
-    "prototype:tui-experience": "bun src/prototypes/tui-experience/app.ts",
     "smoke:package": "bun test tests/packaging-smoke.test.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
