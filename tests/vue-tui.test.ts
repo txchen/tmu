@@ -21,6 +21,16 @@ const restoredTrack: Track = {
   title: "Restored Track",
   artist: "Test Artist",
   providerLabel: "Test",
+  album: "Test Album",
+  durationSeconds: 245,
+};
+
+const secondTrack: Track = {
+  identity: { providerId: "remote", stableId: "second-track" },
+  title: "A Second Track With A Deliberately Very Long Title That Must Never Wrap",
+  artist: "Another Artist",
+  providerLabel: "Navidrome",
+  durationSeconds: 65,
 };
 
 class RecordingPlayer implements Player {
@@ -55,13 +65,24 @@ class RecordingPlayer implements Player {
   }
 }
 
-async function productionHarness() {
+async function productionHarness(options: {
+  tracks?: readonly Track[];
+  currentIndex?: number;
+  availability?: "available" | "unavailable";
+} = {}) {
   const player = new RecordingPlayer();
   const snapshots = new InMemoryLastQueueSnapshotPersistence();
+  const tracks = options.tracks ?? [restoredTrack];
+  const currentIndex = options.currentIndex ?? 0;
   await snapshots.save({
     version: 1,
-    entries: [{ track: restoredTrack, availability: { status: "available" } }],
-    currentIndex: 0,
+    entries: tracks.map((track, index) => ({
+      track,
+      availability: options.availability === "unavailable" && index === currentIndex
+        ? { status: "unavailable" as const, reason: "Provider authentication expired; sign in and retry" }
+        : { status: "available" as const },
+    })),
+    currentIndex,
     shuffle: false,
     repeatAll: false,
     volume: { percent: 72, ready: true },
@@ -74,7 +95,14 @@ async function productionHarness() {
         id: "test",
         label: "Test",
         hint: "one restored Track",
-        listVisibleTracks: () => [restoredTrack],
+        listVisibleTracks: () => tracks,
+        resolvePlaybackLocator: async () => ({ kind: "file", path: "/dev/null" }),
+      },
+      remote: {
+        id: "remote",
+        label: "Navidrome",
+        hint: "remote Tracks",
+        listVisibleTracks: () => tracks,
         resolvePlaybackLocator: async () => ({ kind: "file", path: "/dev/null" }),
       },
     }, { dependencyHealth }),
@@ -87,7 +115,7 @@ async function productionHarness() {
   coordinator.appState.playback = {
     status: "paused",
     positionSeconds: 37,
-    currentTrackIdentity: restoredTrack.identity,
+    currentTrackIdentity: tracks[currentIndex]?.identity ?? null,
   };
   return { coordinator, player };
 }
@@ -99,7 +127,7 @@ describe("production vue-tui", () => {
 
     expect(terminal.lastFrame()).toContain("Queue Home · wide");
     expect(terminal.lastFrame()).toContain("Restored Track");
-    expect(terminal.lastFrame()).toContain("Restored — Space to Resume");
+    expect(terminal.lastFrame()).toContain("Restored · Resume from 0:37");
     expect(player.toggles).toBe(0);
 
     await terminal.stdin.write(" ");
@@ -132,6 +160,128 @@ describe("production vue-tui", () => {
       expect(coordinator.uiState.selectedQueueIdentity).toEqual(restoredTrack.identity);
       expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
       expect(coordinator.uiState.overlays.at(-1)?.kind).toBe("music-picker");
+    }
+  });
+
+  test("uses approved tier layouts, one-row metadata reduction, and stable too-small recovery", async () => {
+    const { coordinator, player } = await productionHarness({ tracks: [restoredTrack, secondTrack] });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 130, rows: 24 });
+
+    expect(terminal.lastFrame()).toContain("Queue · 2 Tracks");
+    expect(terminal.lastFrame()).toContain("Test Artist");
+    expect(terminal.lastFrame()).toContain("Test Album");
+    expect(terminal.lastFrame()).toContain("Test");
+
+    await terminal.terminal.resize(100, 24);
+    await terminal.waitUntilRenderFlush();
+    expect(terminal.lastFrame()).toContain("Test Artist");
+    expect(terminal.lastFrame()).not.toContain("Test Album");
+
+    await terminal.terminal.resize(70, 24);
+    await terminal.waitUntilRenderFlush();
+    expect(terminal.lastFrame()).toContain("Current: Restored Track");
+    expect(terminal.lastFrame()).not.toContain("Test Artist");
+    expect(terminal.lastFrame()?.match(/A Second Track/g)).toHaveLength(1);
+
+    await terminal.terminal.resize(59, 24);
+    await terminal.waitUntilRenderFlush();
+    expect(terminal.lastFrame()).toContain("Terminal too small · need 60×16");
+    expect(terminal.lastFrame()).not.toContain("Picker Overlay");
+    await terminal.stdin.write("j ");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(restoredTrack.identity);
+    expect(player.toggles).toBe(0);
+
+    await terminal.terminal.resize(70, 24);
+    await terminal.waitUntilRenderFlush();
+    expect(terminal.lastFrame()).toContain("Current: Restored Track");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(restoredTrack.identity);
+  });
+
+  test("switches every fixed-cell marker to ASCII and remains operable without color", async () => {
+    const { coordinator } = await productionHarness({ tracks: [restoredTrack, secondTrack], availability: "unavailable" });
+    const terminal = await render(createTmuRoot({
+      coordinator,
+      measureCellWidth: () => 2,
+      noColor: true,
+    }), { columns: 120, rows: 24 });
+    const frame = terminal.lastFrame({ raw: true }) ?? "";
+
+    expect(frame).toContain("> * !");
+    expect(frame).not.toContain("›");
+    expect(frame).not.toContain("●");
+    expect(frame).not.toMatch(/\x1b\[(?:3[0-7]|9[0-7])m/);
+    expect(frame).toContain("Unavailable");
+    expect(frame).toContain("Provider authentication expired");
+    expect(frame).toContain("Retry or choose another Track");
+  });
+
+  test("renders empty, Playing, Paused, Stopped, Restored, and unavailable guidance", async () => {
+    const empty = await productionHarness({ tracks: [], currentIndex: -1 });
+    const emptyTerminal = await render(createTmuRoot({ coordinator: empty.coordinator }), { columns: 80, rows: 20 });
+    expect(emptyTerminal.lastFrame()).toContain("Queue is empty");
+    expect(emptyTerminal.lastFrame()).toContain("/ Global Search");
+    expect(emptyTerminal.lastFrame()).toContain("o Local music");
+    expect(emptyTerminal.lastFrame()).toContain("u YouTube URL Download");
+    emptyTerminal.unmount();
+
+    const { coordinator } = await productionHarness();
+    coordinator.appState.playback = { status: "playing", currentTrackIdentity: restoredTrack.identity };
+    let terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
+    expect(terminal.lastFrame()).toContain("Playing · Restored Track");
+    terminal.unmount();
+
+    coordinator.appState.playback = { status: "paused", positionSeconds: 0, currentTrackIdentity: restoredTrack.identity };
+    terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
+    expect(terminal.lastFrame()).toContain("Paused · Space to Resume");
+    terminal.unmount();
+
+    coordinator.appState.playback = { status: "stopped", positionSeconds: 0, currentTrackIdentity: restoredTrack.identity };
+    terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
+    expect(terminal.lastFrame()).toContain("Stopped · starts from beginning");
+    terminal.unmount();
+
+    coordinator.appState.playback = { status: "paused", positionSeconds: 37, currentTrackIdentity: restoredTrack.identity };
+    terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
+    expect(terminal.lastFrame()).toContain("Restored · Resume from 0:37");
+  });
+
+  test("moves by Vim keys and aliases, clamps, repairs visibility, and exposes pending g", async () => {
+    const tracks = Array.from({ length: 20 }, (_, index): Track => ({
+      identity: { providerId: "test", stableId: `track-${index}` },
+      title: `Track ${index}`,
+      artist: "Artist",
+      providerLabel: "Test",
+      durationSeconds: index,
+    }));
+    const { coordinator } = await productionHarness({ tracks });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 70, rows: 16 });
+
+    await terminal.stdin.write("G");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[19]?.identity);
+    expect(terminal.lastFrame()).toContain("Track 19");
+    expect(terminal.lastFrame()).not.toContain("›     Track 0");
+
+    await terminal.stdin.write("\x1b[H");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[0]?.identity);
+    await terminal.stdin.write("k");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[0]?.identity);
+    await terminal.stdin.write("\x1b[6~");
+    expect(coordinator.uiState.selectedQueueIndex).toBeGreaterThan(0);
+    await terminal.stdin.write("g");
+    expect(terminal.lastFrame()).toContain("g… Go to first");
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[0]?.identity);
+  });
+
+  test("keeps a one-row footer with discovery routes at every supported tier", async () => {
+    const { coordinator } = await productionHarness();
+    for (const columns of [130, 100, 70]) {
+      const terminal = await render(createTmuRoot({ coordinator }), { columns, rows: 20 });
+      const frame = terminal.lastFrame() ?? "";
+      const footer = frame.split("\n").find((line) => line.includes("? Help"));
+      expect(footer).toContain(": Commands");
+      expect(Bun.stringWidth(footer ?? "")).toBeLessThanOrEqual(columns);
+      terminal.unmount();
     }
   });
 
