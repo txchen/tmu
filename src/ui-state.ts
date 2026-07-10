@@ -9,6 +9,7 @@ import {
   type QueueEntry,
   type TrackIdentity,
   type PickerOverlay,
+  type GlobalSearchProviderId,
   type UiState,
 } from "./domain";
 
@@ -38,8 +39,8 @@ export type UiStateAction =
   | { type: "setOverlayFocus"; focus: PickerOverlay["focus"] }
   | { type: "prepareSearchResults" }
   | { type: "restoreProviderNavigation" }
-  | { type: "setSearchProviderFilter"; providerId: "all" | string }
-  | { type: "setSearchResultTypeFilter"; resultType: "all" | import("./domain").ProviderSearchResultType }
+  | { type: "setSearchProviderFilter"; providerId: "all" | GlobalSearchProviderId }
+  | { type: "setSearchResultTypeFilter"; resultType: "all" | import("./domain").GlobalSearchResultType }
   | { type: "moveOverlaySelection"; delta: number; rowCount: number; visibleRows: number }
   | { type: "selectOverlayBoundary"; boundary: "first" | "last"; rowCount: number; visibleRows: number }
   | { type: "setScroll"; pane: FocusedPane; offset: number }

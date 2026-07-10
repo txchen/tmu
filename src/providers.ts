@@ -14,8 +14,8 @@ import {
   type Provider,
   type ProviderBrowserEntry,
   type ProviderCapabilities,
-  type ProviderSearchRequest,
-  type ProviderSearchResult,
+  type GlobalSearchProviderRequest,
+  type GlobalSearchProviderResult,
   type Track,
   type TrackIdentity,
 } from "./domain";
@@ -154,7 +154,7 @@ class FileSystemLocalProvider implements LocalProvider {
     return [...this.tracks.values()];
   }
 
-  async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
+  async search(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]> {
     if (request.signal?.aborted || !request.query.trim()) return [];
     const discovered = this.localBrowserRows({ providerId: "local", path: [] })
       .flatMap((row) => row.track ? [row.track] : []);

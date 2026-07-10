@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { TmuConfig } from "./config";
-import type { MusicCollection, PlaybackLocator, Provider, ProviderBrowserEntry, ProviderCapabilities, ProviderLocation, ProviderSearchRequest, ProviderSearchResult, Track, TrackIdentity } from "./domain";
+import type { MusicCollection, PlaybackLocator, Provider, ProviderBrowserEntry, ProviderCapabilities, ProviderLocation, GlobalSearchProviderRequest, GlobalSearchProviderResult, Track, TrackIdentity } from "./domain";
 
 const NAVIDROME_PROVIDER_ID = "navidrome";
 const SUBSONIC_RESPONSE_KEY = "subsonic-response";
@@ -107,7 +107,7 @@ export type NavidromeProvider = Provider & {
   listPlaylists(): Promise<readonly NavidromePlaylist[]>;
   listPlaylistTracks(playlistId: string): Promise<readonly Track[]>;
   searchTracks(query: string): Promise<readonly Track[]>;
-  openSearchResult(result: ProviderSearchResult): Promise<ProviderLocation>;
+  openSearchResult(result: GlobalSearchProviderResult): Promise<ProviderLocation>;
   resolveMusicCollection(
     collection: MusicCollection,
     options?: { signal?: AbortSignal },
@@ -227,7 +227,7 @@ export function navidromeLocationForEntry(entry: NavidromeLibraryBrowserEntry): 
 }
 
 class SubsonicNavidromeProvider implements NavidromeProvider {
-  readonly id = NAVIDROME_PROVIDER_ID;
+  readonly id: "navidrome" = NAVIDROME_PROVIDER_ID;
   readonly label = "Navidrome";
   readonly hint = "artists, albums, playlists";
   readonly capabilities: ProviderCapabilities = {
@@ -619,12 +619,12 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     return this.searchResults;
   }
 
-  async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
+  async search(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]> {
     if (request.signal?.aborted || !request.query.trim()) return [];
     try {
       const count = String(Math.min(50, Math.max(1, request.limit)));
-      const includesResultType = (type: ProviderSearchResult["type"]) => request.resultTypes.includes(type);
-      const results: ProviderSearchResult[] = [];
+      const includesResultType = (type: GlobalSearchProviderResult["type"]) => request.resultTypes.includes(type);
+      const results: GlobalSearchProviderResult[] = [];
       if (includesResultType("track")) {
         const response = await this.requestSubsonic<{ searchResult3?: unknown }>("search3", {
           query: request.query.trim(),
@@ -701,7 +701,7 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     return { status: "resolved", tracks };
   }
 
-  async openSearchResult(result: ProviderSearchResult): Promise<ProviderLocation> {
+  async openSearchResult(result: GlobalSearchProviderResult): Promise<ProviderLocation> {
     if (result.providerId !== this.id || !["artist", "album", "playlist"].includes(result.type)) {
       throw new Error("Only Navidrome Artist, Album, and Playlist search results can be opened");
     }

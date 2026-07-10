@@ -10,6 +10,8 @@ import {
   type AppIntent,
   type AppState,
   type UiState,
+  type GlobalSearchProviderId,
+  isProviderId,
 } from "./domain";
 import {
   queueHomeVisibleRows,
@@ -87,9 +89,10 @@ export class RootInputRouter {
       if (key === "\x1b" || key === "\r" || key === "\t") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
       } else if (uiOperation === "cycle-provider-filter") {
-        const providerIds = ["all", ...Object.values(this.appState().providers)
-          .filter((provider) => provider.search && provider.getNavigationRoot().visible)
-          .map((provider) => provider.id)];
+        const providerIds: Array<"all" | GlobalSearchProviderId> = ["all", ...Object.values(this.appState().providers)
+          .flatMap((provider) => isProviderId(provider.id) && provider.search && provider.getNavigationRoot().visible
+            ? [provider.id]
+            : [])];
         const current = providerIds.indexOf(overlay.providerFilter ?? "all");
         this.uiState.dispatch({ type: "setSearchProviderFilter", providerId: providerIds[(current + 1) % providerIds.length] ?? "all" });
       } else if (uiOperation === "cycle-result-type-filter") {
@@ -303,20 +306,7 @@ export class RootInputRouter {
     const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    const movement = movementForUiOperation(uiOperation, visibleRows);
-    if (movement) {
-      this.cancelOverlayChord();
-      if (movement.kind === "boundary") {
-        this.uiState.dispatch({
-          type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: rows.length, visibleRows,
-        });
-      } else {
-        this.uiState.dispatch({
-          type: "moveOverlaySelection", delta: movement.delta, rowCount: rows.length, visibleRows,
-        });
-      }
-      return true;
-    }
+    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
     if (uiOperation === "first" && key === "g") {
       const completing = Boolean(this.uiState.snapshot.pendingVimChord
         && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
@@ -388,13 +378,7 @@ export class RootInputRouter {
   ): Promise<boolean> {
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    const movement = movementForUiOperation(uiOperation, visibleRows);
-    if (movement) {
-      this.uiState.dispatch(movement.kind === "boundary"
-        ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: rows.length, visibleRows }
-        : { type: "moveOverlaySelection", delta: movement.delta, rowCount: rows.length, visibleRows });
-      return true;
-    }
+    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
     if (uiOperation === "retry") {
       const row = rows[overlay.selectedResultIndex ?? 0];
       const providerId = globalSearchRetryProviderId(row);
@@ -415,6 +399,20 @@ export class RootInputRouter {
       return true;
     }
     return false;
+  }
+
+  private routeOverlayRowMovement(
+    uiOperation: UiRouteOperation | null,
+    rowCount: number,
+    visibleRows: number,
+  ): boolean {
+    const movement = movementForUiOperation(uiOperation, visibleRows);
+    if (!movement) return false;
+    this.cancelOverlayChord();
+    this.uiState.dispatch(movement.kind === "boundary"
+      ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount, visibleRows }
+      : { type: "moveOverlaySelection", delta: movement.delta, rowCount, visibleRows });
+    return true;
   }
 
   private async clearGlobalSearch(): Promise<void> {

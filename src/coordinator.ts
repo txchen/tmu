@@ -16,9 +16,11 @@ import {
   type NavigationTargetId,
   type Track,
   type PlayableTarget,
-  type ProviderSearchFilter,
-  type ProviderSearchResultType,
-  type ProviderSearchResult,
+  type GlobalSearchFilter,
+  type GlobalSearchResultType,
+  type GlobalSearchProviderResult,
+  type GlobalSearchProviderId,
+  isProviderId,
   type UiState,
 } from "./domain";
 import {
@@ -29,7 +31,7 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
-import { isNavidromeProvider, navidromeLocationForEntry } from "./navidrome";
+import { isNavidromeProvider } from "./navidrome";
 import {
   OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
   isOfflineYouTubeCacheProvider,
@@ -92,7 +94,7 @@ export class AppCoordinator {
   private activeYouTubeDownload: AbortController | null = null;
   private activeYouTubeDownloadTask: Promise<void> | null = null;
   private activeGlobalSearch: AbortController | null = null;
-  private readonly globalSearchAttempts = new Map<string, number>();
+  private readonly globalSearchAttempts = new Map<GlobalSearchProviderId, number>();
   private reportingSessionKey: string | null = null;
   private completedPlayReported = false;
   private naturalAdvanceInFlight = false;
@@ -346,106 +348,6 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private async selectNavigationTarget(targetId: NavigationTargetId): Promise<void> {
-    this.updateUiState({
-      activeTargetId: targetId,
-      selectedTargetIndex: navigationTargetIndex(targetId),
-      focusedPane: targetId === "queue" ? "queue" : "content",
-      providerLocation: { providerId: providerIdForTarget(targetId), path: [] },
-    });
-    await this.persistLastSelectedTarget(targetId);
-    await this.refreshEnteredTarget(targetId);
-    const activePrompt = targetId === "youtube-url-download" && !youtubeDownloadHealthMessage(this.appState.dependencyHealth)
-      ? "youtube-url"
-      : null;
-    this.updateUiState({ activePrompt, ...(!activePrompt ? { promptInput: "" } : {}) });
-    this.appState.lastEvent = `switched to ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
-  }
-
-  private async moveSelection(delta: number): Promise<void> {
-    if (this.uiState.focusedPane === "targets") {
-      const selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
-      const activeTargetId = NAVIGATION_TARGETS[selectedTargetIndex]?.id ?? "local";
-      this.updateUiState({
-        selectedTargetIndex,
-        activeTargetId,
-        providerLocation: { providerId: providerIdForTarget(activeTargetId), path: [] },
-      });
-      await this.persistLastSelectedTarget(this.uiState.activeTargetId);
-      await this.refreshEnteredTarget(this.uiState.activeTargetId);
-      this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
-      return;
-    }
-
-    if (this.uiState.focusedPane === "queue" || this.uiState.activeTargetId === "queue") {
-      this.selectQueueIndex(clampIndex(this.uiState.selectedQueueIndex + delta, this.queue.entries.length));
-      this.appState.lastEvent = "moved queue selection";
-      return;
-    }
-
-    const targetId = this.uiState.activeTargetId;
-    const current = this.uiState.selectedContentIndexByTarget[targetId] ?? 0;
-    this.selectContentIndex(targetId, clampIndex(current + delta, this.visibleContentLength(targetId)));
-    this.appState.lastEvent = "moved Provider Browsing Surface selection";
-  }
-
-  private cycleFocus(): void {
-    const next = this.uiState.focusedPane === "targets"
-      ? "content"
-      : this.uiState.focusedPane === "content"
-        ? "queue"
-        : "targets";
-    this.updateUiState({ focusedPane: next });
-    this.appState.lastEvent = `focus ${next}`;
-  }
-
-  private async enqueueSelectedTrack(): Promise<void> {
-    if (this.uiState.activeTargetId === "queue") {
-      await this.startSelectedQueueEntry();
-      return;
-    }
-
-    if (this.uiState.activeTargetId === "navidrome" && isNavidromeProvider(this.appState.providers.navidrome)) {
-      const selected = this.selectedNavidromeTrack();
-      if (!selected) {
-        this.appState.lastEvent = "no Navidrome Track selected";
-        return;
-      }
-
-      const entry = this.queue.enqueue(selected);
-      this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
-      this.appState.lastEvent = `added ${selected.title} to shared Queue`;
-      this.syncQueueState();
-      return;
-    }
-
-    if (this.uiState.activeTargetId === "youtube-url-download") {
-      await this.refreshHelperDependency("yt-dlp");
-      const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
-      if (healthMessage) {
-        this.updateUiState({ activePrompt: null });
-        this.appState.lastEvent = healthMessage;
-        return;
-      }
-
-      this.appState.lastEvent = "would open YouTube URL prompt, download into Offline YouTube Cache, then enqueue";
-      this.updateUiState({ activePrompt: "youtube-url" });
-      return;
-    }
-
-    const selected = this.selectedVisibleTrack();
-    if (!selected) {
-      this.appState.lastEvent = "no Track selected";
-      return;
-    }
-
-    const entry = this.queue.enqueue(selected);
-    this.markSelectedOfflineYouTubeCacheAvailability(entry);
-    this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
-    this.appState.lastEvent = `added ${selected.title} to shared Queue`;
-    this.syncQueueState();
-  }
-
   private async playNextTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
     const tracks = await this.resolvePlayableTarget(target, signal);
     if (!tracks) return;
@@ -606,8 +508,8 @@ export class AppCoordinator {
 
   private async submitGlobalSearch(
     query: string,
-    providerFilter: ProviderSearchFilter<string>,
-    resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>,
+    providerFilter: GlobalSearchFilter<GlobalSearchProviderId>,
+    resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType>,
   ): Promise<void> {
     const trimmed = query.trim();
     if (!trimmed) {
@@ -635,10 +537,10 @@ export class AppCoordinator {
     if (this.activeGlobalSearch === controller) this.activeGlobalSearch = null;
   }
 
-  private async retryGlobalSearchProvider(providerId: string): Promise<void> {
+  private async retryGlobalSearchProvider(providerId: GlobalSearchProviderId): Promise<void> {
     const search = this.appState.globalSearch;
     const provider = this.appState.providers[providerId];
-    if (!search.query || !provider?.search) return;
+    if (!search.query || !provider?.search || !isGlobalSearchProvider(provider)) return;
     const controller = new AbortController();
     const requestId = search.requestId;
     this.appState.globalSearch = {
@@ -662,7 +564,7 @@ export class AppCoordinator {
     this.notifyStateChanged();
   }
 
-  private async openGlobalSearchResult(result: ProviderSearchResult): Promise<void> {
+  private async openGlobalSearchResult(result: GlobalSearchProviderResult): Promise<void> {
     const provider = this.appState.providers[result.providerId];
     if (!isNavigableGlobalSearchResult(result) || !isNavidromeProvider(provider)) {
       this.appState.lastEvent = "Global Search result cannot be opened";
@@ -679,8 +581,9 @@ export class AppCoordinator {
     }
   }
 
-  private searchProviders(providerFilter: ProviderSearchFilter<string>): Provider[] {
-    return Object.values(this.appState.providers).filter((provider) => {
+  private searchProviders(providerFilter: GlobalSearchFilter<GlobalSearchProviderId>): GlobalSearchProvider[] {
+    return Object.values(this.appState.providers).filter((provider): provider is GlobalSearchProvider => {
+      if (!isGlobalSearchProvider(provider)) return false;
       if (!provider.search || provider.capabilities.searchableResultTypes.length === 0) return false;
       if (providerFilter !== "all" && provider.id !== providerFilter) return false;
       if (!provider.getNavigationRoot().visible) return false;
@@ -691,11 +594,11 @@ export class AppCoordinator {
   }
 
   private async searchProvider(
-    provider: Provider,
+    provider: GlobalSearchProvider,
     requestId: number,
     attemptId: number,
     signal: AbortSignal,
-    resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>,
+    resultTypeFilter: GlobalSearchFilter<GlobalSearchResultType>,
   ): Promise<void> {
     const resultTypes = resultTypeFilter === "all"
       ? provider.capabilities.searchableResultTypes
@@ -749,47 +652,6 @@ export class AppCoordinator {
     }
   }
 
-  private async activateSelectedContent(): Promise<void> {
-    if (this.uiState.activeTargetId !== "navidrome") {
-      await this.enqueueSelectedTrack();
-      return;
-    }
-
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) {
-      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
-      return;
-    }
-
-    const index = this.uiState.selectedContentIndexByTarget.navidrome ?? 0;
-    const entry = provider.getLibraryBrowserEntries(this.uiState.providerLocation)[index];
-    if (!entry) {
-      this.appState.lastEvent = "no Navidrome Library Browser row selected";
-      return;
-    }
-
-    try {
-      await provider.openLibraryBrowserEntry(entry);
-      const providerLocation = navidromeLocationForEntry(entry);
-      if (providerLocation) this.updateUiState({ providerLocation });
-    } catch (error) {
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      return;
-    }
-
-    if (entry.kind === "artist") {
-      this.appState.lastEvent = `opened Navidrome artist ${entry.label}`;
-    } else if (entry.kind === "album") {
-      this.appState.lastEvent = `opened Navidrome album ${entry.label}`;
-    } else if (entry.kind === "load-more-albums" || entry.kind === "load-more-tracks") {
-      this.appState.lastEvent = entry.label;
-    } else if (entry.kind === "track") {
-      this.appState.lastEvent = `selected Navidrome Track ${entry.label}`;
-    } else {
-      this.appState.lastEvent = "opened Navidrome artists";
-    }
-  }
-
   private async openLocalPathPrompt(): Promise<void> {
     this.updateUiState({
       activeTargetId: "local",
@@ -801,16 +663,6 @@ export class AppCoordinator {
     });
     this.appState.lastEvent = "opened Local path prompt";
     await this.persistLastSelectedTarget("local");
-  }
-
-  private openNavidromeSearchPrompt(): void {
-    if (this.uiState.activeTargetId !== "navidrome") {
-      this.appState.lastEvent = "Navidrome search is only available in the Navidrome Library Browser";
-      return;
-    }
-
-    this.updateUiState({ focusedPane: "content", activePrompt: "navidrome-search", promptInput: "" });
-    this.appState.lastEvent = "opened Navidrome search prompt";
   }
 
   private setPromptInput(value: string): void {
@@ -1312,12 +1164,6 @@ export class AppCoordinator {
     }
   }
 
-  private refreshOfflineYouTubeCache(): void {
-    const provider = this.appState.providers[OFFLINE_YOUTUBE_CACHE_PROVIDER_ID];
-    if (!isOfflineYouTubeCacheProvider(provider)) return;
-    provider.refresh();
-  }
-
   private async submitYouTubeUrl(url: string, signal: AbortSignal): Promise<void> {
     await this.refreshHelperDependency("yt-dlp");
     const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
@@ -1523,28 +1369,6 @@ export class AppCoordinator {
     this.appState.dependencyHealth = await this.refreshDependencyHealth(helper, this.appState.dependencyHealth);
   }
 
-  private async refreshNavidromeConnection(): Promise<void> {
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) return;
-
-    const state = await provider.validateConnection();
-    if (state.status === "connected") {
-      try {
-        await provider.listArtists();
-      } catch (error) {
-        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-        return;
-      }
-    }
-    this.appState.lastEvent = state.message;
-  }
-
-  private async refreshEnteredTarget(targetId: NavigationTargetId): Promise<void> {
-    if (targetId === "navidrome") await this.refreshNavidromeConnection();
-    if (targetId === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID) this.refreshOfflineYouTubeCache();
-    if (targetId === "youtube-url-download") await this.refreshHelperDependency("yt-dlp");
-  }
-
   private async refreshNavidromeLibrary(): Promise<void> {
     if (await this.refreshNavidromeLibraryData()) this.selectContentIndex("navidrome", 0);
   }
@@ -1693,44 +1517,6 @@ export class AppCoordinator {
     this.notifyStateChanged();
   }
 
-  private selectedVisibleTrack() {
-    const targetId = this.uiState.activeTargetId;
-    const tracks = this.visibleTracks(targetId);
-    const index = clampIndex(this.uiState.selectedContentIndexByTarget[targetId] ?? 0, tracks.length);
-    return tracks[index];
-  }
-
-  private selectedNavidromeTrack() {
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) return undefined;
-
-    const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
-    const index = clampIndex(this.uiState.selectedContentIndexByTarget.navidrome ?? 0, entries.length);
-    const target = provider.playableTargetAt?.(this.uiState.providerLocation, index);
-    if (target && "identity" in target) return target;
-    const entry = entries[index];
-    return entry ? provider.trackForLibraryBrowserEntry(entry) : undefined;
-  }
-
-  private visibleTracks(targetId: NavigationTargetId) {
-    if (targetId === "queue") return [];
-    return this.providerFor(targetId)?.listVisibleTracks() ?? [];
-  }
-
-  private visibleContentLength(targetId: NavigationTargetId): number {
-    if (targetId === "navidrome") {
-      const provider = this.providerFor(targetId);
-      if (isNavidromeProvider(provider)) {
-        return provider.getLibraryBrowserEntries(this.uiState.providerLocation).length;
-      }
-    }
-    return this.visibleTracks(targetId).length;
-  }
-
-  private providerFor(targetId: NavigationTargetId): Provider | undefined {
-    return this.appState.providers[targetId];
-  }
-
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
   }
@@ -1766,10 +1552,10 @@ export class AppCoordinator {
   }
 }
 
-function providerIdForTarget(targetId: NavigationTargetId) {
-  return targetId === "local" || targetId === "navidrome" || targetId === "offline-youtube-cache"
-    ? targetId
-    : null;
+type GlobalSearchProvider = Provider & { readonly id: GlobalSearchProviderId };
+
+function isGlobalSearchProvider(provider: Provider): provider is GlobalSearchProvider {
+  return isProviderId(provider.id);
 }
 
 function completedPlayThresholdSeconds(durationSeconds: number | null | undefined): number {
