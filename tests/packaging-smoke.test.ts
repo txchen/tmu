@@ -78,7 +78,7 @@ describe("Node npm package", () => {
     await exec("npm", ["install", "--global", "--prefix", globalPrefix, tarball]);
 
     const env = isolatedRuntimeEnv();
-    await expectPackedTerminal(join(globalPrefix, "bin", "tmu"), [], env);
+    await expectPackedTerminal("/bin/sh", ["-c", "exec \"$1\"", "tmu-global", join(globalPrefix, "bin", "tmu")], env);
     await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env);
   }, 30_000);
 
