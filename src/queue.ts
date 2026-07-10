@@ -2,6 +2,7 @@ import {
   clampIndex,
   identityKey,
   sameIdentity,
+  uniqueTracksByIdentity,
   type Queue,
   type QueueEntry,
   type QueueState,
@@ -47,13 +48,10 @@ export class MemoryQueue implements Queue {
 
   playNext(tracks: readonly Track[]): readonly QueueEntry[] {
     const current = this.items[this.activeIndex];
-    const requested = uniqueTracks(tracks).filter((track) =>
+    const requested = uniqueTracksByIdentity(tracks).filter((track) =>
       !sameIdentity(track.identity, current?.track.identity),
     );
-    const requestedKeys = new Set(requested.map((track) => identityKey(track.identity)));
-    const existing = new Map(this.items.map((entry) => [identityKey(entry.track.identity), entry]));
-    const block = requested.map((track) => existing.get(identityKey(track.identity)) ?? newQueueEntry(track));
-    const remaining = this.items.filter((entry) => !requestedKeys.has(identityKey(entry.track.identity)));
+    const { block, remaining } = this.extractBlock(requested);
     const currentIndex = current
       ? remaining.findIndex((entry) => sameIdentity(entry.track.identity, current.track.identity))
       : -1;
@@ -66,7 +64,7 @@ export class MemoryQueue implements Queue {
   }
 
   playNow(tracks: readonly Track[]): QueueEntry | undefined {
-    const requested = uniqueTracks(tracks);
+    const requested = uniqueTracksByIdentity(tracks);
     const first = requested[0];
     if (!first) return undefined;
 
@@ -78,12 +76,10 @@ export class MemoryQueue implements Queue {
     const blockTracks = differentFormerCurrent
       ? requested.filter((track) => !sameIdentity(track.identity, differentFormerCurrent.track.identity))
       : requested;
-    const blockKeys = new Set(blockTracks.map((track) => identityKey(track.identity)));
-    const existing = new Map(this.items.map((entry) => [identityKey(entry.track.identity), entry]));
-    const block = blockTracks.map((track) => existing.get(identityKey(track.identity)) ?? newQueueEntry(track));
-    const removedKeys = new Set(blockKeys);
-    if (differentFormerCurrent) removedKeys.add(identityKey(differentFormerCurrent.track.identity));
-    const remaining = this.items.filter((entry) => !removedKeys.has(identityKey(entry.track.identity)));
+    const { block, remaining, removedKeys } = this.extractBlock(
+      blockTracks,
+      differentFormerCurrent ? [differentFormerCurrent] : [],
+    );
     const oldAnchor = formerCurrent ? this.items.indexOf(formerCurrent) : 0;
     const insertionIndex = formerCurrent
       ? this.items.slice(0, oldAnchor).filter((entry) =>
@@ -236,16 +232,20 @@ export class MemoryQueue implements Queue {
       this.items[candidate] = value!;
     }
   }
-}
 
-function uniqueTracks(tracks: readonly Track[]): Track[] {
-  const seen = new Set<string>();
-  return tracks.filter((track) => {
-    const key = identityKey(track.identity);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  private extractBlock(
+    tracks: readonly Track[],
+    additionallyRemoved: readonly QueueEntry[] = [],
+  ): { block: QueueEntry[]; remaining: QueueEntry[]; removedKeys: Set<string> } {
+    const removedKeys = new Set(tracks.map((track) => identityKey(track.identity)));
+    for (const entry of additionallyRemoved) removedKeys.add(identityKey(entry.track.identity));
+    const existing = new Map(this.items.map((entry) => [identityKey(entry.track.identity), entry]));
+    return {
+      block: tracks.map((track) => existing.get(identityKey(track.identity)) ?? newQueueEntry(track)),
+      remaining: this.items.filter((entry) => !removedKeys.has(identityKey(entry.track.identity))),
+      removedKeys,
+    };
+  }
 }
 
 function newQueueEntry(track: Track): QueueEntry {

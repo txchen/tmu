@@ -4,6 +4,7 @@ import {
   identityKey,
   navigationTargetIndex,
   sameIdentity,
+  uniqueTracksByIdentity,
   type AppIntent,
   type LegacyAppIntent,
   type AppState,
@@ -486,7 +487,6 @@ export class AppCoordinator {
   }
 
   private async playNowTarget(target: PlayableTarget, signal?: AbortSignal): Promise<void> {
-    if (this.blockPlaybackActionIfUnavailable()) return;
     const tracks = await this.resolvePlayableTarget(target, signal);
     if (!tracks) return;
     if (tracks.length === 0) {
@@ -505,6 +505,13 @@ export class AppCoordinator {
       this.syncQueueState();
       return;
     }
+    this.appState.playback = {
+      ...this.appState.playback,
+      currentTrackIdentity: entry.track.identity,
+      positionSeconds: 0,
+    };
+    this.syncQueueState();
+    if (this.blockPlaybackActionIfUnavailable()) return;
     if (entry.availability.status === "unavailable") {
       this.markUnavailable(entry, entry.availability.reason);
       return;
@@ -514,7 +521,7 @@ export class AppCoordinator {
 
   private async resolvePlayableTarget(target: PlayableTarget, signal?: AbortSignal): Promise<readonly Track[] | null> {
     if ("identity" in target) return [target];
-    if (target.tracks !== undefined) return uniqueTracks(target.tracks);
+    if (target.tracks !== undefined) return uniqueTracksByIdentity(target.tracks);
     if (signal?.aborted) {
       this.appState.lastEvent = "Music Collection resolution cancelled";
       return null;
@@ -533,7 +540,7 @@ export class AppCoordinator {
         this.appState.lastEvent = "Music Collection resolution cancelled";
         return null;
       }
-      return uniqueTracks(result.tracks);
+      return uniqueTracksByIdentity(result.tracks);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.appState.lastEvent = `Music Collection resolution failed: ${message}`;
@@ -1322,6 +1329,7 @@ export class AppCoordinator {
     if (!playbackMessage) return false;
 
     this.appState.playback = {
+      ...this.appState.playback,
       status: "error",
       currentTrackIdentity: this.appState.playback.currentTrackIdentity,
       message: playbackMessage,
@@ -1581,14 +1589,4 @@ function completedPlayThresholdSeconds(durationSeconds: number | null | undefine
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(240, durationSeconds / 2)
     : 240;
-}
-
-function uniqueTracks(tracks: readonly Track[]): Track[] {
-  const seen = new Set<string>();
-  return tracks.filter((track) => {
-    const key = identityKey(track.identity);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
 }

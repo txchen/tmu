@@ -31,6 +31,7 @@ export type PickerOverlay = {
   focus: "results" | "search" | "filter" | "choice" | "input";
   query: string;
   selectedIdentity: TrackIdentity | null;
+  selectedPlayableTarget?: PlayableTarget | null;
   scroll: number;
   filterText?: string;
   providerLocation?: ProviderLocation;
@@ -316,6 +317,16 @@ export function identityKey(identity: TrackIdentity): string {
 export function sameIdentity(left: TrackIdentity | null | undefined, right: TrackIdentity | null | undefined): boolean {
   if (!left || !right) return false;
   return left.providerId === right.providerId && left.stableId === right.stableId;
+}
+
+export function uniqueTracksByIdentity(tracks: readonly Track[]): Track[] {
+  const seen = new Set<string>();
+  return tracks.filter((track) => {
+    const key = identityKey(track.identity);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function navigationTargetIndex(targetId: NavigationTargetId): number {
