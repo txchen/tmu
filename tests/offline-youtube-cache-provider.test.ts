@@ -6,7 +6,6 @@ import {
   NoopPlayer,
   createOfflineYouTubeCacheProvider,
   createTmuApp,
-  renderShellText,
   writeOfflineYouTubeCacheMetadata,
   type PlaybackLocator,
 } from "../src/index";
@@ -239,7 +238,7 @@ describe("OfflineYouTubeCacheProvider", () => {
         player,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
       await coordinator.dispatch({ type: "enqueueSelectedTrack" });
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -280,12 +279,9 @@ describe("OfflineYouTubeCacheProvider", () => {
         },
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
 
-      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-        "Missing Browse Entry  Offline YouTube Cache [unavailable: Cached media file is missing]",
-      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

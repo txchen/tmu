@@ -19,7 +19,6 @@ import {
   createDefaultProviders,
   createNavidromeProvider,
   writeOfflineYouTubeCacheMetadata,
-  renderShellText,
   navigationTargetIndex,
   type NavidromeFetcher,
   type DependencyCommandRequest,
@@ -62,7 +61,7 @@ function fakeProvider(id: string, tracks: Track[] = []): Provider {
 
 function cancellableLocalProvider(): Provider & {
   observedSignal: AbortSignal | null;
-  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTrackFromPath(path: string): Promise<Track | undefined>;
   createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
   onTrackMetadataChange(listener: (track: Track) => void): () => void;
 } {
@@ -77,7 +76,7 @@ function cancellableLocalProvider(): Provider & {
     async resolvePlaybackLocator(identity: TrackIdentity): Promise<PlaybackLocator> {
       return { kind: "file", path: identity.stableId };
     },
-    async createTrackFromCliArg(_path: string): Promise<Track | undefined> {
+    async createTrackFromPath(_path: string): Promise<Track | undefined> {
       return undefined;
     },
     async createTracksFromOpenPath(_path: string, options: LocalOpenOptions = {}): Promise<LocalOpenResult> {
@@ -102,9 +101,9 @@ function restoringLocalProvider(
   } = {},
 ): Provider & {
   resolveCalls: TrackIdentity[];
-  cliArgCalls: string[];
+  pathCalls: string[];
   openPathCalls: string[];
-  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTrackFromPath(path: string): Promise<Track | undefined>;
   createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
   onTrackMetadataChange(listener: (track: Track) => void): () => void;
 } {
@@ -115,7 +114,7 @@ function restoringLocalProvider(
     label: "Local",
     hint: "files and folders",
     resolveCalls: [],
-    cliArgCalls: [],
+    pathCalls: [],
     openPathCalls: [],
     listVisibleTracks() {
       return options.tracks ?? [];
@@ -127,8 +126,8 @@ function restoringLocalProvider(
       }
       return { kind: "file", path: identity.stableId };
     },
-    async createTrackFromCliArg(path: string): Promise<Track | undefined> {
-      this.cliArgCalls.push(path);
+    async createTrackFromPath(path: string): Promise<Track | undefined> {
+      this.pathCalls.push(path);
       return undefined;
     },
     async createTracksFromOpenPath(path: string): Promise<LocalOpenResult> {
@@ -326,16 +325,15 @@ describe("AppCoordinator", () => {
       player: new NoopPlayer(),
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
 
     expect(coordinator.appState.queue.entries).toEqual([]);
-    expect(coordinator.appState.startupMode).toBe("empty");
     expect(coordinator.uiState.focusedPane).toBe("targets");
     expect(coordinator.uiState.activeTargetId).toBe("local");
     expect(coordinator.appState).not.toBe(coordinator.uiState);
   });
 
-  test("persists last selected Provider and restores it on startup without CLI args", async () => {
+  test("persists last selected Provider and restores it on startup", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-last-selected-provider-"));
     const preferencesPath = join(dir, "preferences.json");
 
@@ -351,7 +349,7 @@ describe("AppCoordinator", () => {
         appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
       });
 
-      await first.start([]);
+      await first.start();
       await first.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
       await first.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
 
@@ -366,65 +364,11 @@ describe("AppCoordinator", () => {
         appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
       });
 
-      await second.start([]);
+      await second.start();
 
       expect(second.uiState.activeTargetId).toBe("navidrome");
       expect(second.uiState.focusedPane).toBe("targets");
       expect(second.uiState.selectedTargetIndex).toBe(navigationTargetIndex("navidrome"));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("CLI startup overrides persisted Provider focus, restores settings, and seeds a fresh Queue", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-startup-persistence-"));
-    const cliFile = join(dir, "fresh.flac");
-    const appPreferencesPersistence = new InMemoryAppPreferencesPersistence();
-    const snapshotPersistence = new InMemoryLastQueueSnapshotPersistence();
-
-    try {
-      await writeFile(cliFile, "not real audio");
-      await appPreferencesPersistence.save({
-        version: 1,
-        lastSelectedProviderId: "navidrome",
-        shuffle: true,
-        repeatAll: true,
-        volume: { percent: 42, ready: true },
-      });
-      await snapshotPersistence.save({
-        version: 1,
-        entries: [
-          {
-            track: track("navidrome", "server/song-1", "Remote Restore"),
-            availability: { status: "unknown" },
-          },
-        ],
-        currentIndex: 0,
-        shuffle: true,
-        repeatAll: true,
-        volume: { percent: 42, ready: true },
-      });
-
-      const coordinator = new AppCoordinator({
-        appState: createInitialAppState(createDefaultProviders()),
-        uiState: createInitialUiState(),
-        queue: new MemoryQueue(),
-        player: new NoopPlayer(),
-        snapshotPersistence,
-        appPreferencesPersistence,
-      });
-
-      await coordinator.start([cliFile]);
-
-      expect(coordinator.appState.startupMode).toBe("cli-seeded");
-      expect(coordinator.uiState.activeTargetId).toBe("queue");
-      expect(coordinator.uiState.focusedPane).toBe("queue");
-      expect(coordinator.appState.queue.shuffle).toBe(true);
-      expect(coordinator.appState.queue.repeatAll).toBe(true);
-      expect(coordinator.appState.volume).toEqual({ percent: 42, ready: true });
-      expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
-        "fresh.flac",
-      ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -440,7 +384,7 @@ describe("AppCoordinator", () => {
       appPreferencesPersistence,
     });
 
-    await first.start([]);
+    await first.start();
     await first.dispatch({ type: "toggleShuffle" });
     await first.dispatch({ type: "toggleRepeatAll" });
     await first.dispatch({ type: "setVolume", percent: 36, ready: true });
@@ -453,7 +397,7 @@ describe("AppCoordinator", () => {
       appPreferencesPersistence,
     });
 
-    await second.start([]);
+    await second.start();
 
     expect(second.appState.queue.shuffle).toBe(true);
     expect(second.appState.queue.repeatAll).toBe(true);
@@ -504,7 +448,7 @@ describe("AppCoordinator", () => {
         snapshotPersistence,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
 
       expect(coordinator.appState.queue.entries[0]).toMatchObject({
         track: {
@@ -539,7 +483,7 @@ describe("AppCoordinator", () => {
         appPreferencesPersistence: new FileAppPreferencesPersistence(preferencesPath),
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
 
       expect(coordinator.appState.queue.entries).toEqual([]);
       expect(coordinator.uiState.activeTargetId).toBe("local");
@@ -548,141 +492,6 @@ describe("AppCoordinator", () => {
         expect.stringContaining("Ignored corrupted Last Queue Snapshot"),
         expect.stringContaining("Ignored corrupted app preferences"),
       ]);
-      const text = renderShellText(coordinator.appState, coordinator.uiState);
-      expect(text).toContain("App Diagnostics");
-      expect(text).toContain("Ignored corrupted Last Queue Snapshot");
-      expect(text).toContain("Ignored corrupted app preferences");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("starts with CLI file args as canonical local Tracks without playback locators", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-seed-"));
-    const amber = join(dir, "amber.flac");
-    const cinder = join(dir, "cinder.mp3");
-
-    try {
-      await writeFile(amber, "not real audio");
-      await writeFile(cinder, "not real audio");
-      const coordinator = new AppCoordinator({
-        appState: createInitialAppState(createDefaultProviders()),
-        uiState: createInitialUiState(),
-        queue: new MemoryQueue(),
-        player: new NoopPlayer(),
-      });
-
-      await coordinator.start([amber, cinder]);
-
-      expect(coordinator.appState.startupMode).toBe("cli-seeded");
-      expect(coordinator.uiState.activeTargetId).toBe("queue");
-      expect(coordinator.uiState.focusedPane).toBe("queue");
-      await waitFor(() => {
-        expect(coordinator.appState.queue.entries).toHaveLength(2);
-      });
-      expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
-        identity: { providerId: "local", stableId: await realpath(amber) },
-        title: "amber.flac",
-        providerLabel: "Local",
-      });
-      expect(coordinator.appState.queue.entries[0]?.track).not.toHaveProperty("playbackLocator");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("lazy local metadata updates App State and notifies TUI subscribers without blocking enqueue", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-metadata-"));
-    const file = join(dir, "plain-name.flac");
-    let resolveMetadata!: () => void;
-    const metadataReady = new Promise<void>((resolve) => {
-      resolveMetadata = resolve;
-    });
-    const runner: DependencyCommandRunner = async () => {
-      await metadataReady;
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          format: {
-            duration: "193.5",
-            tags: {
-              title: "Tagged Title",
-              artist: "Tagged Artist",
-              album: "Tagged Album",
-            },
-          },
-        }),
-        stderr: "",
-      };
-    };
-
-    try {
-      await writeFile(file, "not real audio");
-      const { coordinator } = createTmuApp({
-        dependencyRunner: runner,
-        dependencyHealth: createDefaultDependencyHealth(),
-      });
-      let stateChanges = 0;
-      coordinator.onStateChange(() => {
-        stateChanges += 1;
-      });
-
-      await coordinator.start([file]);
-      const canonicalFile = await realpath(file);
-
-      await waitFor(() => {
-        expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
-          title: "plain-name.flac",
-          identity: { providerId: "local", stableId: canonicalFile },
-        });
-      });
-      const stateChangesBeforeMetadata = stateChanges;
-
-      resolveMetadata();
-
-      await waitFor(() => {
-        expect(coordinator.appState.queue.entries[0]?.track).toMatchObject({
-          title: "Tagged Title",
-          artist: "Tagged Artist",
-          album: "Tagged Album",
-          durationSeconds: 193.5,
-        });
-      });
-      expect(stateChanges).toBeGreaterThan(stateChangesBeforeMetadata);
-      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Tagged Title [queued]");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("loads CLI-seeded Local Tracks through the App Coordinator into the Player", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-cli-playback-"));
-    const file = join(dir, "play-me.mp3");
-    const player = new RecordingPlayer();
-
-    try {
-      await writeFile(file, "not real audio");
-      const { coordinator } = createTmuApp({
-        player,
-        dependencyHealth: createDefaultDependencyHealth({
-          helpers: {
-            ffprobe: { name: "ffprobe", command: "/missing/ffprobe", status: "missing" },
-          },
-          metadata: {
-            degraded: true,
-            message: "Metadata degraded: ffprobe missing at /missing/ffprobe",
-          },
-        }),
-      });
-
-      await coordinator.start([file]);
-      await waitFor(() => {
-        expect(coordinator.appState.queue.entries).toHaveLength(1);
-      });
-      await coordinator.dispatch({ type: "startSelectedQueueEntry" });
-
-      expect(player.loaded).toEqual([{ kind: "file", path: await realpath(file) }]);
-      expect(coordinator.appState.playback.status).toBe("playing");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -710,7 +519,7 @@ describe("AppCoordinator", () => {
         }),
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "openLocalPath", path: album });
 
       expect(coordinator.uiState.activeTargetId).toBe("local");
@@ -737,7 +546,7 @@ describe("AppCoordinator", () => {
       await writeFile(join(dir, "song.mp3"), "not real audio");
       const { coordinator } = createTmuApp();
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "openLocalPath", path: dir, signal: controller.signal });
 
       expect(coordinator.appState.queue.entries).toEqual([]);
@@ -750,7 +559,7 @@ describe("AppCoordinator", () => {
   test("opens the Local path prompt from the TUI intent surface", async () => {
     const { coordinator } = createTmuApp();
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "openLocalPathPrompt" });
     await coordinator.dispatch({ type: "setPromptInput", value: "/music/album" });
 
@@ -769,7 +578,7 @@ describe("AppCoordinator", () => {
       player: new NoopPlayer(),
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "openLocalPathPrompt" });
     await coordinator.dispatch({ type: "setPromptInput", value: "/music/huge" });
     await coordinator.dispatch({ type: "submitPrompt" });
@@ -798,7 +607,7 @@ describe("AppCoordinator", () => {
       player: new NoopPlayer(),
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
 
@@ -820,7 +629,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -856,7 +665,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     queue.enqueue(brokenTrack);
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -928,7 +737,7 @@ describe("AppCoordinator", () => {
       navidromeSaltFactory: () => "stream-salt",
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
     await coordinator.dispatch({ type: "activateSelectedContent" });
@@ -987,7 +796,7 @@ describe("AppCoordinator", () => {
       snapshotPersistence,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
 
@@ -1055,7 +864,7 @@ describe("AppCoordinator", () => {
       navidromeSaltFactory: () => "salt",
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
     await coordinator.dispatch({ type: "activateSelectedContent" });
@@ -1104,7 +913,7 @@ describe("AppCoordinator", () => {
       navidromeSaltFactory: () => "salt",
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
     await coordinator.dispatch({ type: "openNavidromeSearchPrompt" });
     await coordinator.dispatch({ type: "setPromptInput", value: "found" });
@@ -1150,7 +959,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
 
@@ -1184,7 +993,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
     player.emitPlaybackState({ status: "playing", positionSeconds: 149, durationSeconds: 300 });
@@ -1222,7 +1031,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
     player.emitPlaybackState({ status: "playing", positionSeconds: 90, durationSeconds: 120 });
@@ -1250,7 +1059,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
 
@@ -1286,16 +1095,12 @@ describe("AppCoordinator", () => {
       navidromeSaltFactory: () => "salt",
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
 
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Artist 1");
-
     await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
-
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Artist 2");
     coordinator.dispatchUi({
       type: "updateView",
       patch: {
@@ -1319,7 +1124,7 @@ describe("AppCoordinator", () => {
       navidromeSaltFactory: () => "salt",
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
 
     expect(coordinator.uiState.activeTargetId).toBe("local");
@@ -1338,7 +1143,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1371,7 +1176,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1399,7 +1204,7 @@ describe("AppCoordinator", () => {
       player: stopPlayer,
     });
 
-    await stopCoordinator.start([]);
+    await stopCoordinator.start();
     await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await stopCoordinator.dispatch({ type: "enqueueSelectedTrack" });
     await stopCoordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1418,7 +1223,7 @@ describe("AppCoordinator", () => {
       player: volumePlayer,
     });
 
-    await volumeCoordinator.start([]);
+    await volumeCoordinator.start();
     await volumeCoordinator.dispatch({ type: "setVolume", percent: 71, ready: true });
 
     expect(volumeCoordinator.appState.lastEvent).toBe("mpv error: volume failed");
@@ -1437,7 +1242,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
@@ -1470,7 +1275,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1514,7 +1319,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1538,9 +1343,6 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.playback.status).toBe("playing");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(third.identity);
     expect(coordinator.appState.queue.currentIndex).toBe(2);
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-      "Broken File [unavailable: mpv error: cannot load /resolved/local//music/broken.flac]",
-    );
   });
 
   test("tears down the Player boundary when the coordinator exits", async () => {
@@ -1608,7 +1410,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1672,7 +1474,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1712,10 +1514,6 @@ describe("AppCoordinator", () => {
       status: "unavailable",
       reason: "Local file no longer exists: /music/missing.flac",
     });
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Expanded Queue");
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-      "Missing File [unavailable: Local file no longer exists: /music/missing.flac]",
-    );
   });
 
   test("saves and restores Last Queue Snapshot through a persistence adapter", async () => {
@@ -1731,7 +1529,7 @@ describe("AppCoordinator", () => {
       snapshotPersistence,
     });
 
-    await first.start([]);
+    await first.start();
     await first.dispatch({ type: "enqueueSelectedTrack" });
     await first.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await first.dispatch({ type: "startSelectedQueueEntry" });
@@ -1750,7 +1548,7 @@ describe("AppCoordinator", () => {
       snapshotPersistence,
     });
 
-    await second.start([]);
+    await second.start();
     await second.dispatch({ type: "restoreLastQueueSnapshot" });
 
     expect(second.appState.queue).toEqual({
@@ -1797,13 +1595,13 @@ describe("AppCoordinator", () => {
       volume: { percent: 87, ready: true },
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
 
     expect(local.resolveCalls.map((identity) => identity.stableId)).toEqual([
       "/music/missing.flac",
       "/music/present.flac",
     ]);
-    expect(local.cliArgCalls).toEqual([]);
+    expect(local.pathCalls).toEqual([]);
     expect(local.openPathCalls).toEqual([]);
     expect(coordinator.appState.queue.entries).toHaveLength(2);
     expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
@@ -1811,9 +1609,6 @@ describe("AppCoordinator", () => {
       reason: "Local file no longer exists: /music/missing.flac",
     });
     expect(coordinator.appState.queue.entries[1]?.availability).toEqual({ status: "available" });
-    expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-      "Missing File [unavailable: Local file no longer exists: /music/missing.flac]",
-    );
 
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -1843,7 +1638,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1892,7 +1687,7 @@ describe("AppCoordinator", () => {
         },
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "offline-youtube-cache" });
       await coordinator.dispatch({ type: "enqueueSelectedTrack" });
 
@@ -1903,9 +1698,6 @@ describe("AppCoordinator", () => {
         },
         availability: { status: "unavailable", reason: "Cached media file is missing" },
       });
-      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-        "Missing Cached Track [unavailable: Cached media file is missing]",
-      );
 
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
       await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -1915,9 +1707,6 @@ describe("AppCoordinator", () => {
         status: "unavailable",
         reason: "Cached media file is missing",
       });
-      expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain(
-        "Missing Cached Track [unavailable: Cached media file is missing]",
-      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -1945,7 +1734,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -1990,7 +1779,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "queue" });
     await coordinator.dispatch({ type: "startSelectedQueueEntry" });
@@ -2022,7 +1811,7 @@ describe("AppCoordinator", () => {
       },
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
     expect(refreshes).toEqual(["yt-dlp"]);
     expect(coordinator.uiState.activePrompt).toBeNull();
@@ -2050,7 +1839,7 @@ describe("AppCoordinator", () => {
       },
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "moveSelection", delta: 3 });
 
     expect(coordinator.uiState.activeTargetId).toBe("youtube-url-download");
@@ -2083,7 +1872,7 @@ describe("AppCoordinator", () => {
       player,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "local" });
     await coordinator.dispatch({ type: "enqueueSelectedTrack" });
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "navidrome" });
@@ -2155,7 +1944,7 @@ describe("AppCoordinator", () => {
         dependencyRunner: runner,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
       await coordinator.dispatch({ type: "setPromptInput", value: "https://music.youtube.com/watch?v=AbC123" });
       await coordinator.dispatch({ type: "submitPrompt" });
@@ -2258,7 +2047,7 @@ describe("AppCoordinator", () => {
         youtubeDownloader: downloader,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
       await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=Missing123" });
       await coordinator.dispatch({ type: "submitPrompt" });
@@ -2335,7 +2124,7 @@ describe("AppCoordinator", () => {
         youtubeDownloader: downloader,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
       await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=First" });
       await coordinator.dispatch({ type: "submitPrompt" });
@@ -2416,7 +2205,7 @@ describe("AppCoordinator", () => {
         youtubeDownloader: downloader,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
       await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelMe" });
       await coordinator.dispatch({ type: "submitPrompt" });
@@ -2487,7 +2276,7 @@ describe("AppCoordinator", () => {
         youtubeDownloader: downloader,
       });
 
-      await coordinator.start([]);
+      await coordinator.start();
       await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
       await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelSuccess" });
       await coordinator.dispatch({ type: "submitPrompt" });
@@ -2533,7 +2322,7 @@ describe("AppCoordinator", () => {
       youtubeDownloader: downloader,
     });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
     await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=CancelIdentify" });
     await coordinator.dispatch({ type: "submitPrompt" });
@@ -2563,7 +2352,7 @@ describe("AppCoordinator", () => {
     };
     const { coordinator } = createTmuApp({ dependencyRunner: runner });
 
-    await coordinator.start([]);
+    await coordinator.start();
     await coordinator.dispatch({ type: "selectNavigationTarget", targetId: "youtube-url-download" });
     await coordinator.dispatch({ type: "setPromptInput", value: "https://www.youtube.com/watch?v=BotCheck" });
     await coordinator.dispatch({ type: "submitPrompt" });

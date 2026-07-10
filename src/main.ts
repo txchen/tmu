@@ -1,74 +1,54 @@
 #!/usr/bin/env bun
+import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
-import { NAVIGATION_TARGETS, type NavigationTargetId } from "./domain";
-import { renderShellText } from "./renderer";
-import { TerminalTui } from "./tui";
+import { createTmuRoot } from "./vue-tui/component";
 
-type RuntimeArgs = {
-  snapshot: boolean;
-  snapshotTargetId?: NavigationTargetId;
-  cliFileArgs: string[];
-};
+export async function main(): Promise<void> {
+  const runtime = await createTmuRuntime();
+  const { coordinator } = runtime;
+  await coordinator.start();
 
-export function parseRuntimeArgs(args: readonly string[]): RuntimeArgs {
-  let snapshot = false;
-  let snapshotTargetId: NavigationTargetId | undefined;
-  const cliFileArgs: string[] = [];
+  const app = createApp(createTmuRoot({ coordinator }));
+  const handleBunPtyResize = () => {
+    coordinator.dispatchUi({
+      type: "resize",
+      columns: process.stdout.columns ?? coordinator.uiState.terminal.columns,
+      rows: process.stdout.rows ?? coordinator.uiState.terminal.rows,
+      queueIdentities: coordinator.queueTrackIdentities(),
+      visibleQueueRows: Math.max(1, (process.stdout.rows ?? 24) - 5),
+    });
+  };
+  process.on("SIGWINCH", handleBunPtyResize);
+  app.mount({
+    alternateScreen: true,
+    interactive: true,
+    patchConsole: false,
+  });
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--snapshot") {
-      snapshot = true;
-      continue;
-    }
+  let terminating = false;
+  const terminateFromSignal = (exitCode: number) => {
+    if (terminating) return;
+    terminating = true;
+    app.unmount();
+    void coordinator.teardown().finally(() => process.exit(exitCode));
+  };
+  const handleSigint = () => terminateFromSignal(130);
+  const handleSigterm = () => terminateFromSignal(143);
+  const handleSighup = () => terminateFromSignal(129);
+  process.once("SIGINT", handleSigint);
+  process.once("SIGTERM", handleSigterm);
+  process.once("SIGHUP", handleSighup);
 
-    if (arg === "--snapshot-target") {
-      const value = args[index + 1];
-      if (!value) throw new Error("--snapshot-target requires a navigation target id");
-      snapshotTargetId = navigationTargetIdFromArg(value);
-      index += 1;
-      continue;
-    }
-
-    if (arg.startsWith("--snapshot-target=")) {
-      snapshotTargetId = navigationTargetIdFromArg(arg.slice("--snapshot-target=".length));
-      continue;
-    }
-
-    if (arg.startsWith("--")) continue;
-    cliFileArgs.push(arg);
+  try {
+    await app.waitUntilExit();
+  } finally {
+    process.off("SIGWINCH", handleBunPtyResize);
+    process.off("SIGINT", handleSigint);
+    process.off("SIGTERM", handleSigterm);
+    process.off("SIGHUP", handleSighup);
+    app.unmount();
+    await coordinator.teardown();
   }
-
-  return { snapshot, snapshotTargetId, cliFileArgs };
 }
 
-export async function main(args: readonly string[] = Bun.argv.slice(2)): Promise<void> {
-  const runtime = parseRuntimeArgs(args);
-  const snapshotMode = runtime.snapshot || !process.stdin.isTTY || !process.stdout.isTTY;
-  const app = await createTmuRuntime({ startPlayer: !snapshotMode });
-  await app.coordinator.start(runtime.cliFileArgs);
-  if (runtime.snapshotTargetId) {
-    await app.coordinator.dispatch({ type: "selectNavigationTarget", targetId: runtime.snapshotTargetId });
-  }
-
-  if (snapshotMode) {
-    try {
-      process.stdout.write(`${renderShellText(app.coordinator.appState, app.coordinator.uiState)}\n`);
-    } finally {
-      await app.coordinator.teardown();
-    }
-    return;
-  }
-
-  new TerminalTui(app).run();
-}
-
-if (import.meta.main) {
-  await main();
-}
-
-function navigationTargetIdFromArg(value: string): NavigationTargetId {
-  const targetId = NAVIGATION_TARGETS.find((target) => target.id === value)?.id;
-  if (!targetId) throw new Error(`Unknown snapshot target: ${value}`);
-  return targetId;
-}
+if (import.meta.main) await main();

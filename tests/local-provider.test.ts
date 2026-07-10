@@ -26,7 +26,7 @@ describe("LocalProvider", () => {
         runner,
       });
 
-      const track = await Promise.resolve(provider.createTrackFromCliArg(file));
+      const track = await Promise.resolve(provider.createTrackFromPath(file));
 
       expect(track).toMatchObject({
         identity: { providerId: "local", stableId: await realpath(file) },
@@ -57,7 +57,7 @@ describe("LocalProvider", () => {
         }),
       });
 
-      const track = await provider.createTrackFromCliArg(file);
+      const track = await provider.createTrackFromPath(file);
       const canonicalFile = await realpath(file);
 
       expect(await provider.resolvePlaybackLocator(track!.identity)).toEqual({ kind: "file", path: canonicalFile });
@@ -93,8 +93,8 @@ describe("LocalProvider", () => {
         }),
       });
 
-      const first = await Promise.resolve(provider.createTrackFromCliArg(file));
-      const second = await Promise.resolve(provider.createTrackFromCliArg(alias));
+      const first = await Promise.resolve(provider.createTrackFromPath(file));
+      const second = await Promise.resolve(provider.createTrackFromPath(alias));
 
       expect(first).toBeDefined();
       expect(second).toBe(first);
@@ -129,8 +129,8 @@ describe("LocalProvider", () => {
         runner,
       });
 
-      const audioTrack = await Promise.resolve(provider.createTrackFromCliArg(audioFile));
-      const rejected = await Promise.resolve(provider.createTrackFromCliArg(videoFile));
+      const audioTrack = await Promise.resolve(provider.createTrackFromPath(audioFile));
+      const rejected = await Promise.resolve(provider.createTrackFromPath(videoFile));
 
       expect(audioTrack?.identity.stableId).toBe(await realpath(audioFile));
       expect(rejected).toBeUndefined();
@@ -167,7 +167,7 @@ describe("LocalProvider", () => {
         runner,
       });
 
-      const track = await Promise.resolve(provider.createTrackFromCliArg(file));
+      const track = await Promise.resolve(provider.createTrackFromPath(file));
 
       expect(track).toBeUndefined();
       expect(requests).toEqual([]);
@@ -203,7 +203,7 @@ describe("LocalProvider", () => {
         metadataConcurrency: 1,
       });
 
-      await Promise.all(files.map((file) => provider.createTrackFromCliArg(file)));
+      await Promise.all(files.map((file) => provider.createTrackFromPath(file)));
       await waitFor(() => {
         expect(releases).toHaveLength(1);
       });

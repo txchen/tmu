@@ -48,7 +48,6 @@ export function createInitialAppState(
       percent: 100,
       ready: false,
     },
-    startupMode: "empty",
     downloads: {
       active: false,
       lines: [],
