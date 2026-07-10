@@ -450,11 +450,7 @@ export class RootInputRouter {
         this.uiState.dispatch({ type: "requestConfirmation", kind: "quit-download" });
         return;
       }
-      try {
-        await this.dispatchApp(intent);
-      } finally {
-        this.requestQuit?.();
-      }
+      await this.quitApp();
       return;
     }
     await this.dispatchApp(intent);
@@ -522,11 +518,7 @@ export class RootInputRouter {
       } else if (confirmation.kind === "cancel-download") {
         await this.dispatchApp({ type: "downloadOperation", operation: "cancel" });
       } else {
-        try {
-          await this.dispatchApp({ type: "playerOperation", operation: "quit" });
-        } finally {
-          this.requestQuit?.();
-        }
+        await this.quitApp();
       }
       this.uiState.dispatch({ type: "cancelConfirmation" });
       this.syncQueueSelection();
@@ -537,6 +529,14 @@ export class RootInputRouter {
 
   private syncQueueSelection(): void {
     this.uiState.dispatch({ type: "syncQueue", identities: queueIdentities(this.appState()) });
+  }
+
+  private async quitApp(): Promise<void> {
+    try {
+      await this.dispatchApp({ type: "playerOperation", operation: "quit" });
+    } finally {
+      this.requestQuit?.();
+    }
   }
 
   private clearPendingChordTimer(): void {

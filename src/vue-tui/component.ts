@@ -8,7 +8,7 @@ import {
   type ResolvedAction,
 } from "../action-registry";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
-import { isRestoredPlayback, sameIdentity, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
+import { isRestoredPlayback, sameIdentity, type ConfirmationKind, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
 import { RootInputRouter } from "../input-router";
 import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
@@ -487,12 +487,22 @@ function globalSearchRowView(row: GlobalSearchRow, selected: boolean) {
     `${selected ? "› " : "  "}${row.result.label} · ${row.result.providerLabel}${row.result.detail ? ` · ${row.result.detail}` : ""}`);
 }
 
-function confirmationView(kind: "clear-queue" | "cancel-download" | "quit-download", choice: "cancel" | "confirm") {
-  const copy = kind === "clear-queue"
-    ? { title: "Clear Queue?", detail: "Stop playback, clear Current Track, and remove every Track.", cancel: "Cancel", action: "Clear" }
-    : kind === "cancel-download"
-      ? { title: "Cancel YouTube download?", detail: "Stop the download and clean up partial files.", cancel: "Keep session", action: "Cancel download" }
-      : { title: "Quit during YouTube download?", detail: "Quit will cancel the download and clean up partial files first.", cancel: "Keep session", action: "Quit" };
+const CONFIRMATION_COPY: Record<ConfirmationKind, {
+  title: string; detail: string; cancel: string; action: string;
+}> = {
+  "clear-queue": {
+    title: "Clear Queue?", detail: "Stop playback, clear Current Track, and remove every Track.", cancel: "Cancel", action: "Clear",
+  },
+  "cancel-download": {
+    title: "Cancel YouTube download?", detail: "Stop the download and clean up partial files.", cancel: "Keep session", action: "Cancel download",
+  },
+  "quit-download": {
+    title: "Quit during YouTube download?", detail: "Quit will cancel the download and clean up partial files first.", cancel: "Keep session", action: "Quit",
+  },
+};
+
+function confirmationView(kind: ConfirmationKind, choice: "cancel" | "confirm") {
+  const copy = CONFIRMATION_COPY[kind];
   return h(Box, { flexDirection: "column", borderStyle: "single", paddingX: 1 }, () => [
     h(Text, { bold: true }, () => copy.title),
     h(Text, () => copy.detail),
