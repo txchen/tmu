@@ -45,6 +45,7 @@ describe("supported Node and npm workflow", () => {
       "tsconfig.json",
       "tsdown.config.ts",
       ...await filesUnder("docs"),
+      ...await filesUnder(".github"),
       ...await filesUnder("src"),
       ...await filesUnder("tests"),
       ...await filesUnder("scripts"),
@@ -53,6 +54,7 @@ describe("supported Node and npm workflow", () => {
     for (const file of files) {
       if ([
         "tests/node-workflow.test.ts",
+        "tests/packaging-smoke.test.ts",
         "docs/adr/0002-use-node-for-runtime-and-distribution.md",
         "docs/research/bun-vs-node-efficiency.md",
       ].includes(file)) continue;
@@ -62,6 +64,23 @@ describe("supported Node and npm workflow", () => {
     const comparison = await readFile("docs/research/bun-vs-node-efficiency.md", "utf8");
     expect(comparison).toContain("Historical note:");
     expect(comparison).not.toMatch(/TMU currently uses|Production source uses/);
+  });
+
+  test("verifies every supported platform and Node runtime in CI", async () => {
+    const workflow = await readFile(".github/workflows/verify.yml", "utf8");
+
+    expect(workflow).toMatch(/- os: ubuntu-latest\s+node-version: 24/);
+    expect(workflow).toMatch(/- os: ubuntu-latest\s+node-version: latest/);
+    expect(workflow).toMatch(/- os: macos-latest\s+node-version: 24/);
+    for (const command of [
+      "npm ci",
+      "npm run typecheck",
+      "npm test",
+      "npm run build",
+      "npm run smoke:package",
+    ]) {
+      expect(workflow).toContain(`run: ${command}`);
+    }
   });
 });
 
