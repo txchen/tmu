@@ -16,6 +16,42 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
   await waitForOutput(() => read().slice(from), expected);
 }
 
+async function waitForJsonFile<T>(
+  path: string,
+  predicate: (value: T) => boolean,
+  timeoutMs = 8_000,
+): Promise<T> {
+  const startedAt = Date.now();
+  let latest: T | undefined;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      latest = JSON.parse(await Bun.file(path).text()) as T;
+      if (predicate(latest)) return latest;
+    } catch {
+      // The snapshot may not exist yet or may be between atomic writes.
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`Timed out waiting for JSON state in ${path}: ${JSON.stringify(latest)}`);
+}
+
+async function waitForStableFile(path: string, stableMs = 500, timeoutMs = 8_000): Promise<string> {
+  const startedAt = Date.now();
+  let latest = "";
+  let stableSince = startedAt;
+  while (Date.now() - startedAt < timeoutMs) {
+    const next = await Bun.file(path).text();
+    if (next !== latest) {
+      latest = next;
+      stableSince = Date.now();
+    } else if (Date.now() - stableSince >= stableMs) {
+      return latest;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`Timed out waiting for stable file ${path}`);
+}
+
 async function resizeAndWait(
   terminal: Bun.Terminal,
   subprocess: { kill(signal?: NodeJS.Signals | number): void },
@@ -540,30 +576,36 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Search: Album");
       terminal.write("\r");
       await waitForOutput(read, "PTY Album");
+      let selectionFrame = output.length;
       terminal.write("G");
-      await Bun.sleep(50);
+      await waitForNewOutput(read, selectionFrame, "› Offline YouTube Cache · No results");
+      selectionFrame = output.length;
       terminal.write("k");
-      await Bun.sleep(50);
+      await waitForNewOutput(read, selectionFrame, "› Local · No results");
+      selectionFrame = output.length;
       terminal.write("k");
-      await Bun.sleep(200);
+      await waitForNewOutput(read, selectionFrame, "› PTY Album · Navidrome · PTY Artist");
 
       terminal.write("\r");
       await waitForOutput(read, "Queue · 5 Tracks", 10_000);
-      await Bun.sleep(200);
-      let snapshot = JSON.parse(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text());
+      const snapshotPath = `${runtimeRoot}/state/tmu/last-queue.json`;
+      type Snapshot = { entries: Array<{ track: { title: string } }>; currentIndex: number };
+      let snapshot = await waitForJsonFile<Snapshot>(snapshotPath, (value) =>
+        value.entries.length === 5 && value.entries[value.currentIndex]?.track.title === "PTY Track");
       expect(snapshot.entries[snapshot.currentIndex].track.title).toBe("PTY Track");
 
       terminal.write("\x1b[13;2u");
-      await Bun.sleep(2_000);
-      snapshot = JSON.parse(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text());
+      snapshot = await waitForJsonFile<Snapshot>(snapshotPath, (value) =>
+        value.entries[value.currentIndex]?.track.title === "Collection One");
       expect(snapshot.entries[snapshot.currentIndex].track.title).toBe("Collection One");
 
-      const beforeFailure = await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text();
+      const beforeFailure = await waitForStableFile(snapshotPath);
+      selectionFrame = output.length;
       terminal.write("k");
-      await Bun.sleep(50);
+      await waitForNewOutput(read, selectionFrame, "› Broken Album · Navidrome · PTY Artist");
       terminal.write("\r");
       await waitForOutput(read, "Could not load Music Collection: Album temporarily unavailable");
-      expect(await Bun.file(`${runtimeRoot}/state/tmu/last-queue.json`).text()).toBe(beforeFailure);
+      expect(await Bun.file(snapshotPath).text()).toBe(beforeFailure);
 
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
