@@ -935,8 +935,11 @@ export class AppCoordinator {
 
     const positionSeconds = this.appState.playback.positionSeconds;
     if (typeof positionSeconds === "number" && Number.isFinite(positionSeconds) && positionSeconds > 5) {
+      const wasPaused = this.appState.playback.status === "paused";
       const restarted = await this.runPlayerCommand(() => this.player.seekBy(-positionSeconds));
-      if (restarted) this.appState.lastEvent = `restarted ${current.track.title}`;
+      if (!restarted) return;
+      if (wasPaused && !await this.runPlayerCommand(() => this.player.setPaused(false))) return;
+      this.appState.lastEvent = `restarted ${current.track.title}`;
       return;
     }
 
@@ -1246,7 +1249,8 @@ export class AppCoordinator {
       return;
     }
 
-    const ok = await this.runPlayerCommand(() => this.player.togglePause());
+    const pause = this.appState.playback.status === "playing";
+    const ok = await this.runPlayerCommand(() => this.player.setPaused(pause));
     if (!ok) return;
     this.appState.lastEvent = this.appState.playback.status === "paused" ? "paused" : "resumed";
   }

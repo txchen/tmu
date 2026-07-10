@@ -175,6 +175,11 @@ class RecordingPlayer extends NoopPlayer implements Player {
     return super.togglePause();
   }
 
+  async setPaused(paused: boolean) {
+    this.toggles += 1;
+    return super.setPaused(paused);
+  }
+
   async stop() {
     this.stops += 1;
     return super.stop();
