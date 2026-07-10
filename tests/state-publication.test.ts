@@ -203,6 +203,28 @@ describe("StatePublicationGate", () => {
     expect(timers.count).toBe(0);
   });
 
+  test("coalesces hidden download progress and publishes the latest App State when status reopens", () => {
+    const { appState, uiState, gate, publications, timers } = harness();
+
+    appState.downloads = { active: true, lines: ["download 0.0%"] };
+    gate.notify("state");
+    timers.advanceBy(100);
+    appState.downloads = { active: true, lines: ["download 20.0%", "download 40.0%"] };
+    gate.notify("state");
+    expect(timers.count).toBe(1);
+
+    uiState.overlays = [{
+      kind: "youtube-url", focus: "results", query: "", selectedIdentity: null, scroll: 0,
+    }];
+    gate.notify("input");
+
+    expect(publications.at(-1)?.snapshot.appState.downloads.lines).toEqual([
+      "download 20.0%", "download 40.0%",
+    ]);
+    expect(publications.at(-1)?.snapshot.uiState.overlays.at(-1)?.focus).toBe("results");
+    expect(timers.count).toBe(0);
+  });
+
   test("exposes deeply frozen readonly data snapshots through pure selectors", () => {
     const appState = createInitialAppState(createDefaultProviders());
     const uiState = createInitialUiState();

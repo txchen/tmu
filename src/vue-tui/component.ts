@@ -176,7 +176,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay, snapshot, registry, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
-    uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
+    uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.kind, uiState.pendingConfirmation.choice) : null,
   ]);
 }
 
@@ -409,7 +409,18 @@ function overlayView(
     overlay.kind === "shortcut-help" || overlay.kind === "command-palette"
       ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} ${overlay.kind === "shortcut-help" ? "Filter" : "Search"}: ${overlay.query}`)
       : null,
-    overlay.kind === "youtube-url" ? h(Text, () => `> URL: ${overlay.query}`) : null,
+    overlay.kind === "youtube-url" && overlay.focus === "input" ? h(Text, () => `> URL: ${overlay.query}`) : null,
+    overlay.kind === "youtube-url" && overlay.focus === "results"
+      ? h(Text, { bold: true }, () => snapshot.appState.downloads.active
+        ? "Download in progress"
+        : "Download finished")
+      : null,
+    ...(overlay.kind === "youtube-url" && overlay.focus === "results"
+      ? snapshot.appState.downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line))
+      : []),
+    overlay.kind === "youtube-url" && overlay.focus === "results"
+      ? h(Text, { wrap: "truncate-end" }, () => snapshot.appState.lastEvent)
+      : null,
     overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
     overlay.kind === "music-picker" ? h(Text, { inverse: overlay.focus === "filter", dimColor: overlay.focus !== "filter" }, () =>
       `Filters: Provider ${overlay.providerFilter ?? "all"} · Type ${overlay.resultTypeFilter ?? "all"}`) : null,
@@ -449,6 +460,10 @@ function overlayView(
       ? overlay.focus === "results" ? "j/k move · / filter · q/Esc dismiss" : "Enter results · Esc results · Ctrl-w word · Ctrl-u clear"
       : overlay.kind === "command-palette"
         ? "Enter invoke · Esc dismiss · Ctrl-w word · Ctrl-u clear"
+        : overlay.kind === "youtube-url"
+          ? overlay.focus === "input"
+            ? "Enter download · Esc dismiss · Ctrl-w word · Ctrl-u clear"
+            : "x cancel · Esc/q dismiss · download continues"
         : overlay.focus === "results"
           ? searchActive ? "j/k move · Enter Play Next · l/→ open · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
           : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
@@ -472,11 +487,16 @@ function globalSearchRowView(row: GlobalSearchRow, selected: boolean) {
     `${selected ? "› " : "  "}${row.result.label} · ${row.result.providerLabel}${row.result.detail ? ` · ${row.result.detail}` : ""}`);
 }
 
-function confirmationView(choice: "cancel" | "confirm") {
+function confirmationView(kind: "clear-queue" | "cancel-download" | "quit-download", choice: "cancel" | "confirm") {
+  const copy = kind === "clear-queue"
+    ? { title: "Clear Queue?", detail: "Stop playback, clear Current Track, and remove every Track.", cancel: "Cancel", action: "Clear" }
+    : kind === "cancel-download"
+      ? { title: "Cancel YouTube download?", detail: "Stop the download and clean up partial files.", cancel: "Keep session", action: "Cancel download" }
+      : { title: "Quit during YouTube download?", detail: "Quit will cancel the download and clean up partial files first.", cancel: "Keep session", action: "Quit" };
   return h(Box, { flexDirection: "column", borderStyle: "single", paddingX: 1 }, () => [
-    h(Text, { bold: true }, () => "Clear Queue?"),
-    h(Text, () => "Stop playback, clear Current Track, and remove every Track."),
-    h(Text, { inverse: choice === "cancel" }, () => choice === "cancel" ? "[Cancel]  Clear" : "Cancel  [Clear]"),
+    h(Text, { bold: true }, () => copy.title),
+    h(Text, () => copy.detail),
+    h(Text, { inverse: choice === "cancel" }, () => choice === "cancel" ? `[${copy.cancel}]  ${copy.action}` : `${copy.cancel}  [${copy.action}]`),
     h(Text, { dimColor: true }, () => "h/l or ←/→ · Tab changes · Enter activates · y yes · n/Esc/q cancel"),
   ]);
 }
