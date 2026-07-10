@@ -92,7 +92,7 @@ describe("YouTube URL Download adapter", () => {
         extractor: "youtube",
         id: "AbC123",
         title: "Identified Track",
-        artist: "Cache Artist",
+        uploader: "Cache Artist",
         durationSeconds: 181.7,
       },
     });
@@ -238,14 +238,12 @@ describe("YouTube URL Download adapter", () => {
         command: "/opt/bin/yt-dlp",
         cache: {
           cacheDir: dir,
-          mediaDirName: "media",
-          metadataFileName: "metadata.json",
         },
         metadata: {
           extractor: "youtube",
           id: "AbC123",
           title: "Downloaded Track",
-          artist: "Prompt Artist",
+          uploader: "Prompt Artist",
           durationSeconds: 188,
         },
         cookiesFromBrowser: "firefox:Profile With Spaces",
@@ -293,7 +291,7 @@ describe("YouTube URL Download adapter", () => {
         id: "AbC123",
         title: "Downloaded Track",
         mediaFileName: "youtube-AbC123.webm",
-        artist: "Prompt Artist",
+        uploader: "Prompt Artist",
         durationSeconds: 188,
       });
       expect(JSON.parse(await readFile(join(dir, "youtube", "AbC123", "source.json"), "utf8"))).toEqual({
@@ -302,7 +300,7 @@ describe("YouTube URL Download adapter", () => {
         extractor: "youtube",
         id: "AbC123",
         title: "Downloaded Track",
-        artist: "Prompt Artist",
+        uploader: "Prompt Artist",
         durationSeconds: 188,
       });
       const entryFiles = await readdir(join(dir, "youtube", "AbC123"));
@@ -330,13 +328,12 @@ describe("YouTube URL Download adapter", () => {
         command: "yt-dlp",
         cache: {
           cacheDir: dir,
-          mediaDirName: "media",
-          metadataFileName: "metadata.json",
         },
         metadata: {
           extractor: "youtube",
           id: "Archived123",
           title: "Archived Track",
+          uploader: "Uploader",
         },
         progressThrottleMs: 500,
         runner,
@@ -377,8 +374,8 @@ describe("YouTube URL Download adapter", () => {
       await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=AbC123",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "AbC123", title: "Progress Track" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "AbC123", title: "Progress Track", uploader: "Uploader" },
         progressThrottleMs: 500,
         now: () => times.shift() ?? 600,
         runner,
@@ -403,8 +400,8 @@ describe("YouTube URL Download adapter", () => {
       const failed = await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=Restricted",
         command: "yt-dlp",
-        cache: { cacheDir: failedDir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "Restricted", title: "Restricted Track" },
+        cache: { cacheDir: failedDir,  },
+        metadata: { extractor: "youtube", id: "Restricted", title: "Restricted Track", uploader: "Uploader" },
         progressThrottleMs: 500,
         validateMedia: async () => ({ ok: true }),
         runner: async () => ({
@@ -421,8 +418,8 @@ describe("YouTube URL Download adapter", () => {
       const invalid = await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=Invalid",
         command: "yt-dlp",
-        cache: { cacheDir: validationDir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "Invalid", title: "Invalid Media" },
+        cache: { cacheDir: validationDir,  },
+        metadata: { extractor: "youtube", id: "Invalid", title: "Invalid Media", uploader: "Uploader" },
         progressThrottleMs: 500,
         runner: async () => {
           await mkdir(join(validationDir, "youtube", "Invalid", "media"), { recursive: true });
@@ -465,8 +462,8 @@ describe("YouTube URL Download adapter", () => {
       await expect(downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=Atomic",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "Atomic", title: "New Title" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "Atomic", title: "New Title", uploader: "Uploader" },
         progressThrottleMs: 500,
         runner: async () => {
           await writeFile(join(dir, "youtube", "Atomic", "media", "youtube-Atomic.webm"), "audio bytes");
@@ -491,8 +488,8 @@ describe("YouTube URL Download adapter", () => {
       const resultPromise = downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=CancelMe",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "CancelMe", title: "Cancel Track" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "CancelMe", title: "Cancel Track", uploader: "Uploader" },
         progressThrottleMs: 500,
         signal: controller.signal,
         validateMedia: async () => ({ ok: true }),
@@ -526,8 +523,8 @@ describe("YouTube URL Download adapter", () => {
       const result = await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=CleanupFails",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "CleanupFails", title: "Cleanup Failure" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "CleanupFails", title: "Cleanup Failure", uploader: "Uploader" },
         progressThrottleMs: 500,
         signal: controller.signal,
         validateMedia: async () => ({ ok: true }),
@@ -561,8 +558,8 @@ describe("YouTube URL Download adapter", () => {
       const result = await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=LateCancel",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "LateCancel", title: "Late Cancel Track" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "LateCancel", title: "Late Cancel Track", uploader: "Uploader" },
         progressThrottleMs: 500,
         signal: controller.signal,
         runner: async () => {
@@ -607,8 +604,8 @@ describe("YouTube URL Download adapter", () => {
       const result = await downloadYouTubeUrl({
         url: "https://www.youtube.com/watch?v=FinalCancel",
         command: "yt-dlp",
-        cache: { cacheDir: dir, mediaDirName: "media", metadataFileName: "metadata.json" },
-        metadata: { extractor: "youtube", id: "FinalCancel", title: "Final Cancel Track" },
+        cache: { cacheDir: dir,  },
+        metadata: { extractor: "youtube", id: "FinalCancel", title: "Final Cancel Track", uploader: "Uploader" },
         progressThrottleMs: 500,
         signal: controller.signal,
         runner: async () => {

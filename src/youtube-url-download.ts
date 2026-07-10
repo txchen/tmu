@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, readdir, rename, rm } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 import { YOUTUBE_CACHE_PROVIDER_ID } from "./domain";
 import {
   writeYouTubeCacheMetadata,
@@ -22,8 +22,7 @@ export type IdentifiedYouTubeMetadata = {
   extractor: string;
   id: string;
   title: string;
-  artist?: string;
-  album?: string;
+  uploader: string;
   durationSeconds?: number;
 };
 
@@ -93,7 +92,6 @@ export type YouTubeDownloadResult =
     ok: true;
     mediaPath: string;
     metadataPath: string;
-    sourceMetadataPath: string;
   }
   | {
     ok: false;
@@ -112,7 +110,6 @@ type YtDlpInfoJson = {
   artist?: unknown;
   uploader?: unknown;
   channel?: unknown;
-  album?: unknown;
   duration?: unknown;
   is_live?: unknown;
   live_status?: unknown;
@@ -122,19 +119,6 @@ type YtDlpInfoJson = {
 type FfprobeAudioJson = {
   streams?: Array<{ codec_type?: unknown }>;
 };
-
-type YouTubeSourceMetadata = {
-  version: 1;
-  url: string;
-  extractor: string;
-  id: string;
-  title: string;
-  artist?: string;
-  album?: string;
-  durationSeconds?: number;
-};
-
-const YOUTUBE_SOURCE_METADATA_FILE_NAME = "source.json";
 
 export function validateYouTubeUrlDownloadInput(input: string): YouTubeUrlValidationResult {
   const trimmed = input.trim();
@@ -240,9 +224,6 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
   const progress = createDownloadProgressReporter(options);
 
   await mkdir(paths.mediaDir, { recursive: true });
-  if (!await findDownloadedMediaFile(paths.mediaDir, paths.outputPrefix)) {
-    await rm(paths.archivePath, { force: true });
-  }
   const result = await runner({
     helper: "yt-dlp",
     command: options.command,
@@ -259,36 +240,30 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
 
   if (result.exitCode !== 0) return { ok: false, message: downloadFailureMessage(result) };
 
-  const mediaPath = await findDownloadedMediaFile(paths.mediaDir, paths.outputPrefix);
-  if (!mediaPath) {
+  const partialMediaPath = await findDownloadedMediaFile(paths.mediaDir, paths.outputPrefix);
+  if (!partialMediaPath) {
     return { ok: false, message: "yt-dlp download failed: downloaded media file was not found" };
   }
 
   if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
-  const validation = await options.validateMedia(mediaPath);
+  const validation = await options.validateMedia(partialMediaPath);
   if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
   if (!validation.ok) return { ok: false, message: validation.message };
 
-  const metadata = normalizedMetadataFields(options.metadata);
-  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
-  let sourceMetadataPath: string;
-  try {
-    sourceMetadataPath = await writeYouTubeSourceMetadata(paths.sourceMetadataPath, {
-      version: 1,
-      url: options.url,
-      ...metadata,
-    }, { signal: options.signal });
-  } catch (error) {
-    if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
-    throw error;
-  }
-  if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
+  const mediaPath = join(options.cache.cacheDir, basename(partialMediaPath));
+  await rename(partialMediaPath, mediaPath);
   let metadataPath: string;
   try {
     metadataPath = await writeYouTubeCacheMetadata(options.cache, {
-      version: 1,
-      ...metadata,
+      videoId: options.metadata.id,
+      title: options.metadata.title,
+      uploader: options.metadata.uploader,
+      ...(options.metadata.durationSeconds !== undefined
+        ? { durationSeconds: options.metadata.durationSeconds }
+        : {}),
+      cachedAt: new Date((options.now ?? Date.now)()).toISOString(),
       mediaFileName: basename(mediaPath),
+      container: extname(mediaPath).slice(1).toLowerCase(),
     }, { signal: options.signal });
   } catch (error) {
     if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
@@ -296,7 +271,8 @@ export async function downloadYouTubeUrl(options: YouTubeDownloadOptions): Promi
   }
   if (options.signal?.aborted) return cancelledYouTubeDownload(paths.entryDir);
 
-  return { ok: true, mediaPath, metadataPath, sourceMetadataPath };
+  await rm(paths.entryDir, { recursive: true, force: true });
+  return { ok: true, mediaPath, metadataPath };
 }
 
 export function createFfprobeYouTubeMediaValidator(
@@ -395,8 +371,6 @@ function createYouTubeDownloadArgs(
     "--part",
     "--newline",
     "--progress",
-    "--download-archive",
-    paths.archivePath,
     "--output",
     paths.outputTemplate,
     ...cookiesFromBrowserArgs(options.cookiesFromBrowser),
@@ -406,27 +380,14 @@ function createYouTubeDownloadArgs(
 }
 
 function youtubeDownloadPaths(cache: YouTubeCacheProviderOptions, metadata: IdentifiedYouTubeMetadata) {
-  const entryDir = join(cache.cacheDir, metadata.extractor, metadata.id);
-  const mediaDir = join(entryDir, cache.mediaDirName);
-  const outputPrefix = `${metadata.extractor}-${metadata.id}`;
+  const entryDir = join(cache.cacheDir, `.partial-${metadata.id}`);
+  const mediaDir = entryDir;
+  const outputPrefix = metadata.id;
   return {
     entryDir,
     mediaDir,
-    archivePath: join(entryDir, "download-archive.txt"),
-    sourceMetadataPath: join(entryDir, YOUTUBE_SOURCE_METADATA_FILE_NAME),
     outputPrefix,
     outputTemplate: join(mediaDir, `${outputPrefix}.%(ext)s`),
-  };
-}
-
-function normalizedMetadataFields(metadata: IdentifiedYouTubeMetadata): Omit<YouTubeSourceMetadata, "version" | "url"> {
-  return {
-    extractor: metadata.extractor,
-    id: metadata.id,
-    title: metadata.title,
-    ...(metadata.artist ? { artist: metadata.artist } : {}),
-    ...(metadata.album ? { album: metadata.album } : {}),
-    ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
   };
 }
 
@@ -449,28 +410,6 @@ async function cancelledYouTubeDownload(entryDir: string): Promise<YouTubeDownlo
   }
 }
 
-async function writeYouTubeSourceMetadata(
-  path: string,
-  metadata: YouTubeSourceMetadata,
-  options: { signal?: AbortSignal } = {},
-): Promise<string> {
-  throwIfAborted(options.signal);
-  await mkdir(dirname(path), { recursive: true });
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-
-  try {
-    throwIfAborted(options.signal);
-    await writeFile(tempPath, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: "utf8", signal: options.signal });
-    throwIfAborted(options.signal);
-    await rename(tempPath, path);
-  } catch (error) {
-    await rm(tempPath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-
-  return path;
-}
-
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) return;
   throw cancelledError();
@@ -485,19 +424,17 @@ function normalizeIdentifiedMetadata(info: YtDlpInfoJson): IdentifiedYouTubeMeta
   const normalizedExtractor = extractor?.trim().toLowerCase();
   const id = stringValue(info.id)?.trim();
   const title = stringValue(info.title)?.trim();
-  if (!normalizedExtractor || !isSupportedYtDlpExtractor(normalizedExtractor) || !id || !title) return undefined;
+  const uploader = firstNonEmptyString(info.artist, info.uploader, info.channel);
+  if (!normalizedExtractor || !isSupportedYtDlpExtractor(normalizedExtractor) || !id || !title || !uploader) return undefined;
 
   const metadata: IdentifiedYouTubeMetadata = {
     extractor: normalizedExtractor,
     id,
     title,
+    uploader,
   };
-  const artist = firstNonEmptyString(info.artist, info.uploader, info.channel);
-  const album = stringValue(info.album)?.trim();
   const durationSeconds = numberValue(info.duration);
 
-  if (artist) metadata.artist = artist;
-  if (album) metadata.album = album;
   if (durationSeconds !== undefined) metadata.durationSeconds = durationSeconds;
   return metadata;
 }

@@ -14,11 +14,6 @@ export type TmuConfig = {
     downloadProgressThrottleMs: number;
     libraryProgressThrottleMs: number;
   };
-  youtubeCache: {
-    cacheDir: string;
-    mediaDirName: string;
-    metadataFileName: string;
-  };
   youtube: {
     cookiesFromBrowser?: string;
     maxConcurrentDownloads: number;
@@ -62,11 +57,6 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
       playbackProgressMs: null,
       downloadProgressThrottleMs: 1000,
       libraryProgressThrottleMs: 1000,
-    },
-    youtubeCache: {
-      cacheDir: join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "tmu", "youtube-cache"),
-      mediaDirName: "media",
-      metadataFileName: "metadata.json",
     },
     youtube: {
       maxConcurrentDownloads: 1,
@@ -117,7 +107,6 @@ export function redactTmuConfig(config: TmuConfig): RedactedTmuConfig {
     ...config,
     helpers: { ...config.helpers },
     lowPower: { ...config.lowPower },
-    youtubeCache: { ...config.youtubeCache },
     youtube: { ...config.youtube },
     dependencyPolicy: { ...config.dependencyPolicy },
     persistence: { ...config.persistence },
@@ -133,10 +122,6 @@ function mergeConfig(base: TmuConfig, overrides: TmuConfigInput): TmuConfig {
     lowPower: {
       ...base.lowPower,
       ...overrides.lowPower,
-    },
-    youtubeCache: {
-      ...base.youtubeCache,
-      ...overrides.youtubeCache,
     },
     youtube: {
       ...base.youtube,
