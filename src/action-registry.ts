@@ -152,9 +152,22 @@ export function createActionRegistry(): ActionRegistry {
       disabledReason: () => "Use Enter for Play Next",
       createIntent: () => null,
     },
-    simpleAction("player.toggle-play-pause", "Play / Pause / Resume", ["play", "pause", "resume"], " ", "Space", {
-      type: "playerOperation", operation: "toggle-play-pause",
-    }),
+    {
+      id: "player.toggle-play-pause",
+      name: "Play / Pause / Resume",
+      aliases: ["play", "pause", "resume"],
+      bindings: [{ key: " ", label: "Space" }],
+      applies: always,
+      enabled: (context) => Boolean(context.appState.playback.currentTrackIdentity || selectedQueueTrack(context)),
+      disabledReason: () => "Queue is empty",
+      createIntent: (context) => {
+        if (context.appState.playback.currentTrackIdentity) {
+          return { type: "playerOperation", operation: "toggle-play-pause" };
+        }
+        const track = selectedQueueTrack(context);
+        return track ? { type: "playNow", target: track } : null;
+      },
+    },
     simpleAction("player.stop", "Stop", [], "s", "s", { type: "playerOperation", operation: "stop" }),
     simpleAction("player.next", "Next Track", ["next"], "n", "n", { type: "playerOperation", operation: "next-track" }),
     simpleAction("player.previous", "Previous Track", ["previous"], "p", "p", { type: "playerOperation", operation: "previous-track" }),

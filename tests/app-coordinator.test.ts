@@ -1441,7 +1441,7 @@ describe("AppCoordinator", () => {
 
     await coordinator.dispatch({ type: "toggleShuffle" });
     await coordinator.dispatch({ type: "nextTrack" });
-    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cinder.identity);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
 
     await coordinator.dispatch({ type: "previousTrack" });
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(drift.identity);
@@ -1503,7 +1503,8 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.queue.repeatAll).toBe(true);
     expect(coordinator.appState.playback).toEqual({
       status: "stopped",
-      currentTrackIdentity: null,
+      positionSeconds: 0,
+      currentTrackIdentity: playable.identity,
     });
 
     await coordinator.dispatch({ type: "moveSelection", delta: 1 });
@@ -1660,6 +1661,38 @@ describe("AppCoordinator", () => {
       status: "unavailable",
       reason: "Local file no longer exists: /music/missing.flac",
     });
+  });
+
+  test("automatically follows visible Queue order at natural completion and stops at the end", async () => {
+    const first = track("local", "/music/first.flac", "First File");
+    const missing = track("local", "/music/missing.flac", "Missing File");
+    const last = track("local", "/music/last.flac", "Last File");
+    const queue = new MemoryQueue();
+    const player = new ManualPlaybackPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ local: fakeProvider("local", [first, missing, last]) }),
+      uiState: createInitialUiState(),
+      queue,
+      player,
+    });
+
+    for (const queued of [first, missing, last]) await coordinator.dispatch({ type: "playNext", target: queued });
+    queue.markAvailability(missing.identity, { status: "unavailable", reason: "file missing" });
+    await coordinator.dispatch({ type: "playNow", target: first });
+
+    player.emitPlaybackState({ status: "idle", idle: true, eof: true });
+    await waitFor(() => expect(coordinator.appState.playback.currentTrackIdentity).toEqual(last.identity));
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
+      status: "unavailable",
+      reason: "file missing",
+    });
+
+    player.emitPlaybackState({ status: "idle", idle: true, eof: true });
+    await waitFor(() => expect(coordinator.appState.playback).toMatchObject({
+      status: "stopped",
+      positionSeconds: 0,
+      currentTrackIdentity: last.identity,
+    }));
   });
 
   test("keeps Offline YouTube Cache missing-media failures visible in the Queue", async () => {

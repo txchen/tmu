@@ -35,12 +35,19 @@ const secondTrack: Track = {
 
 class RecordingPlayer implements Player {
   toggles = 0;
+  stops = 0;
+  readonly loaded: PlaybackLocator[] = [];
+  readonly seeks: number[] = [];
+  readonly volumes: number[] = [];
   private state: PlayerPlaybackState = { status: "paused", positionSeconds: 37 };
   private readonly listeners = new Set<(state: PlayerPlaybackState) => void>();
 
   get playback() { return this.state; }
   async start() { return this.state; }
-  async load(_locator: PlaybackLocator) {}
+  async load(locator: PlaybackLocator) {
+    this.loaded.push(locator);
+    this.publish({ status: "playing", positionSeconds: 0 });
+  }
   async togglePause() {
     this.toggles += 1;
     this.publish({ ...this.state, status: this.state.status === "playing" ? "paused" : "playing" });
@@ -50,15 +57,16 @@ class RecordingPlayer implements Player {
     this.publish({ ...this.state, status: paused ? "paused" : "playing" });
     return this.state;
   }
-  async stop() { this.publish({ status: "stopped" }); return this.state; }
-  async seekBy(_seconds: number) { return this.state; }
-  async setVolume(percent: number) { this.publish({ ...this.state, volumePercent: percent }); return this.state; }
+  async stop() { this.stops += 1; this.publish({ status: "stopped", positionSeconds: 0 }); return this.state; }
+  async seekBy(seconds: number) { this.seeks.push(seconds); return this.state; }
+  async setVolume(percent: number) { this.volumes.push(percent); this.publish({ ...this.state, volumePercent: percent }); return this.state; }
   async teardown() {}
   onPlaybackStateChange(listener: (state: PlayerPlaybackState) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
   publishPosition(positionSeconds: number) { this.publish({ ...this.state, positionSeconds }); }
+  publishState(state: PlayerPlaybackState) { this.publish(state); }
   private publish(state: PlayerPlaybackState) {
     this.state = state;
     for (const listener of this.listeners) listener(state);
@@ -69,6 +77,7 @@ async function productionHarness(options: {
   tracks?: readonly Track[];
   currentIndex?: number;
   availability?: "available" | "unavailable";
+  unavailableIndexes?: readonly number[];
 } = {}) {
   const player = new RecordingPlayer();
   const snapshots = new InMemoryLastQueueSnapshotPersistence();
@@ -78,7 +87,8 @@ async function productionHarness(options: {
     version: 1,
     entries: tracks.map((track, index) => ({
       track,
-      availability: options.availability === "unavailable" && index === currentIndex
+      availability: (options.availability === "unavailable" && index === currentIndex)
+        || options.unavailableIndexes?.includes(index)
         ? { status: "unavailable" as const, reason: "Provider authentication expired; sign in and retry" }
         : { status: "available" as const },
     })),
@@ -141,6 +151,78 @@ describe("production vue-tui", () => {
     await terminal.stdin.write("q");
     expect(terminal.lastFrame()).not.toContain("Picker Overlay");
     expect(terminal.lastFrame()).toContain("Restored Track");
+  });
+
+  test("drives Current Track playback and visible Queue traversal through real global keys", async () => {
+    const unavailableTrack: Track = {
+      identity: { providerId: "remote", stableId: "unavailable-track" },
+      title: "Unavailable Track",
+      providerLabel: "Navidrome",
+    };
+    const { coordinator, player } = await productionHarness({
+      tracks: [restoredTrack, unavailableTrack, secondTrack],
+      unavailableIndexes: [1],
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write("j");
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(unavailableTrack.identity);
+    await terminal.stdin.write(" ");
+    expect(player.toggles).toBe(1);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
+
+    player.publishState({ status: "playing", positionSeconds: 8 });
+    await terminal.stdin.write("p");
+    expect(player.seeks).toEqual([-8]);
+    expect(player.loaded).toEqual([]);
+
+    player.publishState({ status: "playing", positionSeconds: 5 });
+    await terminal.stdin.write("p");
+    expect(player.loaded.at(-1)).toEqual({ kind: "file", path: "/dev/null" });
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
+
+    await terminal.stdin.write("n");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
+    expect(coordinator.appState.queue.entries[1]?.availability).toEqual({
+      status: "unavailable",
+      reason: "Provider authentication expired; sign in and retry",
+    });
+
+    await terminal.stdin.write("n");
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.playback).toMatchObject({
+      status: "stopped",
+      positionSeconds: 0,
+      currentTrackIdentity: secondTrack.identity,
+    });
+
+    await terminal.stdin.write(" ");
+    expect(player.loaded).toHaveLength(3);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
+    await terminal.stdin.write("s");
+    expect(player.stops).toBe(2);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
+    expect(coordinator.appState.playback.positionSeconds).toBe(0);
+
+    for (const key of ["]", "+", "z", "r"]) await terminal.stdin.write(key);
+    expect(player.seeks.at(-1)).toBe(5);
+    expect(player.volumes.at(-1)).toBe(77);
+    expect(coordinator.appState.queue.shuffle).toBe(true);
+    expect(coordinator.appState.queue.repeatAll).toBe(true);
+  });
+
+  test("Space starts the selected Queue Track when no Current Track exists", async () => {
+    const { coordinator, player } = await productionHarness({
+      tracks: [restoredTrack, secondTrack],
+      currentIndex: -1,
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write(" ");
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/dev/null" }]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
   });
 
   test("crosses responsive tiers without losing Current Track, Track Identity selection, or overlay state", async () => {
