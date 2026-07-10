@@ -14,7 +14,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "benchmark:playback": "npm run build && node --cpu-prof --cpu-prof-name=tmu-playback.cpuprofile dist/cli.js",
+    "benchmark:playback": "npm run build && node dist/playback-benchmark.js",
     "build": "tsdown",
     "prepack": "npm run build",
     "start": "node dist/cli.js",

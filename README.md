@@ -45,4 +45,4 @@ npm test
 npm run smoke:package
 ```
 
-To capture a Node CPU profile for a representative full-Track playback, run `npm run benchmark:playback`, play a cached Track through to completion, and quit TMU. The profile is written to `tmu-playback.cpuprofile`; repeat the same Track and environment when comparing runs. This measurement reports runtime CPU activity, not hardware energy use.
+To benchmark production mpv control on Linux, put a canonical `track` and its resolved file `playbackLocator` in JSON, then run `npm run benchmark:playback -- track-input.json --power-mode "AC power, balanced"`. The command plays the complete Track with null audio and one-second position polling. Its JSON report keeps controller and mpv metrics distinct and includes child-inclusive CPU, peak RSS, context switches, elapsed time, versions, and playback completion. Alternate three runs per runtime without changing the environment. Memory is separate from CPU evidence; this does not measure hardware energy.

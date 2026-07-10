@@ -7,6 +7,7 @@ export * from "./domain";
 export * from "./json-persistence";
 export * from "./youtube-cache";
 export * from "./player";
+export * from "./playback-benchmark";
 export * from "./preferences";
 export * from "./providers";
 export * from "./queue";

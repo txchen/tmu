@@ -13,6 +13,7 @@ const LOCAL_FILE_PLAYBACK_OPTIONS = {
 } as const;
 
 export type MpvProcessHandle = {
+  readonly pid?: number;
   readonly exited: Promise<number | null>;
   kill(): void;
 };
@@ -39,6 +40,8 @@ export type MpvPlayerOptions = {
   commandTimeoutMs?: number;
   startTimeoutMs?: number;
   positionPollMs?: number;
+  /** Used by measurement tooling; normal playback leaves mpv's output selection unchanged. */
+  audioOutput?: string;
 };
 
 type PendingCommand = {
@@ -320,6 +323,7 @@ export class MpvPlayer implements Player {
       "--osc=no",
       "--input-default-bindings=no",
       "--input-builtin-bindings=no",
+      ...(this.options.audioOutput ? [`--ao=${this.options.audioOutput}`] : []),
       `--input-ipc-server=${this.options.ipcPath}`,
     ];
   }
@@ -634,6 +638,7 @@ export class NodeMpvProcessAdapter implements MpvProcessAdapter {
     });
 
     return {
+      pid: subprocess.pid,
       exited,
       kill: () => {
         subprocess.kill();
