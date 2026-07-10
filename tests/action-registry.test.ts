@@ -97,6 +97,8 @@ describe("action registry contracts", () => {
 
     expect(commandPaletteActions(registry, current).find((action) => action.id === "queue.play-now"))
       .toMatchObject({ enabled: true, intent: { type: "playNow", target: amber } });
+    expect(commandPaletteActions(registry, current).find((action) => action.id === "overlay.dismiss"))
+      .toMatchObject({ bindings: ["Esc", "q"], enabled: true });
   });
 
   test("omits unsupported actions from discovery and makes their bindings inert", () => {
@@ -768,5 +770,26 @@ describe("root input router", () => {
     const expire = expiry as (() => void) | null;
     if (expire) expire();
     expect(ui.snapshot.pendingVimChord).toBeNull();
+  });
+
+  test("derives executable navigation bindings from the registry", async () => {
+    const current = context();
+    const cinder = {
+      identity: { providerId: "local", stableId: "/music/cinder.flac" },
+      title: "Cinder Room", providerLabel: "Local",
+    };
+    current.appState.queue.entries.push({ track: cinder, availability: { status: "available" } });
+    const registry = createActionRegistry().map((action) => action.id === "navigation.move-down"
+      ? { ...action, bindings: [{ key: "v", label: "v" }] }
+      : action);
+    const ui = new UiStateStore(current.uiState);
+    const router = new RootInputRouter({
+      registry, appState: () => current.appState, uiState: ui, dispatchApp: async () => undefined,
+    });
+
+    await router.route("j");
+    expect(ui.snapshot.selectedQueueIdentity).toEqual(amber.identity);
+    await router.route("v");
+    expect(ui.snapshot.selectedQueueIdentity).toEqual(cinder.identity);
   });
 });

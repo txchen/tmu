@@ -1,9 +1,9 @@
 import {
-  actionForId,
   actionForBinding,
   searchDiscoveryActions,
   type ActionIntent,
   type ActionRegistry,
+  type UiRouteOperation,
   type UiActionIntent,
 } from "./action-registry";
 import {
@@ -68,7 +68,7 @@ export class RootInputRouter {
     };
   }
 
-  async route(key: string): Promise<boolean> {
+  async route(key: string, requestedUiOperation?: UiRouteOperation): Promise<boolean> {
     if (key === "\u0003") {
       await this.dispatchBinding(key);
       return true;
@@ -82,6 +82,7 @@ export class RootInputRouter {
     }
 
     const overlay = this.uiState.snapshot.overlays.at(-1);
+    const uiOperation = requestedUiOperation ?? this.uiRouteOperation(key);
     if (overlay?.kind === "music-picker" && overlay.focus === "filter") {
       if (key === "\x1b" || key === "\r" || key === "\t") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
@@ -100,8 +101,8 @@ export class RootInputRouter {
     }
     if (overlay && isTextEntryFocus(overlay.focus)) {
       if ((overlay.kind === "shortcut-help" || overlay.kind === "command-palette")
-        && ["\x1b[A", "\x1b[B", "\x1b[H", "\x1b[F", "\x1b[5~", "\x1b[6~"].includes(key)) {
-        this.moveDiscoverySelection(key, overlay);
+        && movementForUiOperation(uiOperation, 1)) {
+        this.moveDiscoverySelection(uiOperation, overlay);
         return true;
       }
       if (key === "\x1b") {
@@ -147,7 +148,7 @@ export class RootInputRouter {
       const visibleRows = overlayContentRows(overlay.kind,
         this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
         this.uiState.snapshot.terminal.rows);
-      const movement = listMovementForKey(key, visibleRows);
+      const movement = movementForUiOperation(uiOperation, visibleRows);
       if (movement) {
         this.uiState.dispatch(movement.kind === "boundary"
           ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
@@ -170,10 +171,10 @@ export class RootInputRouter {
     }
 
     if (overlay?.kind === "music-picker" && overlay.focus === "results") {
-      if (await this.routeProviderNavigation(key, overlay)) return true;
+      if (await this.routeProviderNavigation(key, overlay, uiOperation)) return true;
     }
 
-    if (overlay && (key === "\x1b" || key === "q")) {
+    if (overlay && uiOperation === "dismiss") {
       if (overlay.kind === "music-picker" && this.appState().globalSearch.query) {
         await this.dispatchApp({ type: "globalSearch", operation: "clear" });
       }
@@ -200,7 +201,7 @@ export class RootInputRouter {
     }
 
     const identities = queueIdentities(this.appState());
-    if (key === "g") {
+    if (uiOperation === "first" && key === "g") {
       const completing = Boolean(this.uiState.snapshot.pendingVimChord
         && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
       this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities });
@@ -222,7 +223,7 @@ export class RootInputRouter {
     const visibleRows = visibleQueueRows(this.uiState.snapshot, this.appState());
     const queueFocused = this.uiState.snapshot.focusedPane === "queue"
       && this.uiState.snapshot.activeTargetId === "queue";
-    const movement = queueFocused ? listMovementForKey(key, visibleRows) : null;
+    const movement = queueFocused ? movementForUiOperation(uiOperation, visibleRows) : null;
     if (movement) {
       if (movement.kind === "boundary") {
         this.uiState.dispatch({
@@ -281,10 +282,11 @@ export class RootInputRouter {
   private async routeProviderNavigation(
     key: string,
     overlay: UiState["overlays"][number],
+    uiOperation: UiRouteOperation | null,
   ): Promise<boolean> {
     const searchRows = this.appState().globalSearch.query ? globalSearchRows(this.appState().globalSearch) : null;
-    if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows);
-    if (key === "f") {
+    if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows, uiOperation);
+    if (uiOperation === "search-filters") {
       this.cancelOverlayChord();
       this.uiState.dispatch({ type: "setOverlayFocus", focus: "filter" });
       return true;
@@ -302,7 +304,7 @@ export class RootInputRouter {
     const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    const movement = listMovementForKey(key, visibleRows);
+    const movement = movementForUiOperation(uiOperation, visibleRows);
     if (movement) {
       this.cancelOverlayChord();
       if (movement.kind === "boundary") {
@@ -316,7 +318,7 @@ export class RootInputRouter {
       }
       return true;
     }
-    if (key === "g") {
+    if (uiOperation === "first" && key === "g") {
       const completing = Boolean(this.uiState.snapshot.pendingVimChord
         && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
       if (completing) {
@@ -334,7 +336,7 @@ export class RootInputRouter {
       return true;
     }
     this.cancelOverlayChord();
-    if (key === "h" || key === "\x1b[D" || key === "\x7f" || key === "\b") {
+    if (uiOperation === "back") {
       const location = overlay.providerLocation ?? { providerId: null, path: [] };
       this.uiState.dispatch({
         type: "setProviderLocation",
@@ -344,7 +346,7 @@ export class RootInputRouter {
       });
       return true;
     }
-    if (key === "l" || key === "\x1b[C" || key === "\r") {
+    if (uiOperation === "open" || key === "\r") {
       const selected = rows[overlay.selectedResultIndex ?? 0];
       if (!selected) {
         if (key === "\r") await this.dispatchBinding(key);
@@ -363,7 +365,7 @@ export class RootInputRouter {
         return true;
       }
       if (location.providerId === "navidrome"
-        && (key !== "\r" || selected.kind === "navigation" || selected.kind === "artist")) {
+        && (uiOperation === "open" || selected.kind === "navigation" || selected.kind === "artist")) {
         await this.dispatchApp({
           type: "providerOperation",
           providerId: "navidrome",
@@ -383,10 +385,11 @@ export class RootInputRouter {
     key: string,
     overlay: UiState["overlays"][number],
     rows: ReturnType<typeof globalSearchRows>,
+    uiOperation: UiRouteOperation | null,
   ): Promise<boolean> {
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    const movement = listMovementForKey(key, visibleRows);
+    const movement = movementForUiOperation(uiOperation, visibleRows);
     if (movement) {
       this.uiState.dispatch(movement.kind === "boundary"
         ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: rows.length, visibleRows }
@@ -399,7 +402,7 @@ export class RootInputRouter {
       if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
       return true;
     }
-    if (key === "\r" || key === "l" || key === "\x1b[C") {
+    if (key === "\r" || uiOperation === "open") {
       const result = globalSearchResultAt(this.appState().globalSearch, overlay.selectedResultIndex ?? 0);
       const opensNavigation = isNavigableGlobalSearchResult(result)
         && (result.type === "artist" || key !== "\r");
@@ -429,8 +432,8 @@ export class RootInputRouter {
       this.uiState.dispatch({ type: "requestConfirmation", kind: intent.kind });
       return;
     }
-    if (intent.type === "routeKey") {
-      for (const key of intent.key === "gg" ? ["g", "g"] : [intent.key]) await this.route(key);
+    if (intent.type === "routeUi") {
+      await this.route("", intent.operation);
       return;
     }
     await this.dispatchApp(intent);
@@ -444,27 +447,31 @@ export class RootInputRouter {
     }, query);
   }
 
-  private moveDiscoverySelection(key: string, overlay: UiState["overlays"][number]): void {
+  private moveDiscoverySelection(operation: UiRouteOperation | null, overlay: UiState["overlays"][number]): void {
     const actions = this.discoveryRows(overlay.query);
     const visibleRows = overlayContentRows(overlay.kind,
       this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
       this.uiState.snapshot.terminal.rows);
-    const movement = listMovementForKey(key, visibleRows);
+    const movement = movementForUiOperation(operation, visibleRows);
     if (!movement) return;
     this.uiState.dispatch(movement.kind === "boundary"
       ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
       : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
   }
 
-  private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
-    const selected = this.discoveryRows(overlay.query)[overlay.selectedResultIndex ?? 0];
-    if (!selected?.enabled) return;
-    this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
-    const action = actionForId(this.registry, selected.id, {
+  private uiRouteOperation(key: string): UiRouteOperation | null {
+    const action = actionForBinding(this.registry, key, {
       appState: this.appState(), uiState: this.uiState.snapshot,
       selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
     });
-    if (action?.enabled && action.intent) await this.dispatchIntent(action.intent);
+    return action?.intent?.type === "routeUi" ? action.intent.operation : null;
+  }
+
+  private async invokeDiscoverySelection(overlay: UiState["overlays"][number]): Promise<void> {
+    const selected = this.discoveryRows(overlay.query)[overlay.selectedResultIndex ?? 0];
+    if (!selected?.enabled || !selected.intent) return;
+    this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
+    await this.dispatchIntent(selected.intent);
     this.syncQueueSelection();
   }
 
@@ -587,17 +594,17 @@ function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppStat
   );
 }
 
-function listMovementForKey(key: string, visibleRows: number):
+function movementForUiOperation(operation: UiRouteOperation | null, visibleRows: number):
   | { kind: "relative"; delta: number }
   | { kind: "boundary"; boundary: "first" | "last" }
   | null {
-  if (key === "j" || key === "\x1b[B") return { kind: "relative", delta: 1 };
-  if (key === "k" || key === "\x1b[A") return { kind: "relative", delta: -1 };
-  if (key === "G" || key === "\x1b[F") return { kind: "boundary", boundary: "last" };
-  if (key === "\x1b[H") return { kind: "boundary", boundary: "first" };
-  if (key === "\x04") return { kind: "relative", delta: Math.max(1, Math.floor(visibleRows / 2)) };
-  if (key === "\x15") return { kind: "relative", delta: -Math.max(1, Math.floor(visibleRows / 2)) };
-  if (key === "\x1b[6~") return { kind: "relative", delta: visibleRows };
-  if (key === "\x1b[5~") return { kind: "relative", delta: -visibleRows };
+  if (operation === "move-down") return { kind: "relative", delta: 1 };
+  if (operation === "move-up") return { kind: "relative", delta: -1 };
+  if (operation === "last") return { kind: "boundary", boundary: "last" };
+  if (operation === "first") return { kind: "boundary", boundary: "first" };
+  if (operation === "half-page-down") return { kind: "relative", delta: Math.max(1, Math.floor(visibleRows / 2)) };
+  if (operation === "half-page-up") return { kind: "relative", delta: -Math.max(1, Math.floor(visibleRows / 2)) };
+  if (operation === "page-down") return { kind: "relative", delta: visibleRows };
+  if (operation === "page-up") return { kind: "relative", delta: -visibleRows };
   return null;
 }
