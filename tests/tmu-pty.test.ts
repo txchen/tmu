@@ -41,19 +41,29 @@ async function expectTerminalRestored(terminal: Bun.Terminal, read: () => string
   expect(restoredState).toMatch(/(?:^|[ ;])echo(?:[ ;]|$)/);
 }
 
+type PtyFixtureOptions = {
+  playbackTrack?: boolean;
+  corruptSnapshot?: boolean;
+  searchTrack?: boolean;
+  activeDownload?: boolean;
+  navidromeUrl?: string;
+  playbackProgressMs?: number;
+  env?: Record<string, string>;
+};
+
 async function spawnTmu(
   onData: (text: string) => void,
   args: readonly string[] = [],
-  options: {
-    playbackTrack?: boolean;
-    corruptSnapshot?: boolean;
-    searchTrack?: boolean;
-    activeDownload?: boolean;
-    navidromeUrl?: string;
-    playbackProgressMs?: number;
-    entrypoint?: string;
-    env?: Record<string, string>;
-  } = {},
+  options: PtyFixtureOptions = {},
+) {
+  return spawnFixtureEntrypoint(onData, "src/main.ts", args, options);
+}
+
+async function spawnFixtureEntrypoint(
+  onData: (text: string) => void,
+  entrypoint: string,
+  args: readonly string[] = [],
+  options: PtyFixtureOptions = {},
 ) {
   const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   if (options.playbackTrack) await seedPlaybackSnapshot(runtimeRoot);
@@ -67,7 +77,7 @@ async function spawnTmu(
     rows: 24,
     data: (_terminal, data) => onData(decoder.decode(data)),
   });
-  const subprocess = Bun.spawn(["bun", options.entrypoint ?? "src/main.ts", ...args], {
+  const subprocess = Bun.spawn(["bun", entrypoint, ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -442,9 +452,8 @@ describe("production tmu real PTY", () => {
   test("coalesces configured Provider progress and publishes the latest metadata", async () => {
     let output = "";
     const read = () => output;
-    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
-      (text) => { output += text; }, [],
-      { entrypoint: "tests/fixtures/provider-cadence.ts" },
+    const { terminal, subprocess, runtimeRoot } = await spawnFixtureEntrypoint(
+      (text) => { output += text; }, "tests/fixtures/provider-cadence.ts",
     );
 
     try {
@@ -663,9 +672,11 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Playing · PTY Track");
       await Bun.sleep(150);
       const cadenceFrame = output.length;
+      const cadenceStartedAt = Date.now();
       await Bun.sleep(300);
       expect(output).toHaveLength(cadenceFrame);
       await waitForNewOutput(read, cadenceFrame, "Playing · PTY Track · 0:13");
+      expect(Date.now() - cadenceStartedAt).toBeLessThan(2_000);
 
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
@@ -723,9 +734,8 @@ describe("production tmu real PTY", () => {
   test("restores the active TUI after a fatal process error", async () => {
     let output = "";
     const read = () => output;
-    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
-      (text) => { output += text; }, [],
-      { entrypoint: "tests/fixtures/fatal-after-mount.ts" },
+    const { terminal, subprocess, runtimeRoot } = await spawnFixtureEntrypoint(
+      (text) => { output += text; }, "tests/fixtures/fatal-after-mount.ts",
     );
 
     try {
@@ -759,9 +769,11 @@ describe("production tmu real PTY", () => {
       terminal.write("\r");
       await waitForOutput(read, "download 5.0%");
       const initialProgress = output.length;
+      const progressStartedAt = Date.now();
       await Bun.sleep(300);
       expect(output.slice(initialProgress)).not.toContain("download 25.0%");
       await waitForNewOutput(read, initialProgress, "download 25.0%");
+      expect(Date.now() - progressStartedAt).toBeLessThan(1_500);
 
       let nextFrame = output.length;
       terminal.write("\x1b");
