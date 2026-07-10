@@ -3,8 +3,9 @@ import {
   globalSearchRows,
   type GlobalSearchState,
   type Provider,
-  type ProviderSearchRequest,
-  type ProviderSearchResult,
+  type GlobalSearchProviderRequest,
+  type GlobalSearchProviderResult,
+  type GlobalSearchProviderId,
 } from "../src/index";
 import { AppCoordinator } from "../src/coordinator";
 import { NoopPlayer } from "../src/player";
@@ -26,9 +27,9 @@ function endpointName(url: URL): string {
 }
 
 function provider(
-  id: string,
-  search: (request: ProviderSearchRequest) => Promise<readonly ProviderSearchResult[]>,
-  types: ProviderSearchRequest["resultTypes"] = ["track"],
+  id: GlobalSearchProviderId,
+  search: (request: GlobalSearchProviderRequest) => Promise<readonly GlobalSearchProviderResult[]>,
+  types: GlobalSearchProviderRequest["resultTypes"] = ["track"],
 ): Provider {
   return {
     id,
@@ -42,7 +43,7 @@ function provider(
   };
 }
 
-function result(providerId: string, type: ProviderSearchResult["type"], id: string): ProviderSearchResult {
+function result(providerId: GlobalSearchProviderId, type: GlobalSearchProviderResult["type"], id: string): GlobalSearchProviderResult {
   return { providerId, providerLabel: providerId === "local" ? "Local" : providerId, type, id, label: id };
 }
 
@@ -60,7 +61,7 @@ describe("Global Search", () => {
         version: 1, extractor: "youtube", id: "cached", title: "Amber Cache", mediaFileName: "audio.webm",
       });
       const offline = createOfflineYouTubeCacheProvider(cache);
-      const request: ProviderSearchRequest = { query: "amber", resultTypes: ["track", "artist"], limit: 50 };
+      const request: GlobalSearchProviderRequest = { query: "amber", resultTypes: ["track", "artist"], limit: 50 };
 
       expect((await local.search!(request)).map((item) => [item.type, item.label, item.providerId])).toEqual([
         ["track", "Amber Mix.flac", "local"],
@@ -173,7 +174,7 @@ describe("Global Search", () => {
   });
 
   test("publishes partial success while another Provider is still loading", async () => {
-    let finishRemote: ((results: readonly ProviderSearchResult[]) => void) | undefined;
+    let finishRemote: ((results: readonly GlobalSearchProviderResult[]) => void) | undefined;
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({
         local: provider("local", async () => [result("local", "track", "ready")]),
@@ -196,12 +197,14 @@ describe("Global Search", () => {
   });
 
   test("classifies Provider authentication, offline, and ordinary failures independently", async () => {
-    const failing = (id: string, error: Error) => provider(id, async () => { throw error; });
+    const failing = (id: GlobalSearchProviderId, error: Error) => provider(id, async () => { throw error; });
     const auth = Object.assign(new Error("credentials expired"), { kind: "auth" });
     const offline = Object.assign(new Error("server unreachable"), { kind: "api" });
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({
-        auth: failing("auth", auth), offline: failing("offline", offline), broken: failing("broken", new Error("bad response")),
+        local: failing("local", auth),
+        navidrome: failing("navidrome", offline),
+        "offline-youtube-cache": failing("offline-youtube-cache", new Error("bad response")),
       }),
       uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
     });
@@ -209,12 +212,14 @@ describe("Global Search", () => {
       type: "globalSearch", operation: "submit", query: "mix", providerFilter: "all", resultTypeFilter: "all",
     });
     expect(coordinator.appState.globalSearch.providers).toMatchObject({
-      auth: { status: "auth" }, offline: { status: "offline" }, broken: { status: "failure" },
+      local: { status: "auth" },
+      navidrome: { status: "offline" },
+      "offline-youtube-cache": { status: "failure" },
     });
   });
 
   test("replacement submissions supersede stale Provider completions", async () => {
-    const completions: Array<(results: readonly ProviderSearchResult[]) => void> = [];
+    const completions: Array<(results: readonly GlobalSearchProviderResult[]) => void> = [];
     const slow = provider("local", () => new Promise((resolve) => completions.push(resolve)));
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ local: slow }), uiState: createInitialUiState(),
@@ -330,7 +335,7 @@ describe("Global Search", () => {
       resolve: { providerId: "navidrome", operation: "album-tracks" as const, collectionId: "album" },
     };
     const appState = createInitialAppState({ navidrome: provider("navidrome", async () => [], ["album"]) });
-    const albumResult = {
+    const albumResult: GlobalSearchProviderResult = {
       providerId: "navidrome", providerLabel: "Navidrome", type: "album" as const,
       id: "album", label: "Album", detail: "Artist", target: collection,
     };

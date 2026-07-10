@@ -7,8 +7,8 @@ import {
   type Provider,
   type ProviderBrowserEntry,
   type ProviderCapabilities,
-  type ProviderSearchRequest,
-  type ProviderSearchResult,
+  type GlobalSearchProviderRequest,
+  type GlobalSearchProviderResult,
   type Track,
   type TrackAvailability,
   type TrackIdentity,
@@ -145,7 +145,7 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
     return this.listCacheEntries().map((entry) => entry.track);
   }
 
-  async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
+  async search(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]> {
     return searchKnownTracks(this, this.listVisibleTracks(), request);
   }
 

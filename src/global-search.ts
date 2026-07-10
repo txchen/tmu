@@ -1,23 +1,24 @@
 import {
   identityKey,
   type Provider,
-  type ProviderSearchRequest,
+  type GlobalSearchProviderId,
+  type GlobalSearchProviderRequest,
   GlobalSearchState,
-  ProviderSearchResult,
-  ProviderSearchResultType,
-  ProviderSearchState,
+  GlobalSearchProviderResult,
+  GlobalSearchResultType,
+  GlobalSearchProviderState,
 } from "./domain";
 
-const RESULT_TYPES: readonly ProviderSearchResultType[] = ["track", "artist", "album", "playlist"];
-const TYPE_LABELS: Record<ProviderSearchResultType, string> = {
+const RESULT_TYPES: readonly GlobalSearchResultType[] = ["track", "artist", "album", "playlist"];
+const TYPE_LABELS: Record<GlobalSearchResultType, string> = {
   track: "Tracks", artist: "Artists", album: "Albums", playlist: "Playlists",
 };
 
 export type GlobalSearchRow =
   | { kind: "type-heading"; label: string }
-  | { kind: "provider-heading"; providerId: string; label: string; state: ProviderSearchState }
-  | { kind: "provider-status"; providerId: string; label: string; state: ProviderSearchState }
-  | { kind: "result"; result: ProviderSearchResult };
+  | { kind: "provider-heading"; providerId: GlobalSearchProviderId; label: string; state: GlobalSearchProviderState }
+  | { kind: "provider-status"; providerId: GlobalSearchProviderId; label: string; state: GlobalSearchProviderState }
+  | { kind: "result"; result: GlobalSearchProviderResult };
 
 export function createEmptyGlobalSearchState(): GlobalSearchState {
   return { requestId: 0, query: "", providerFilter: "all", resultTypeFilter: "all", providers: {} };
@@ -25,7 +26,7 @@ export function createEmptyGlobalSearchState(): GlobalSearchState {
 
 export function globalSearchRows(state: GlobalSearchState): GlobalSearchRow[] {
   const rows: GlobalSearchRow[] = [];
-  const providerEntries = Object.entries(state.providers);
+  const providerEntries = Object.entries(state.providers) as Array<[GlobalSearchProviderId, GlobalSearchProviderState]>;
   for (const type of RESULT_TYPES) {
     const groups = providerEntries.map(([providerId, providerState]) => ({
       providerId,
@@ -53,26 +54,26 @@ export function globalSearchRows(state: GlobalSearchState): GlobalSearchRow[] {
   return rows;
 }
 
-export function globalSearchResultAt(state: GlobalSearchState, index: number): ProviderSearchResult | undefined {
+export function globalSearchResultAt(state: GlobalSearchState, index: number): GlobalSearchProviderResult | undefined {
   const row = globalSearchRows(state)[index];
   return row?.kind === "result" ? row.result : undefined;
 }
 
-export function globalSearchRetryProviderId(row: GlobalSearchRow | undefined): string | undefined {
+export function globalSearchRetryProviderId(row: GlobalSearchRow | undefined): GlobalSearchProviderId | undefined {
   return row?.kind === "provider-status" ? row.providerId : undefined;
 }
 
 export function isNavigableGlobalSearchResult(
-  result: ProviderSearchResult | undefined,
-): result is ProviderSearchResult & { type: "artist" | "album" | "playlist" } {
+  result: GlobalSearchProviderResult | undefined,
+): result is GlobalSearchProviderResult & { type: "artist" | "album" | "playlist" } {
   return result !== undefined && (result.type === "artist" || result.type === "album" || result.type === "playlist");
 }
 
 export function searchKnownTracks(
-  provider: Pick<Provider, "id" | "label">,
+  provider: Pick<Provider, "label"> & { id: GlobalSearchProviderId },
   tracks: readonly import("./domain").Track[],
-  request: ProviderSearchRequest,
-): ProviderSearchResult[] {
+  request: GlobalSearchProviderRequest,
+): GlobalSearchProviderResult[] {
   if (!request.resultTypes.includes("track") || request.signal?.aborted) return [];
   const query = request.query.trim().toLocaleLowerCase();
   if (!query) return [];
