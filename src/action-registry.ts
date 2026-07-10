@@ -31,7 +31,7 @@ export type UiActionIntent = {
 export type UiRouteOperation =
   | "move-down" | "move-up" | "first" | "last"
   | "half-page-down" | "half-page-up" | "page-down" | "page-up"
-  | "open" | "back" | "dismiss" | "search-filters" | "retry";
+  | "open" | "back" | "dismiss" | "search-filters" | "retry" | "help-filter";
 
 export type ActionIntent = AppIntent | UiActionIntent;
 
@@ -131,6 +131,9 @@ export function createActionRegistry(): ActionRegistry {
     routeAction("search.retry", "Retry", ["retry failed provider"], [
       { key: "r", label: "r" },
     ], "retry", canRetryContext),
+    routeAction("help.filter", "Filter Help", ["search shortcuts"], [
+      { key: "/", label: "/" },
+    ], "help-filter", isHelpResultsContext),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -310,9 +313,11 @@ export function discoveryActions(registry: ActionRegistry, context: ActionContex
   const effectiveContext = underlyingDiscoveryContext(context);
   const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
     .includes(context.uiState.overlays.at(-1)?.kind ?? "");
+  const helpOpen = context.uiState.overlays.at(-1)?.kind === "shortcut-help";
   return registry
     .filter((action) => action.applies(effectiveContext)
-      || (discoveryOverlayOpen && action.id === "overlay.dismiss"))
+      || (discoveryOverlayOpen && action.id === "overlay.dismiss")
+      || (helpOpen && action.id === "help.filter"))
     .map((action) => resolveAction(action, effectiveContext))
     .sort((left, right) => Number(left.scope === "global") - Number(right.scope === "global"));
 }
@@ -342,8 +347,13 @@ export function actionForBinding(
   const effectiveContext = underlyingDiscoveryContext(context);
   const discoveryOverlayOpen = ["shortcut-help", "command-palette"]
     .includes(context.uiState.overlays.at(-1)?.kind ?? "");
-  const action = registry.find((candidate) => (candidate.applies(effectiveContext)
-      || (discoveryOverlayOpen && candidate.id === "overlay.dismiss"))
+  const helpOpen = context.uiState.overlays.at(-1)?.kind === "shortcut-help";
+  const candidates = helpOpen
+    ? [...registry.filter((candidate) => candidate.id === "help.filter"), ...registry]
+    : registry;
+  const action = candidates.find((candidate) => (candidate.applies(effectiveContext)
+      || (discoveryOverlayOpen && candidate.id === "overlay.dismiss")
+      || (helpOpen && candidate.id === "help.filter"))
     && candidate.bindings.some((binding) => binding.key === key));
   return action ? resolveAction(action, effectiveContext) : null;
 }
@@ -546,6 +556,11 @@ function isMusicResultsContext(context: ActionContext): boolean {
 function isNonTextOverlayContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
   return Boolean(overlay && overlay.focus === "results");
+}
+
+function isHelpResultsContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  return overlay?.kind === "shortcut-help" && overlay.focus === "results";
 }
 
 function canRetryContext(context: ActionContext): boolean {
