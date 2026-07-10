@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -121,7 +121,6 @@ describe("YouTubeCacheProvider", () => {
       await writeFile(join(dir, "duplicate01.opus"), "audio");
       await writeFile(join(dir, "duplicate01.webm"), "audio");
       const duplicateSidecar = entryMetadata("sidecase001", "Sidecar Case", "Ada", "sidecase001.opus");
-      await writeFile(join(dir, "sidecase001.json"), JSON.stringify(duplicateSidecar));
       await writeFile(join(dir, "sidecase001.JSON"), JSON.stringify(duplicateSidecar));
       await writeFile(join(dir, "sidecase001.opus"), "audio");
 

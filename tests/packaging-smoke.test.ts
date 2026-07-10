@@ -1,54 +1,89 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
+import { spawn } from "node-pty";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 
-describe("Bun npm executable", () => {
-  test("publishes tmu as a Bun-backed npm executable without compiled artifact scripts", async () => {
+const exec = promisify(execFile);
+let root = "";
+let tarball = "";
+let packageFiles: string[] = [];
+
+beforeAll(async () => {
+  if (process.platform === "darwin") {
+    await chmod(join("node_modules", "node-pty", "prebuilds", `darwin-${process.arch}`, "spawn-helper"), 0o755);
+  }
+  root = await mkdtemp(join(tmpdir(), "tmu-package-contract-"));
+  const configDir = join(root, "config", "tmu");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, "config.json"), JSON.stringify({
+    helpers: {
+      mpv: join(root, "missing-external-tools", "mpv"),
+      ytDlp: join(root, "missing-external-tools", "yt-dlp"),
+    },
+  }));
+  const { stdout } = await exec("npm", ["pack", "--silent", "--pack-destination", root]);
+  tarball = join(root, stdout.trim().split("\n").at(-1) ?? "");
+  const listing = await exec("tar", ["-tzf", tarball]);
+  packageFiles = listing.stdout.trim().split("\n");
+}, 30_000);
+
+afterAll(async () => {
+  if (root) await rm(root, { recursive: true, force: true });
+});
+
+describe("Node npm package", () => {
+  test("builds one executable ESM CLI bundle with a source map", async () => {
     const pkg = JSON.parse(await readFile("package.json", "utf8")) as {
-      private?: boolean;
-      bin?: Record<string, string>;
-      scripts?: Record<string, string>;
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
+      bin: Record<string, string>; engines: Record<string, string>;
+      dependencies: Record<string, string>; devDependencies: Record<string, string>;
     };
-
-    expect(pkg.private).not.toBe(true);
-    expect(pkg.bin).toEqual({ tmu: "src/main.ts" });
-    expect(pkg.scripts?.["build:linux-x64"]).toBeUndefined();
-    expect(pkg.scripts?.["smoke:linux-x64"]).toBeUndefined();
-    expect(Object.keys(pkg.scripts ?? {}).every((name) => !name.includes("prototype"))).toBe(true);
-    expect(pkg.dependencies?.["@vue-tui/runtime"]).toBe("0.0.3");
-    expect(pkg.dependencies?.vue).toBe("3.5.39");
-    expect(pkg.devDependencies?.["@vue-tui/runtime"]).toBeUndefined();
-    expect(pkg.devDependencies?.vue).toBeUndefined();
+    expect(pkg.bin).toEqual({ tmu: "dist/cli.js" });
+    expect(pkg.engines).toEqual({ node: ">=24.0.0" });
+    expect(pkg.dependencies).toMatchObject({ "@vue-tui/runtime": "0.0.3", vue: "3.5.39" });
+    expect(pkg.devDependencies).toHaveProperty("tsdown");
+    expect(packageFiles).toContain("package/dist/cli.js");
+    expect(packageFiles).toContain("package/dist/cli.js.map");
+    expect((await readFile("dist/cli.js", "utf8")).startsWith("#!/usr/bin/env node\n")).toBe(true);
+    await access("dist/cli.js.map");
   });
 
-  test("runs the packed executable through bunx and a Bun global install", async () => {
-    const root = await mkdtemp(join(tmpdir(), "tmu-package-smoke-"));
-    const packDir = join(root, "pack");
-    const installDir = join(root, "bun-install");
+  test("packs only distribution output and user documentation", () => {
+    expect(packageFiles).toContain("package/README.md");
+    expect(packageFiles).toContain("package/CONTEXT.md");
+    expect(packageFiles.some((file) => file.startsWith("package/src/"))).toBe(false);
+    expect(packageFiles.some((file) => file.startsWith("package/tests/"))).toBe(false);
+  });
 
-    try {
-      await Bun.$`mkdir -p ${packDir}`.quiet();
-      const packed = await Bun.$`npm pack --silent --pack-destination ${packDir}`.text();
-      const tarball = join(packDir, packed.trim().split("\n").at(-1) ?? "");
-      const installed = Bun.spawn(["bun", "install", "--global", tarball], {
-        env: { ...process.env, BUN_INSTALL: installDir },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(await installed.exited).toBe(0);
+  test("contains no Bun runtime, tooling dependency, or artifact", async () => {
+    expect(packageFiles.some((file) => /(?:^|\/)bun(?:\.lock|fig|$)/i.test(file))).toBe(false);
+    const packedPackage = await exec("tar", ["-xOf", tarball, "package/package.json"]);
+    const manifest = JSON.parse(packedPackage.stdout) as Record<string, unknown>;
+    const dependencyNames = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+      .flatMap((section) => Object.keys((manifest[section] as Record<string, string> | undefined) ?? {}));
+    expect(dependencyNames.filter((name) => name.toLowerCase().includes("bun"))).toEqual([]);
+  });
 
-      await expectTmuExecutable(["tmu"], {
-        ...isolatedRuntimeEnv(root, installDir),
-        PATH: `${join(installDir, "bin")}:${process.env.PATH ?? ""}`,
-      });
-      await expectTmuExecutable(["bunx", "--package", tarball, "tmu"], isolatedRuntimeEnv(root, installDir));
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  }, 20_000);
+  test("rejects unsupported Node before application initialization", async () => {
+    const preload = join(process.cwd(), "tests/fixtures/unsupported-node.cjs");
+    await expect(exec(process.execPath, ["--require", preload, "dist/cli.js"], {
+      env: { ...process.env, TMU_APPLICATION_INITIALIZATION_SENTINEL: "1" },
+    })).rejects.toMatchObject({
+      code: 1,
+      stderr: expect.stringContaining("TMU requires Node.js 24 or newer"),
+    });
+  });
+
+  test("runs the packed CLI through npx and an isolated global installation without External Tools", async () => {
+    const globalPrefix = join(root, "global");
+    await exec("npm", ["install", "--global", "--prefix", globalPrefix, tarball]);
+
+    const env = isolatedRuntimeEnv();
+    await expectPackedTerminal(join(globalPrefix, "bin", "tmu"), [], env);
+    await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env);
+  }, 30_000);
 
   test("public source surface contains no removed provider or legacy input-router modules", async () => {
     const sourceFiles = await readdir("src");
@@ -59,40 +94,48 @@ describe("Bun npm executable", () => {
   });
 });
 
-function isolatedRuntimeEnv(root: string, installDir: string): Record<string, string | undefined> {
+function isolatedRuntimeEnv(): Record<string, string> {
   return {
-    ...process.env,
-    BUN_INSTALL: installDir,
+    ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+    TERM: "xterm-256color",
+    NO_COLOR: "1",
+    PATH: `${join(root, "missing-external-tools")}:${process.env.PATH ?? ""}`,
     XDG_CONFIG_HOME: join(root, "config"),
     XDG_STATE_HOME: join(root, "state"),
     XDG_CACHE_HOME: join(root, "cache"),
   };
 }
 
-async function expectTmuExecutable(command: string[], env: Record<string, string | undefined>): Promise<void> {
+async function expectPackedTerminal(command: string, args: string[], env: Record<string, string>): Promise<void> {
   let output = "";
-  const terminal = new Bun.Terminal({
-    cols: 100,
-    rows: 24,
-    data: (_terminal, data) => { output += new TextDecoder().decode(data); },
-  });
-  const executable = Bun.spawn(command, {
-    env: { ...env, TERM: "xterm-256color", NO_COLOR: "1" },
-    terminal,
-  });
+  const terminal = spawn(command, args, { cols: 100, rows: 24, cwd: root, env });
+  terminal.onData((data) => { output += data; });
 
   try {
-    const startedAt = Date.now();
-    while (!output.includes("[1 Playback]") && Date.now() - startedAt < 10_000) {
-      await Bun.sleep(10);
-    }
-    expect(output).toContain("[1 Playback]");
+    await waitFor(() => output.includes("[1 Playback]"));
     expect(output).toContain("2 Library");
     expect(output).toContain("3 YouTube Downloader");
+    terminal.write("2");
+    await waitFor(() => output.includes("[2 Library]"));
+    terminal.write("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    terminal.write("3");
+    await waitFor(() => output.includes("[3 YouTube Downloader]"));
+    terminal.write("\u001b");
+    await new Promise((resolve) => setTimeout(resolve, 50));
     terminal.write("q");
-    expect(await executable.exited).toBe(0);
+    const exit = await new Promise<{ exitCode: number; signal?: number }>((resolve) => terminal.onExit(resolve));
+    expect(exit.exitCode).toBe(0);
   } finally {
-    if (executable.exitCode === null) executable.kill();
-    terminal.close();
+    terminal.kill();
   }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for packed terminal output");
 }

@@ -16,17 +16,33 @@ YouTube URL Download stores downloaded audio in the YouTube Cache without adding
 
 ## Install and run
 
-TMU requires [Bun](https://bun.sh/). Run it directly from the npm package:
+Node.js and npm are TMU's runtime and installation requirements. TMU requires Node.js 24 or newer. Run it directly from the npm package:
 
 ```sh
-bunx tmu
+npx tmu
 ```
 
 Or install it globally and use the sole production launch form:
 
 ```sh
-bun install --global tmu
+npm install --global tmu
 tmu
 ```
 
-The npm executable uses Bun at runtime. `mpv` and `yt-dlp` remain external helpers discovered through TMU Config and dependency health checks.
+The npm package contains a prebuilt JavaScript executable, so no TypeScript loader or build step is needed after installation. Linux, macOS, and WSL (through Linux behavior) are supported; native Windows is not supported.
+
+`mpv` and `yt-dlp` are separate External Tools discovered through TMU Config and dependency health checks. They are not Node packages or npm runtime requirements. When either is missing, only its corresponding feature is disabled.
+
+## Development
+
+Install the locked dependencies with `npm ci`, then use the public npm scripts:
+
+```sh
+npm run build
+npm run start
+npm run typecheck
+npm test
+npm run smoke:package
+```
+
+To benchmark production mpv control on Linux, put a canonical `track` and its resolved file `playbackLocator` in JSON, then run `npm run benchmark:playback -- track-input.json --power-mode "AC power, balanced"`. The command plays the complete Track with null audio and one-second position polling. Its JSON report keeps controller and mpv metrics distinct and includes child-inclusive CPU, peak RSS, context switches, elapsed time, versions, and playback completion. Alternate three runs per runtime without changing the environment. Memory is separate from CPU evidence; this does not measure hardware energy.

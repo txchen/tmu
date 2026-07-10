@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { createInitialUiState, reduceUiState } from "../src/ui-state";
 
 describe("top-level tab UI state", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import {
   checkDependencyHealth,
   checkHelperDependencyHealth,
@@ -66,6 +66,23 @@ describe("dependency health", () => {
       enabled: false,
       message: "YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp",
     });
+  });
+
+  test.each([
+    { missing: "mpv", playbackEnabled: false, downloadEnabled: true },
+    { missing: "yt-dlp", playbackEnabled: true, downloadEnabled: false },
+  ] as const)("a missing $missing disables only its corresponding feature", async ({
+    missing, playbackEnabled, downloadEnabled,
+  }) => {
+    const config = createDefaultTmuConfig();
+    const runner: DependencyCommandRunner = async ({ helper, command }) => helper === missing
+      ? { exitCode: 127, stdout: "", stderr: `${command}: not found`, errorMessage: "not found" }
+      : { exitCode: 0, stdout: `${helper} 1.0.0\n`, stderr: "" };
+
+    const health = await checkDependencyHealth(config, { runner });
+
+    expect(health.playback.enabled).toBe(playbackEnabled);
+    expect(health.youtubeUrlDownload.enabled).toBe(downloadEnabled);
   });
 
   test("can recheck only yt-dlp for the YouTube URL Download source", async () => {

@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
@@ -14,14 +13,14 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
   await coordinator.start();
 
   const app = createApp(createTmuRoot({ coordinator }));
-  const handleBunPtyResize = () => {
+  const handlePtyResize = () => {
     dispatchTerminalResize(
       coordinator,
       process.stdout.columns ?? coordinator.uiState.terminal.columns,
       process.stdout.rows ?? coordinator.uiState.terminal.rows,
     );
   };
-  process.on("SIGWINCH", handleBunPtyResize);
+  process.on("SIGWINCH", handlePtyResize);
 
   let terminating = false;
   const terminateFromSignal = (exitCode: number) => {
@@ -63,7 +62,7 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
   try {
     await app.waitUntilExit();
   } finally {
-    process.off("SIGWINCH", handleBunPtyResize);
+    process.off("SIGWINCH", handlePtyResize);
     process.off("SIGINT", handleSigint);
     process.off("SIGTERM", handleSigterm);
     process.off("SIGHUP", handleSighup);
@@ -73,5 +72,3 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
     await coordinator.teardown();
   }
 }
-
-if (import.meta.main) await main();
