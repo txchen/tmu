@@ -127,6 +127,23 @@ describe("action registry contracts", () => {
     expect(actionForBinding(registry, "\x1b[13;2u", current)).toBeNull();
   });
 
+  test("keeps a Provider's non-playable result authoritative", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    current.uiState.activeTargetId = "local";
+    current.appState.providers.local = {
+      id: "local",
+      label: "Local",
+      hint: "directories and Tracks",
+      listVisibleTracks: () => [amber],
+      playableTargetAt: () => undefined,
+      resolvePlaybackLocator: async () => ({ kind: "file", path: amber.identity.stableId }),
+    };
+
+    expect(actionForBinding(registry, "\r", current)).toBeNull();
+    expect(actionForBinding(registry, "\x1b[13;2u", current)).toBeNull();
+  });
+
   test("routes Queue editing bindings through identity targets and a Clear Queue confirmation request", () => {
     const registry = createActionRegistry();
     const current = context();
