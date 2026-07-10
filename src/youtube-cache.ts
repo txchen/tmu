@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, extname, isAbsolute, join } from "node:path";
 import {
   identityKey,
   YOUTUBE_CACHE_PROVIDER_ID,
@@ -12,47 +13,59 @@ import {
 } from "./domain";
 
 const YOUTUBE_CACHE_PROVIDER_LABEL = "YouTube Cache";
+const REQUIRED_METADATA_KEYS = [
+  "videoId", "title", "uploader", "cachedAt", "mediaFileName", "container",
+] as const;
+const OPTIONAL_METADATA_KEYS = ["durationSeconds", "thumbnailUrl"] as const;
+const METADATA_KEYS = new Set<string>([...REQUIRED_METADATA_KEYS, ...OPTIONAL_METADATA_KEYS]);
+const MEDIA_EXTENSIONS = new Set([
+  ".aac", ".flac", ".m4a", ".mka", ".mkv", ".mp3", ".mp4", ".ogg", ".opus", ".wav", ".webm",
+]);
 
 export type YouTubeCacheProviderOptions = {
   cacheDir: string;
-  mediaDirName: string;
-  metadataFileName: string;
 };
 
+export function defaultYouTubeCacheDirectory(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "tmu", "youtube-cache");
+}
+
 export type YouTubeCacheMetadata = {
-  version: 1;
-  extractor: string;
-  id: string;
+  videoId: string;
   title: string;
-  mediaFileName: string;
-  artist?: string;
-  album?: string;
+  uploader: string;
   durationSeconds?: number;
-  coverArtId?: string;
+  cachedAt: string;
+  mediaFileName: string;
+  container: string;
+  thumbnailUrl?: string;
 };
 
 export type YouTubeCacheEntry = {
   track: Track;
   availability: TrackAvailability;
+  metadata: YouTubeCacheMetadata;
   metadataPath: string;
   mediaPath: string;
+};
+
+export type IncompleteYouTubeCacheEntry = {
+  stem: string;
+  paths: readonly string[];
+  reason: string;
+  title?: string;
+  uploader?: string;
 };
 
 export type YouTubeCacheProvider = Provider & {
   refresh(): void;
   listCacheEntries(): readonly YouTubeCacheEntry[];
+  listIncompleteEntries(): readonly IncompleteYouTubeCacheEntry[];
   findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined;
 };
 
-type NormalizedYouTubeCacheMetadata = YouTubeCacheMetadata & {
-  extractor: string;
-  id: string;
-  title: string;
-  mediaFileName: string;
-};
-
 export function createYouTubeCacheProvider(
-  options: YouTubeCacheProviderOptions,
+  options: YouTubeCacheProviderOptions = { cacheDir: defaultYouTubeCacheDirectory() },
 ): YouTubeCacheProvider {
   return new FileSystemYouTubeCacheProvider(options);
 }
@@ -62,6 +75,7 @@ export function isYouTubeCacheProvider(
 ): provider is YouTubeCacheProvider {
   return Boolean(provider)
     && typeof (provider as Partial<YouTubeCacheProvider>).listCacheEntries === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).listIncompleteEntries === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).findByIdentity === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).refresh === "function";
 }
@@ -72,42 +86,35 @@ export async function writeYouTubeCacheMetadata(
   writeOptions: { signal?: AbortSignal } = {},
 ): Promise<string> {
   const normalized = normalizeMetadata(metadata);
-  if (!normalized) {
-    throw new Error("YouTube Cache metadata is invalid");
-  }
+  if (!normalized) throw new Error("YouTube Cache metadata is invalid");
 
   throwIfAborted(writeOptions.signal);
-  const entryDir = join(options.cacheDir, normalized.extractor, normalized.id);
-  await mkdir(join(entryDir, options.mediaDirName), { recursive: true });
-  const metadataPath = join(entryDir, options.metadataFileName);
+  await mkdir(options.cacheDir, { recursive: true });
+  const metadataPath = join(options.cacheDir, `${normalized.videoId}.json`);
   const tempPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
-
   try {
-    throwIfAborted(writeOptions.signal);
-    await writeFile(
-      tempPath,
-      `${JSON.stringify(serializableMetadata(normalized), null, 2)}\n`,
-      { encoding: "utf8", signal: writeOptions.signal },
-    );
+    await writeFile(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, {
+      encoding: "utf8",
+      signal: writeOptions.signal,
+    });
     throwIfAborted(writeOptions.signal);
     await rename(tempPath, metadataPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => undefined);
     throw error;
   }
-
   return metadataPath;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) return;
-  throw new Error("YouTube download cancelled");
+  if (signal?.aborted) throw new Error("YouTube download cancelled");
 }
 
 class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
   readonly id = YOUTUBE_CACHE_PROVIDER_ID;
   readonly label = YOUTUBE_CACHE_PROVIDER_LABEL;
   private readonly entries = new Map<string, YouTubeCacheEntry>();
+  private incompleteEntries: IncompleteYouTubeCacheEntry[] = [];
 
   constructor(private readonly options: YouTubeCacheProviderOptions) {
     this.refresh();
@@ -115,14 +122,15 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
 
   refresh(): void {
     this.entries.clear();
-
-    for (const metadataPath of findMetadataFiles(this.options.cacheDir, this.options.metadataFileName)) {
-      const entry = this.entryFromMetadataPath(metadataPath);
-      if (!entry) continue;
-
-      const key = identityKey(entry.track.identity);
-      if (!this.entries.has(key)) this.entries.set(key, entry);
+    this.incompleteEntries = [];
+    for (const candidate of scanCache(this.options.cacheDir)) {
+      if (candidate.entry) {
+        this.entries.set(identityKey(candidate.entry.track.identity), candidate.entry);
+      } else if (candidate.incomplete) {
+        this.incompleteEntries.push(candidate.incomplete);
+      }
     }
+    this.incompleteEntries.sort((left, right) => compareStrings(left.stem, right.stem));
   }
 
   listTracks(): readonly Track[] {
@@ -139,7 +147,14 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
   }
 
   listCacheEntries(): readonly YouTubeCacheEntry[] {
-    return [...this.entries.values()].sort(compareCacheEntries);
+    return [...this.entries.values()].sort((left, right) =>
+      right.metadata.cachedAt.localeCompare(left.metadata.cachedAt)
+      || compareStrings(left.track.identity.stableId, right.track.identity.stableId)
+    );
+  }
+
+  listIncompleteEntries(): readonly IncompleteYouTubeCacheEntry[] {
+    return this.incompleteEntries;
   }
 
   findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined {
@@ -151,160 +166,162 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
     if (identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) {
       throw new Error(`YouTube Cache cannot resolve ${identity.providerId}`);
     }
-
     const entry = this.findByIdentity(identity);
-    if (!entry) {
+    if (!entry || !isNonEmptyFile(entry.mediaPath)) {
       throw new Error(`YouTube Cache entry is missing: ${identity.stableId}`);
     }
-
-    const availability = cachedMediaAvailability(entry.mediaPath);
-    if (availability.status === "unavailable") throw new Error(`${availability.reason}: ${entry.mediaPath}`);
-
     return { kind: "file", path: entry.mediaPath };
   }
+}
 
-  private entryFromMetadataPath(metadataPath: string): YouTubeCacheEntry | undefined {
-    const metadata = readMetadata(metadataPath);
-    if (!metadata) return undefined;
+type ScanResult = { entry?: YouTubeCacheEntry; incomplete?: IncompleteYouTubeCacheEntry };
 
-    const mediaPath = join(
-      this.options.cacheDir,
-      metadata.extractor,
-      metadata.id,
-      this.options.mediaDirName,
-      metadata.mediaFileName,
+function scanCache(cacheDir: string): ScanResult[] {
+  if (!existsSync(cacheDir)) return [];
+  let files: string[];
+  try {
+    files = readdirSync(cacheDir, { withFileTypes: true })
+      .filter((item) => item.isFile())
+      .map((item) => item.name);
+  } catch {
+    return [];
+  }
+
+  const results: ScanResult[] = [];
+  const consumedMedia = new Set<string>();
+  const sidecarsByStem = new Map<string, string[]>();
+  for (const name of files.filter((candidate) => extname(candidate).toLowerCase() === ".json")) {
+    const stem = name.slice(0, -5);
+    if (!normalizeVideoId(stem)) continue;
+    sidecarsByStem.set(stem, [...sidecarsByStem.get(stem) ?? [], name]);
+  }
+  for (const [stem, sidecarNames] of sidecarsByStem) {
+    const sidecarName = sidecarNames[0]!;
+    const metadataPath = join(cacheDir, sidecarName);
+    const parsed = parseJson(metadataPath);
+    const metadata = normalizeMetadata(parsed);
+    const mediaName = metadata?.mediaFileName
+      ?? (isObject(parsed) && typeof parsed.mediaFileName === "string" ? basename(parsed.mediaFileName) : undefined);
+    const sameStemMedia = files.filter((name) =>
+      normalizeVideoId(name.slice(0, -extname(name).length)) === stem
+      && MEDIA_EXTENSIONS.has(extname(name).toLowerCase())
     );
-    const availability = cachedMediaAvailability(mediaPath);
-
-    return {
+    for (const name of sameStemMedia) consumedMedia.add(name);
+    if (mediaName) consumedMedia.add(mediaName);
+    const mediaPath = metadata ? join(cacheDir, metadata.mediaFileName) : undefined;
+    if (sidecarNames.length !== 1 || sidecarName !== `${stem}.json`
+      || !metadata || metadata.videoId !== stem || !mediaPath || sameStemMedia.length !== 1
+      || sameStemMedia[0] !== metadata.mediaFileName || !isNonEmptyFile(mediaPath)) {
+      results.push({ incomplete: incompleteFrom(
+        stem,
+        metadataPath,
+        [...sidecarNames.slice(1), ...sameStemMedia].map((name) => join(cacheDir, name)),
+        parsed,
+      ) });
+      continue;
+    }
+    results.push({ entry: {
       track: trackFromMetadata(metadata),
-      availability,
+      availability: { status: "available" },
+      metadata,
       metadataPath,
       mediaPath,
-    };
+    } });
   }
+
+  for (const name of files) {
+    const extension = extname(name).toLowerCase();
+    if (!MEDIA_EXTENSIONS.has(extension) || consumedMedia.has(name)) continue;
+    const stem = name.slice(0, -extension.length);
+    if (!normalizeVideoId(stem)) continue;
+    if (files.includes(`${stem}.json`)) continue;
+    results.push({ incomplete: {
+      stem,
+      paths: [join(cacheDir, name)],
+      reason: "Cache media has no sidecar",
+    } });
+  }
+  return results;
 }
 
-function findMetadataFiles(cacheDir: string, metadataFileName: string): string[] {
-  if (!existsSync(cacheDir)) return [];
-
-  const found: string[] = [];
-  const visit = (directory: string) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((left, right) => compareStrings(left.name, right.name));
-    for (const entry of entries) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-        continue;
-      }
-
-      if (entry.isFile() && entry.name === metadataFileName) {
-        found.push(path);
-      }
-    }
+function incompleteFrom(
+  stem: string,
+  metadataPath: string,
+  mediaPaths: readonly string[],
+  parsed: unknown,
+): IncompleteYouTubeCacheEntry {
+  const readable = isObject(parsed) ? parsed : {};
+  return {
+    stem,
+    paths: [metadataPath, ...mediaPaths],
+    reason: "Cache sidecar or media is invalid or incomplete",
+    ...(normalizeDisplayValue(readable.title) ? { title: normalizeDisplayValue(readable.title) } : {}),
+    ...(normalizeDisplayValue(readable.uploader) ? { uploader: normalizeDisplayValue(readable.uploader) } : {}),
   };
-
-  visit(cacheDir);
-  return found;
 }
 
-function readMetadata(path: string): NormalizedYouTubeCacheMetadata | null {
+function parseJson(path: string): unknown {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return normalizeMetadata(parsed);
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch {
-    return null;
+    return undefined;
   }
 }
 
-function normalizeMetadata(value: unknown): NormalizedYouTubeCacheMetadata | null {
-  if (typeof value !== "object" || value === null) return null;
-  const input = value as Partial<YouTubeCacheMetadata>;
-  if (input.version !== 1) return null;
+function normalizeMetadata(value: unknown): YouTubeCacheMetadata | null {
+  if (!isObject(value)) return null;
+  if (Object.keys(value).some((key) => !METADATA_KEYS.has(key))) return null;
+  if (REQUIRED_METADATA_KEYS.some((key) => !(key in value))) return null;
 
-  const extractor = normalizeExtractor(input.extractor);
-  const id = normalizeId(input.id);
-  const title = normalizeDisplayValue(input.title);
-  const mediaFileName = normalizeMediaFileName(input.mediaFileName);
-  if (!extractor || !id || !title || !mediaFileName) return null;
+  const videoId = normalizeVideoId(value.videoId);
+  const title = normalizeDisplayValue(value.title);
+  const uploader = normalizeDisplayValue(value.uploader);
+  const cachedAt = normalizeTimestamp(value.cachedAt);
+  const mediaFileName = normalizeMediaFileName(value.mediaFileName);
+  const container = normalizeContainer(value.container);
+  if (!videoId || !title || !uploader || !cachedAt || !mediaFileName || !container) return null;
+  const extension = extname(mediaFileName).slice(1).toLowerCase();
+  if (mediaFileName !== `${videoId}.${extension}` || extension !== container) return null;
 
-  const metadata: NormalizedYouTubeCacheMetadata = {
-    version: 1,
-    extractor,
-    id,
-    title,
-    mediaFileName,
+  const durationSeconds = normalizeDuration(value.durationSeconds);
+  if ("durationSeconds" in value && durationSeconds === undefined) return null;
+  const thumbnailUrl = normalizeDisplayValue(value.thumbnailUrl);
+  if ("thumbnailUrl" in value && !thumbnailUrl) return null;
+  return {
+    videoId, title, uploader,
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    cachedAt, mediaFileName, container,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
   };
-  const artist = normalizeDisplayValue(input.artist);
-  const album = normalizeDisplayValue(input.album);
-  const durationSeconds = normalizeDuration(input.durationSeconds);
-  const coverArtId = normalizeDisplayValue(input.coverArtId);
-
-  if (artist) metadata.artist = artist;
-  if (album) metadata.album = album;
-  if (durationSeconds !== undefined) metadata.durationSeconds = durationSeconds;
-  if (coverArtId) metadata.coverArtId = coverArtId;
-  return metadata;
 }
 
-function trackFromMetadata(metadata: NormalizedYouTubeCacheMetadata): Track {
-  const track: Track = {
-    identity: {
-      providerId: YOUTUBE_CACHE_PROVIDER_ID,
-      stableId: metadata.id,
-    },
+function trackFromMetadata(metadata: YouTubeCacheMetadata): Track {
+  return {
+    identity: { providerId: YOUTUBE_CACHE_PROVIDER_ID, stableId: metadata.videoId },
     title: metadata.title,
+    artist: metadata.uploader,
+    ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
     providerLabel: YOUTUBE_CACHE_PROVIDER_LABEL,
   };
-
-  if (metadata.artist) track.artist = metadata.artist;
-  if (metadata.durationSeconds !== undefined) track.durationSeconds = metadata.durationSeconds;
-  return track;
 }
 
-function cachedMediaAvailability(mediaPath: string): TrackAvailability {
+function isNonEmptyFile(path: string): boolean {
   try {
-    const mediaStat = statSync(mediaPath);
-    if (mediaStat.isFile()) return { status: "available" };
-    return { status: "unavailable", reason: "Cached media path is not a file" };
+    const stat = statSync(path);
+    return stat.isFile() && stat.size > 0;
   } catch {
-    return { status: "unavailable", reason: "Cached media file is missing" };
+    return false;
   }
 }
 
-function serializableMetadata(
-  metadata: NormalizedYouTubeCacheMetadata,
-): YouTubeCacheMetadata {
-  return {
-    version: 1,
-    extractor: metadata.extractor,
-    id: metadata.id,
-    title: metadata.title,
-    mediaFileName: metadata.mediaFileName,
-    ...(metadata.artist ? { artist: metadata.artist } : {}),
-    ...(metadata.album ? { album: metadata.album } : {}),
-    ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
-    ...(metadata.coverArtId ? { coverArtId: metadata.coverArtId } : {}),
-  };
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeExtractor(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim().toLowerCase();
-  return trimmed && !trimmed.includes("/") && !trimmed.includes("\\") ? trimmed : undefined;
-}
-
-function normalizeId(value: unknown): string | undefined {
+function normalizeVideoId(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  return trimmed && !trimmed.includes("/") && !trimmed.includes("\\") ? trimmed : undefined;
+  return /^[A-Za-z0-9_-]{11}$/.test(trimmed) ? trimmed : undefined;
 }
 
 function normalizeDisplayValue(value: unknown): string | undefined {
@@ -314,22 +331,25 @@ function normalizeDisplayValue(value: unknown): string | undefined {
 function normalizeMediaFileName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  if (!trimmed || isAbsolute(trimmed) || basename(trimmed) !== trimmed) return undefined;
-  return trimmed;
+  return trimmed && !isAbsolute(trimmed) && basename(trimmed) === trimmed && extname(trimmed) ? trimmed : undefined;
+}
+
+function normalizeContainer(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed && /^[a-z0-9]+$/.test(trimmed) ? trimmed : undefined;
+}
+
+function normalizeTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? undefined : date.toISOString();
 }
 
 function normalizeDuration(value: unknown): number | undefined {
-  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-  return Number.isFinite(number) && number >= 0 ? number : undefined;
-}
-
-function compareCacheEntries(left: YouTubeCacheEntry, right: YouTubeCacheEntry): number {
-  return compareStrings(left.track.title.toLowerCase(), right.track.title.toLowerCase())
-    || compareStrings(left.track.artist?.toLowerCase() ?? "", right.track.artist?.toLowerCase() ?? "")
-    || compareStrings(left.track.identity.stableId, right.track.identity.stableId);
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function compareStrings(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
+  return left === right ? 0 : left < right ? -1 : 1;
 }

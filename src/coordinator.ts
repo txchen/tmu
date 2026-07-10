@@ -24,6 +24,7 @@ import {
 } from "./dependencies";
 import {
   isYouTubeCacheProvider,
+  defaultYouTubeCacheDirectory,
 } from "./youtube-cache";
 import {
   InMemoryAppPreferencesPersistence,
@@ -724,7 +725,7 @@ export class AppCoordinator {
     const download = await this.youtubeDownloader({
       url,
       command: this.appState.config.helpers.ytDlp,
-      cache: this.appState.config.youtubeCache,
+      cache: { cacheDir: defaultYouTubeCacheDirectory() },
       metadata: identified.metadata,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
       progressThrottleMs: this.appState.config.lowPower.downloadProgressThrottleMs,

@@ -43,7 +43,7 @@ export function createTmuApp(options: TmuAppOptions = {}): {
 } {
   const config = createDefaultTmuConfig(options.config);
   const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
-  const providers = createDefaultProviders({ youtubeCache: config.youtubeCache });
+  const providers = createDefaultProviders();
   const coordinator = new AppCoordinator({
     appState: createInitialAppState(providers, {
       config,

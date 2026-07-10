@@ -7,7 +7,7 @@ import { createDefaultTmuConfig, loadTmuConfig } from "../src/config";
 describe("TMU Config", () => {
   test("contains YouTube settings without Provider selection or removed source config", () => {
     const config = createDefaultTmuConfig();
-    expect(config.youtubeCache.cacheDir).toContain("youtube-cache");
+    expect(config).not.toHaveProperty("youtubeCache");
     expect(config).not.toHaveProperty("providers");
     expect(config).not.toHaveProperty("offlineYouTubeCache");
   });

@@ -1,246 +1,223 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  NoopPlayer,
   createYouTubeCacheProvider,
-  createTmuApp,
   writeYouTubeCacheMetadata,
-  type PlaybackLocator,
 } from "../src/index";
 
-class RecordingPlayer extends NoopPlayer {
-  readonly loaded: PlaybackLocator[] = [];
-
-  async load(locator: PlaybackLocator): Promise<void> {
-    this.loaded.push(locator);
-    await super.load(locator);
-  }
-}
-
 describe("YouTubeCacheProvider", () => {
-  test("discovers normalized cache metadata with present and missing media files", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
+  test("lists only healthy flat cache entries newest first", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
     try {
-      await writeCacheEntry(dir, {
-        extractor: "YouTube",
-        id: "late-upload",
-        title: "Late Upload",
-        artist: "Ada",
+      await writeEntry(dir, {
+        videoId: "older123456",
+        title: "Older Track",
+        uploader: "Ada",
+        cachedAt: "2026-02-01T10:00:00.000Z",
+        mediaFileName: "older123456.opus",
+        container: "opus",
+      });
+      await writeEntry(dir, {
+        videoId: "newer456789",
+        title: "Newer Track",
+        uploader: "Grace",
         durationSeconds: 125,
-        mediaFileName: "late-upload.opus",
-        writeMedia: true,
-      });
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "missing-copy",
-        title: "Missing Copy",
-        mediaFileName: "missing-copy.m4a",
-        writeMedia: false,
+        cachedAt: "2026-03-01T10:00:00.000Z",
+        mediaFileName: "newer456789.webm",
+        container: "webm",
+        thumbnailUrl: "https://i.ytimg.com/vi/newer456789/default.jpg",
       });
 
-      const provider = createYouTubeCacheProvider({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      });
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
 
-      expect(provider.listCacheEntries().map((entry) => ({
-        identity: entry.track.identity,
-        title: entry.track.title,
-        availability: entry.availability,
-      }))).toEqual([
+      expect(provider.listTracks()).toEqual([
         {
-          identity: { providerId: "youtube-cache", stableId: "late-upload" },
-          title: "Late Upload",
-          availability: { status: "available" },
+          identity: { providerId: "youtube-cache", stableId: "newer456789" },
+          title: "Newer Track",
+          artist: "Grace",
+          durationSeconds: 125,
+          providerLabel: "YouTube Cache",
         },
         {
-          identity: { providerId: "youtube-cache", stableId: "missing-copy" },
-          title: "Missing Copy",
-          availability: {
-            status: "unavailable",
-            reason: "Cached media file is missing",
-          },
+          identity: { providerId: "youtube-cache", stableId: "older123456" },
+          title: "Older Track",
+          artist: "Ada",
+          providerLabel: "YouTube Cache",
         },
       ]);
-      expect(provider.listTracks()[0]).toEqual({
-        identity: { providerId: "youtube-cache", stableId: "late-upload" },
-        title: "Late Upload",
-        providerLabel: "YouTube Cache",
-        artist: "Ada",
-        durationSeconds: 125,
-      });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("orders browse entries by normalized title while preserving durable extractor/id identity", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
-    try {
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "z-id",
-        title: "Zephyr",
-        mediaFileName: "z.opus",
-        writeMedia: true,
-      });
-      await writeCacheEntry(dir, {
-        extractor: "YouTube",
-        id: "AbC123",
-        title: "Amber",
-        mediaFileName: "a.opus",
-        writeMedia: true,
-      });
-
-      const provider = createYouTubeCacheProvider({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      });
-
-      expect(provider.listTracks().map((track) => `${track.title}:${track.identity.stableId}`)).toEqual([
-        "Amber:AbC123",
-        "Zephyr:z-id",
+      expect(provider.listCacheEntries().map((entry) => entry.mediaPath)).toEqual([
+        join(dir, "newer456789.webm"),
+        join(dir, "older123456.opus"),
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("looks up cache entries by Track Identity and resolves present media to local-file Playback Locators", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
+  test("searches locally by title, uploader, and exact-case-insensitive video ID", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
     try {
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "abc123",
-        title: "Cached Track",
-        mediaFileName: "cached.webm",
-        writeMedia: true,
-      });
-      const provider = createYouTubeCacheProvider({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      });
-      const identity = { providerId: "youtube-cache", stableId: "abc123" };
+      await writeEntry(dir, entry("AbC123xyz01", "Quiet Night", "Studio Channel"));
+      await writeEntry(dir, entry("other456789", "Morning Light", "Elsewhere"));
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
 
-      const entry = provider.findByIdentity(identity);
+      expect(provider.searchTracks("quiet").map(id)).toEqual(["AbC123xyz01"]);
+      expect(provider.searchTracks("STUDIO").map(id)).toEqual(["AbC123xyz01"]);
+      expect(provider.searchTracks("abc123").map(id)).toEqual(["AbC123xyz01"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
-      expect(entry?.track.title).toBe("Cached Track");
-      await expect(provider.resolvePlaybackLocator(identity)).resolves.toEqual({
-        kind: "file",
-        path: join(dir, "youtube", "abc123", "media", "cached.webm"),
+  test("detects incomplete TMU-shaped entries but excludes them and ignores unrelated files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
+    try {
+      await writeFile(join(dir, "missmedia01.json"), JSON.stringify(entryMetadata(
+        "missmedia01", "Missing Media", "Ada", "missmedia01.opus",
+      )));
+      await writeFile(join(dir, "emptymedia0.opus"), "");
+      await writeFile(join(dir, "emptymedia0.json"), JSON.stringify(entryMetadata(
+        "emptymedia0", "Empty Media", "Ada", "emptymedia0.opus",
+      )));
+      await writeFile(join(dir, "orphan12345.webm"), "orphan bytes");
+      await writeFile(join(dir, "broken45678.json"), "{not json");
+      await writeFile(join(dir, "notes.txt"), "leave me alone");
+      await writeFile(join(dir, "random.json"), JSON.stringify({ hello: "world" }));
+      await writeFile(join(dir, "settings.json"), "{not json");
+      await writeFile(join(dir, "favorite.mp3"), "user audio");
+
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
+
+      expect(provider.listTracks()).toEqual([]);
+      expect(provider.listIncompleteEntries().map((entry) => entry.stem)).toEqual([
+        "broken45678",
+        "emptymedia0",
+        "missmedia01",
+        "orphan12345",
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects mismatched names, extra sidecar authority, and invalid metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
+    try {
+      const cases = [
+        ["wrongstem01", { ...entryMetadata("actualid001", "Wrong Stem", "Ada", "wrongstem01.opus") }],
+        ["wrongmedia1", { ...entryMetadata("wrongmedia1", "Wrong Media", "Ada", "different.opus") }],
+        ["sourceurl01", { ...entryMetadata("sourceurl01", "Source URL", "Ada", "sourceurl01.opus"), sourceUrl: "https://youtube.com/watch?v=sourceurl01" }],
+        ["badtime0001", { ...entryMetadata("badtime0001", "Bad Time", "Ada", "badtime0001.opus"), cachedAt: "yesterday" }],
+      ] as const;
+      for (const [stem, metadata] of cases) {
+        await writeFile(join(dir, `${stem}.json`), JSON.stringify(metadata));
+        await writeFile(join(dir, `${stem}.opus`), "audio");
+      }
+      await writeFile(join(dir, "duplicate01.json"), JSON.stringify(entryMetadata(
+        "duplicate01", "Duplicate", "Ada", "duplicate01.opus",
+      )));
+      await writeFile(join(dir, "duplicate01.opus"), "audio");
+      await writeFile(join(dir, "duplicate01.webm"), "audio");
+      const duplicateSidecar = entryMetadata("sidecase001", "Sidecar Case", "Ada", "sidecase001.opus");
+      await writeFile(join(dir, "sidecase001.json"), JSON.stringify(duplicateSidecar));
+      await writeFile(join(dir, "sidecase001.JSON"), JSON.stringify(duplicateSidecar));
+      await writeFile(join(dir, "sidecase001.opus"), "audio");
+
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
+      expect(provider.listTracks()).toEqual([]);
+      expect(provider.listIncompleteEntries()).toHaveLength(6);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("writes only the authoritative sidecar fields beside media", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
+    try {
+      const metadataPath = await writeYouTubeCacheMetadata({ cacheDir: dir }, {
+        videoId: "persisted01",
+        title: "Persisted Track",
+        uploader: "Cache Artist",
+        durationSeconds: 99,
+        cachedAt: "2026-04-05T12:34:56.000Z",
+        mediaFileName: "persisted01.m4a",
+        container: "m4a",
+        thumbnailUrl: "https://i.ytimg.com/vi/persisted01/default.jpg",
+      });
+
+      expect(metadataPath).toBe(join(dir, "persisted01.json"));
+      expect(JSON.parse(await readFile(metadataPath, "utf8"))).toEqual({
+        videoId: "persisted01",
+        title: "Persisted Track",
+        uploader: "Cache Artist",
+        durationSeconds: 99,
+        cachedAt: "2026-04-05T12:34:56.000Z",
+        mediaFileName: "persisted01.m4a",
+        container: "m4a",
+        thumbnailUrl: "https://i.ytimg.com/vi/persisted01/default.jpg",
       });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 
-  test("keeps unavailable cache entries visible and rejects playback resolution when media is missing", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
+  test("resolves only a healthy cache Track to its local media file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
     try {
-      await writeCacheEntry(dir, {
-        extractor: "youtube",
-        id: "missing",
-        title: "Missing Media",
-        mediaFileName: "missing.opus",
-        writeMedia: false,
-      });
-      const provider = createYouTubeCacheProvider({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      });
-      const identity = { providerId: "youtube-cache", stableId: "missing" };
+      await writeEntry(dir, entry("playable001", "Playable", "Ada"));
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
 
-      expect(provider.listTracks().map((track) => track.title)).toEqual(["Missing Media"]);
-      expect(provider.findByIdentity(identity)?.availability).toEqual({
-        status: "unavailable",
-        reason: "Cached media file is missing",
-      });
-      await expect(provider.resolvePlaybackLocator(identity)).rejects.toThrow("Cached media file is missing");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("persists normalized cache metadata as file sidecars without creating an app database", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-offline-cache-"));
-
-    try {
-      await writeYouTubeCacheMetadata({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      }, {
-        version: 1,
-        extractor: "youtube",
-        id: "persisted",
-        title: "Persisted Track",
-        artist: "Cache Artist",
-        mediaFileName: "persisted.opus",
-      });
-      await mkdir(join(dir, "youtube", "persisted", "media"), { recursive: true });
-      await writeFile(join(dir, "youtube", "persisted", "media", "persisted.opus"), "audio bytes");
-
-      const provider = createYouTubeCacheProvider({
-        cacheDir: dir,
-        mediaDirName: "media",
-        metadataFileName: "metadata.json",
-      });
-
-      expect(provider.listTracks()).toEqual([{
-        identity: { providerId: "youtube-cache", stableId: "persisted" },
-        title: "Persisted Track",
-        providerLabel: "YouTube Cache",
-        artist: "Cache Artist",
-      }]);
-      expect(provider.findByIdentity({
+      await expect(provider.resolvePlaybackLocator({
         providerId: "youtube-cache",
-        stableId: "persisted",
-      })?.metadataPath).toBe(join(dir, "youtube", "persisted", "metadata.json"));
+        stableId: "playable001",
+      })).resolves.toEqual({ kind: "file", path: join(dir, "playable001.opus") });
+      await expect(provider.resolvePlaybackLocator({
+        providerId: "youtube-cache",
+        stableId: "missing0000",
+      })).rejects.toThrow("YouTube Cache entry is missing: missing0000");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 });
 
-async function writeCacheEntry(
+function id(track: { identity: { stableId: string } }): string {
+  return track.identity.stableId;
+}
+
+function entry(videoId: string, title: string, uploader: string) {
+  return {
+    videoId,
+    title,
+    uploader,
+    cachedAt: "2026-01-01T00:00:00.000Z",
+    mediaFileName: `${videoId}.opus`,
+    container: "opus",
+  };
+}
+
+function entryMetadata(
+  videoId: string,
+  title: string,
+  uploader: string,
+  mediaFileName: string,
+) {
+  return {
+    videoId,
+    title,
+    uploader,
+    cachedAt: "2026-01-01T00:00:00.000Z",
+    mediaFileName,
+    container: "opus",
+  };
+}
+
+async function writeEntry(
   cacheDir: string,
-  options: {
-    extractor: string;
-    id: string;
-    title: string;
-    mediaFileName: string;
-    writeMedia: boolean;
-    artist?: string;
-    album?: string;
-    durationSeconds?: number;
-    coverArtId?: string;
-  },
+  metadata: ReturnType<typeof entry> & { durationSeconds?: number; thumbnailUrl?: string },
 ): Promise<void> {
-  const extractor = options.extractor.toLowerCase();
-  const entryDir = join(cacheDir, extractor, options.id);
-  await mkdir(join(entryDir, "media"), { recursive: true });
-  await writeFile(join(entryDir, "metadata.json"), JSON.stringify({
-    version: 1,
-    extractor: options.extractor,
-    id: options.id,
-    title: options.title,
-    artist: options.artist,
-    album: options.album,
-    durationSeconds: options.durationSeconds,
-    coverArtId: options.coverArtId,
-    mediaFileName: options.mediaFileName,
-  }, null, 2));
-  if (options.writeMedia) {
-    await writeFile(join(entryDir, "media", options.mediaFileName), "audio bytes");
-  }
+  await writeFile(join(cacheDir, metadata.mediaFileName), "audio bytes");
+  await writeFile(join(cacheDir, `${metadata.videoId}.json`), JSON.stringify(metadata));
 }
