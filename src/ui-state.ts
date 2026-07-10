@@ -193,7 +193,13 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
   if (action.type === "setFocus") return { ...state, focusedPane: action.focusedPane };
 
   if (action.type === "setQuery") {
-    return updateTopOverlay(state, (overlay) => ({ ...overlay, query: action.query }))
+    return updateTopOverlay(state, (overlay) => ({
+      ...overlay,
+      query: action.query,
+      ...((overlay.kind === "shortcut-help" || overlay.kind === "command-palette")
+        ? { selectedResultIndex: 0, scroll: 0 }
+        : {}),
+    }))
       ?? { ...state, promptInput: action.query };
   }
 

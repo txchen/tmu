@@ -13,6 +13,7 @@ import {
   commandPaletteActions,
   footerActions,
   shortcutHelpActions,
+  searchDiscoveryActions,
   type AppIntent,
 } from "../src/index";
 
@@ -67,6 +68,33 @@ describe("action registry contracts", () => {
     }
   });
 
+  test("orders current-context actions before globals and searches names, aliases, and bindings", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    const actions = shortcutHelpActions(registry, current);
+
+    expect(actions.findIndex((action) => action.id === "queue.play-next"))
+      .toBeLessThan(actions.findIndex((action) => action.id === "player.stop"));
+    expect(searchDiscoveryActions(registry, current, "immediately").map((action) => action.id))
+      .toContain("queue.play-now");
+    expect(searchDiscoveryActions(registry, current, "shift+enter").map((action) => action.id))
+      .toContain("queue.play-now");
+    expect(searchDiscoveryActions(registry, current, "clear queue").map((action) => action.id))
+      .toContain("queue.clear");
+  });
+
+  test("keeps the underlying action context while help or the palette is open", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    current.uiState.overlays = [{
+      kind: "command-palette", focus: "search", query: "play now",
+      selectedIdentity: null, selectedResultIndex: 0, scroll: 0,
+    }];
+
+    expect(commandPaletteActions(registry, current).find((action) => action.id === "queue.play-now"))
+      .toMatchObject({ enabled: true, intent: { type: "playNow", target: amber } });
+  });
+
   test("omits unsupported actions from discovery and makes their bindings inert", () => {
     const registry = createActionRegistry();
     const current = context();
@@ -110,6 +138,15 @@ describe("action registry contracts", () => {
       disabledReason: "Queue is empty",
       intent: null,
     });
+  });
+
+  test("keeps Repeat All palette-only as specified by the fixed keymap", () => {
+    const registry = createActionRegistry();
+    const current = context();
+
+    expect(actionForBinding(registry, "r", current)).toBeNull();
+    expect(commandPaletteActions(registry, current).find((action) => action.id === "queue.repeat-all"))
+      .toMatchObject({ bindings: [], enabled: true });
   });
 
   test("does not fall through a results overlay without an explicit playable target", () => {
@@ -480,6 +517,51 @@ describe("root input router", () => {
     expect(intents).toEqual([]);
   });
 
+  test("edits discovery fields and invokes a palette action after closing the palette", async () => {
+    const current = context();
+    current.uiState.overlays = [{
+      kind: "command-palette", focus: "search", query: "play immediately",
+      selectedIdentity: null, selectedResultIndex: 0, scroll: 0,
+    }];
+    const ui = new UiStateStore(current.uiState);
+    const dispatchStates: number[] = [];
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async (intent) => {
+        dispatchStates.push(ui.snapshot.overlays.length);
+        intents.push(intent);
+      },
+    });
+
+    await router.route("\x17");
+    expect(ui.snapshot.overlays.at(-1)?.query).toBe("play");
+    await router.route(" now");
+    await router.route("\r");
+
+    expect(dispatchStates).toEqual([0]);
+    expect(intents).toEqual([{ type: "playNow", target: amber }]);
+    expect(ui.snapshot.overlays).toEqual([]);
+  });
+
+  test("opens help on a results surface, filters it with slash, and reserves Ctrl-c for quit", async () => {
+    const current = context();
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+    });
+
+    await router.route("?");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ kind: "shortcut-help", focus: "results" });
+    await router.route("/");
+    await router.route("play");
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({ focus: "search", query: "play" });
+    await router.route("\u0003");
+    expect(intents).toEqual([{ type: "playerOperation", operation: "quit" }]);
+  });
+
   test("turns submitted text into an explicit Provider operation", async () => {
     const current = context();
     current.uiState.activePrompt = "local-open-path";
@@ -502,6 +584,22 @@ describe("root input router", () => {
       path: "/music/album",
     }]);
     expect(ui.snapshot.activePrompt).toBeNull();
+  });
+
+  test("supports word deletion and clearing in legacy prompt text fields", async () => {
+    const current = context();
+    current.uiState.activePrompt = "local-open-path";
+    current.uiState.promptInput = "/music/night drive";
+    const ui = new UiStateStore(current.uiState);
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
+      dispatchApp: async () => undefined,
+    });
+
+    await router.route("\x17");
+    expect(ui.snapshot.promptInput).toBe("/music/night");
+    await router.route("\x15");
+    expect(ui.snapshot.promptInput).toBe("");
   });
 
   test("routes only the top overlay and dismisses one non-text layer", async () => {

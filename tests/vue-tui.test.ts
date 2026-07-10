@@ -215,7 +215,10 @@ describe("production vue-tui", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
     expect(coordinator.appState.playback.positionSeconds).toBe(0);
 
-    for (const key of ["]", "+", "z", "r"]) await terminal.stdin.write(key);
+    for (const key of ["]", "+", "z"]) await terminal.stdin.write(key);
+    await terminal.stdin.write(":");
+    await terminal.stdin.write("toggle repeat all");
+    await terminal.stdin.write("\r");
     expect(player.seeks.at(-1)).toBe(5);
     expect(player.volumes.at(-1)).toBe(77);
     expect(coordinator.appState.queue.shuffle).toBe(true);
@@ -490,6 +493,39 @@ describe("production vue-tui", () => {
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write(":");
     expect(terminal.lastFrame()).toContain("Picker Overlay · command-palette");
+  });
+
+  test("renders searchable registry metadata in help and the Command Palette", async () => {
+    const { coordinator } = await productionHarness({ tracks: [restoredTrack] });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("?");
+    let frame = terminal.lastFrame() ?? "";
+    expect(frame).toContain("Play Next");
+    expect(frame).toContain("Enter");
+    expect(frame).toContain("Play / Pause / Resume");
+    await terminal.stdin.write("/");
+    await terminal.stdin.write("immediately");
+    frame = terminal.lastFrame() ?? "";
+    expect(frame).toContain("Play Now");
+    expect(frame).not.toContain("Clear Queue");
+
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("q");
+    await terminal.stdin.write(":");
+    await terminal.stdin.write("play immediately");
+    frame = terminal.lastFrame() ?? "";
+    expect(frame).toContain("Play Now");
+    expect(frame).toContain("Shift+Enter");
+  });
+
+  test("shows disabled reasons from the registry in the Command Palette", async () => {
+    const { coordinator } = await productionHarness({ tracks: [], currentIndex: -1 });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write(":");
+    await terminal.stdin.write("play next");
+    expect(terminal.lastFrame()).toContain("Queue is empty");
   });
 
   test("shows a Cancel-first Clear Queue confirmation and applies only the confirmed choice", async () => {
