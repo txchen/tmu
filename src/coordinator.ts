@@ -137,6 +137,9 @@ export class AppCoordinator {
         case "playNow":
           await this.playNowTarget(intent.target);
           return;
+        case "addToQueue":
+          this.addToQueue(intent.target);
+          return;
         case "removeQueueTrack":
           await this.removeQueueTrack(intent.identity);
           return;
@@ -302,6 +305,15 @@ export class AppCoordinator {
       return;
     }
     await this.playQueueEntry(entry);
+  }
+
+  private addToQueue(track: Track): void {
+    const previousLength = this.queue.entries.length;
+    const entry = this.queue.enqueue(track);
+    if (entry.availability.status === "unknown") this.markSelectedYouTubeCacheAvailability(entry);
+    const inserted = this.queue.entries.length > previousLength;
+    this.appState.lastEvent = inserted ? `added ${track.title} to Queue` : `${track.title} is already in Queue`;
+    this.syncQueueState();
   }
 
   private async removeQueueTrack(identity: Track["identity"]): Promise<void> {
