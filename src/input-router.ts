@@ -287,14 +287,11 @@ export class RootInputRouter {
     const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
     if (uiOperation === "first" && key === "g") {
       const completing = Boolean(this.uiState.snapshot.pendingVimChord
         && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
       if (completing) {
-        this.clearPendingChordTimer();
-        this.uiState.dispatch({ type: "selectOverlayBoundary", boundary: "first", rowCount: rows.length, visibleRows });
-        this.uiState.dispatch({ type: "cancelVimChord" });
+        this.routeOverlayRowMovement("first", rows.length, visibleRows);
       } else {
         this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
         this.clearPendingChordTimer();
@@ -305,6 +302,7 @@ export class RootInputRouter {
       }
       return true;
     }
+    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
     this.cancelOverlayChord();
     if (uiOperation === "back") {
       const location = overlay.providerLocation ?? { providerId: null, path: [] };

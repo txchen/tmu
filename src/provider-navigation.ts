@@ -17,9 +17,10 @@ export function providerNavigationRows(
   appState: Pick<AppState, "providers">,
   location: ProviderLocation,
 ): readonly ProviderNavigationRow[] {
-  if (location.providerId) {
-    const provider = appState.providers[location.providerId];
-    return provider?.listBrowserEntries?.(location).map((entry) => ({ ...entry, providerId: location.providerId! })) ?? [];
+  const providerId = location.providerId;
+  if (providerId) {
+    const provider = appState.providers[providerId];
+    return provider?.listBrowserEntries?.(location).map((entry) => ({ ...entry, providerId })) ?? [];
   }
 
   return Object.values(appState.providers)

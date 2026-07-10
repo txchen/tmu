@@ -817,6 +817,18 @@ describe("root input router", () => {
     const expire = expiry as (() => void) | null;
     if (expire) expire();
     expect(ui.snapshot.pendingVimChord).toBeNull();
+
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 1, scroll: 0, providerLocation: { providerId: null, path: [] },
+    } });
+    now = 3_000;
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toEqual({ key: "g", expiresAtMs: 3_750 });
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(1);
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(0);
   });
 
   test("derives executable navigation bindings from the registry", async () => {
