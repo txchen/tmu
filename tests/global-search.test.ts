@@ -21,6 +21,10 @@ import { createOfflineYouTubeCacheProvider, writeOfflineYouTubeCacheMetadata } f
 import { createNavidromeProvider } from "../src/navidrome";
 import { createDefaultTmuConfig } from "../src/config";
 
+function endpointName(url: URL): string {
+  return url.pathname.split("/").at(-1)?.replace(/\.view$/, "") ?? "";
+}
+
 function provider(
   id: string,
   search: (request: ProviderSearchRequest) => Promise<readonly ProviderSearchResult[]>,
@@ -68,23 +72,46 @@ describe("Global Search", () => {
     }
   });
 
-  test("configured Navidrome returns ranked playable Tracks without taking on #56 browse capabilities", async () => {
+  test("configured Navidrome returns lightweight Artists, Albums, Playlists, and playable Tracks", async () => {
     const config = createDefaultTmuConfig({ providers: { navidrome: {
       enabled: true, serverUrl: "https://music.example.test", username: "alex", password: "secret",
     } } }).providers.navidrome;
-    const navidrome = createNavidromeProvider({ config, saltFactory: () => "salt", fetcher: async () => new Response(JSON.stringify({
-      "subsonic-response": { status: "ok", searchResult3: {
-        song: [{ id: "track-1", title: "First" }, { id: "track-2", title: "Second" }],
-      } },
-    })) });
+    const requests: string[] = [];
+    const navidrome = createNavidromeProvider({ config, saltFactory: () => "salt", fetcher: async (url) => {
+      requests.push(endpointName(url));
+      return new Response(JSON.stringify(endpointName(url) === "getPlaylists" ? {
+        "subsonic-response": { status: "ok", playlists: { playlist: [
+          { id: "playlist-1", name: "Mix Tape", songCount: 12 },
+        ] } },
+      } : {
+        "subsonic-response": { status: "ok", searchResult3: {
+          artist: [{ id: "artist-1", name: "The Mixers", albumCount: 3 }],
+          album: [{ id: "album-1", name: "Mixed", artist: "The Mixers", songCount: 9 }],
+          song: [{ id: "track-1", title: "First" }, { id: "track-2", title: "Second" }],
+        } },
+      }));
+    } });
 
     const results = await navidrome.search!({
       query: "mix", resultTypes: ["track", "artist", "album", "playlist"], limit: 50,
     });
     expect(results.map((item) => [item.type, item.label])).toEqual([
       ["track", "First"], ["track", "Second"],
+      ["artist", "The Mixers"],
+      ["album", "Mixed"],
+      ["playlist", "Mix Tape"],
     ]);
     expect(results.find((item) => item.type === "track")?.target).toBeDefined();
+    expect(results.find((item) => item.type === "artist")?.target).toBeUndefined();
+    expect(results.find((item) => item.type === "album")?.target).toEqual({
+      kind: "music-collection", id: "navidrome:album:album-1", label: "Mixed",
+      resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album-1" },
+    });
+    expect(results.find((item) => item.type === "playlist")?.target).toEqual({
+      kind: "music-collection", id: "navidrome:playlist:playlist-1", label: "Mix Tape",
+      resolve: { providerId: "navidrome", operation: "playlist-tracks", collectionId: "playlist-1" },
+    });
+    expect(requests).toEqual(["search3", "getPlaylists"]);
   });
 
   test("groups type then Provider, preserves rankings and caps every subgroup at 50", () => {
@@ -253,6 +280,35 @@ describe("Global Search", () => {
     });
     uiState.overlays = [{ ...uiState.overlays[0]!, selectedResultIndex: 0 }];
     expect(actionForBinding(createActionRegistry(), "\r", { appState, uiState })).toBeNull();
+  });
+
+  test("Enter opens an Artist search result as Album navigation without treating the Artist as playable", async () => {
+    const appState = createInitialAppState({ navidrome: provider("navidrome", async () => [], ["artist"]) });
+    appState.globalSearch = {
+      requestId: 1, query: "mixers", providerFilter: "all", resultTypeFilter: "artist",
+      providers: { navidrome: { providerLabel: "Navidrome", status: "success", results: [{
+        providerId: "navidrome", providerLabel: "Navidrome", type: "artist",
+        id: "artist-1", label: "The Mixers",
+      }] } },
+    };
+    const rows = globalSearchRows(appState.globalSearch);
+    const ui = new UiStateStore(createInitialUiState());
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "mixers", selectedIdentity: null, scroll: 0,
+      selectedResultIndex: rows.findIndex((row) => row.kind === "result"),
+    } });
+    const intents: unknown[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+    });
+
+    await router.route("\r");
+
+    expect(intents).toEqual([{ type: "globalSearch", operation: "open", result: {
+      providerId: "navidrome", providerLabel: "Navidrome", type: "artist",
+      id: "artist-1", label: "The Mixers",
+    } }]);
   });
 
   test("search result movement cannot replace the remembered Provider navigation selection", () => {

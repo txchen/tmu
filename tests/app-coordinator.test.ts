@@ -496,6 +496,93 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.lastEvent).toBe("Music Collection resolution cancelled");
   });
 
+  test("resolves a lightweight Navidrome Album through the atomic Play Next Queue transformation", async () => {
+    const current = track("local", "current", "Current");
+    const queue = new MemoryQueue();
+    queue.enqueue(current);
+    queue.startAt(0);
+    const navidrome = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      saltFactory: () => "salt",
+      fetcher: async () => navidromeJson({ status: "ok", album: { song: [
+        { id: "two", title: "Two", discNumber: 1, track: 2 },
+        { id: "one", title: "One", discNumber: 1, track: 1 },
+      ] } }),
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome }), uiState: createInitialUiState(),
+      queue, player: new NoopPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "playNext", target: {
+      kind: "music-collection", id: "navidrome:album:album", label: "Album",
+      resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
+    } });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Current", "One", "Two"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+  });
+
+  test("keeps Queue and Picker Overlay unchanged when Navidrome collection resolution fails", async () => {
+    const current = track("local", "current", "Current");
+    const queue = new MemoryQueue();
+    queue.enqueue(current);
+    const navidrome = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      saltFactory: () => "salt",
+      fetcher: async () => navidromeJson({ status: "failed", error: { code: 0, message: "server offline" } }),
+    });
+    const uiState = createInitialUiState();
+    uiState.overlays = [{
+      kind: "music-picker", focus: "results", query: "album", selectedIdentity: null,
+      selectedResultIndex: 2, scroll: 1,
+    }];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome }), uiState, queue, player: new NoopPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "playNext", target: {
+      kind: "music-collection", id: "navidrome:album:album", label: "Album",
+      resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
+    } });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([current]);
+    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.appState.lastEvent).toContain("server offline");
+  });
+
+  test("opens a Navidrome Artist search result into its Albums while keeping the Picker Overlay open", async () => {
+    const navidrome = createNavidromeProvider({
+      config: createDefaultTmuConfig(connectedNavidromeConfig()).providers.navidrome,
+      saltFactory: () => "salt",
+      fetcher: async () => navidromeJson({ status: "ok", artist: { album: [
+        { id: "album", name: "Album", artist: "Artist" },
+      ] } }),
+    });
+    const uiState = createInitialUiState();
+    uiState.overlays = [{
+      kind: "music-picker", focus: "results", query: "artist", selectedIdentity: null,
+      selectedResultIndex: 2, scroll: 1,
+    }];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ navidrome }), uiState, queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "globalSearch", operation: "open", result: {
+      providerId: "navidrome", providerLabel: "Navidrome", type: "artist", id: "artist", label: "Artist",
+    } });
+
+    expect(coordinator.uiState.overlays).toHaveLength(1);
+    expect(coordinator.uiState.overlays[0]).toMatchObject({
+      query: "", providerLocation: { providerId: "navidrome", path: ["artists", "artist:artist"] },
+    });
+    expect(navidrome.listBrowserEntries!({ providerId: "navidrome", path: ["artists", "artist:artist"] }))
+      .toEqual(expect.arrayContaining([
+        { id: "artist", kind: "artist", label: "Artist" },
+        { id: "album", kind: "album", label: "Album", detail: "Artist" },
+      ]));
+  });
+
   test("starts empty on the target switcher with separate app and UI state", async () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(createDefaultProviders()),
