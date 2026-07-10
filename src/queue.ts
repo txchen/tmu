@@ -106,13 +106,8 @@ export class MemoryQueue implements Queue {
     if (!this.repeatAllEnabled) return undefined;
 
     if (this.shuffleEnabled && this.activeIndex >= 0) {
-      const current = this.items.splice(this.activeIndex, 1)[0];
-      if (!current) return undefined;
-      this.items.unshift(current);
       this.activeIndex = 0;
       this.shuffleAfterCurrent();
-      if (this.items.length === 1) return current;
-      this.activeIndex = 1;
       return this.items[this.activeIndex];
     }
 
@@ -125,11 +120,6 @@ export class MemoryQueue implements Queue {
 
     if (this.activeIndex > 0) {
       this.activeIndex -= 1;
-      return this.items[this.activeIndex];
-    }
-
-    if (this.activeIndex === 0 && this.repeatAllEnabled) {
-      this.activeIndex = this.items.length - 1;
       return this.items[this.activeIndex];
     }
 
