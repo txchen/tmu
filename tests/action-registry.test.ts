@@ -112,6 +112,22 @@ describe("action registry contracts", () => {
     });
   });
 
+  test("does not fall through a results overlay without an explicit playable target", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    current.uiState.overlays = [{
+      kind: "music-picker",
+      focus: "results",
+      query: "",
+      selectedIdentity: null,
+      selectedPlayableTarget: null,
+      scroll: 0,
+    }];
+
+    expect(actionForBinding(registry, "\r", current)).toBeNull();
+    expect(actionForBinding(registry, "\x1b[13;2u", current)).toBeNull();
+  });
+
   test("routes Queue editing bindings through identity targets and a Clear Queue confirmation request", () => {
     const registry = createActionRegistry();
     const current = context();
