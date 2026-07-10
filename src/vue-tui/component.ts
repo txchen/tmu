@@ -7,7 +7,7 @@ import {
   type ResolvedAction,
 } from "../action-registry";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
-import { sameIdentity, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
+import { isRestoredPlayback, sameIdentity, type PickerOverlay, type QueueEntry, type ResponsiveTier } from "../domain";
 import { RootInputRouter } from "../input-router";
 import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
@@ -301,7 +301,7 @@ function playingTrackState(current: QueueEntry | undefined, playback: Publicatio
   }
   if (playback.status === "playing") return { kind: "playing", headline: `Playing · ${current.track.title}`, shortLabel: "Playing", guidance: "" };
   if (playback.status === "stopped") return { kind: "stopped", headline: `Stopped · starts from beginning`, shortLabel: "Stopped", guidance: "Space to Play from the beginning" };
-  if (playback.status === "paused" && (playback.positionSeconds ?? 0) > 0) {
+  if (isRestoredPlayback(playback)) {
     const position = formatDuration(playback.positionSeconds ?? 0);
     return { kind: "restored", headline: `Restored · Resume from ${position}`, shortLabel: `Resume ${position}`, guidance: "Space to Resume" };
   }

@@ -319,6 +319,12 @@ export function sameIdentity(left: TrackIdentity | null | undefined, right: Trac
   return left.providerId === right.providerId && left.stableId === right.stableId;
 }
 
+export function isRestoredPlayback(playback: PlayerPlaybackState): boolean {
+  return playback.status === "paused"
+    && playback.paused !== true
+    && (playback.positionSeconds ?? 0) > 0;
+}
+
 export function uniqueTracksByIdentity(tracks: readonly Track[]): Track[] {
   const seen = new Set<string>();
   return tracks.filter((track) => {

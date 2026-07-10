@@ -413,6 +413,17 @@ describe("production vue-tui", () => {
     expect(terminal.lastFrame()).toContain("Paused · Space to Resume");
     terminal.unmount();
 
+    coordinator.appState.playback = {
+      status: "paused",
+      paused: true,
+      positionSeconds: 0.25,
+      currentTrackIdentity: restoredTrack.identity,
+    };
+    terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
+    expect(terminal.lastFrame()).toContain("Paused · Space to Resume");
+    expect(terminal.lastFrame()).not.toContain("Restored · Resume");
+    terminal.unmount();
+
     coordinator.appState.playback = { status: "stopped", positionSeconds: 0, currentTrackIdentity: restoredTrack.identity };
     terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 20 });
     expect(terminal.lastFrame()).toContain("Stopped · starts from beginning");
