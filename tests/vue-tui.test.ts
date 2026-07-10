@@ -142,9 +142,12 @@ describe("TMU top-level surface smoke", () => {
 
   test("YouTube Downloader exposes pending removal, active cancellation, and session summaries", async () => {
     const { coordinator: base } = createTmuApp();
+    const queue = new MemoryQueue();
+    queue.enqueue(cachedTrack("already-queued", "Already Queued"));
+    const queueBefore = queue.snapshot();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(base.appState.providers), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      queue, player: new NoopPlayer(),
       prepareDownloadBatch: async (url) => ({
         kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] },
       }),
@@ -190,6 +193,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("c");
     await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
     expect(terminal.lastFrame()).toContain("Summary #1: 0 downloaded · 0 cached · 0 failed · 1 cancelled");
+    expect(coordinator.appState.queue).toEqual(queueBefore);
   });
 
   test("YouTube Downloader confirms playlists and clears input only after acceptance", async () => {
@@ -242,6 +246,28 @@ describe("TMU top-level surface smoke", () => {
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
     expect(terminal.lastFrame()).toContain("Broken Track · YouTube Cache · unavailable: mpv playback failed: corrupt stream");
+  });
+
+  test("Library Cache Search finds a cached Track and places it in Queue", async () => {
+    const first = cachedTrack("first", "First Track");
+    const second = cachedTrack("second", "Second Track");
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [first, second],
+      searchTracks: (query) => [first, second].filter((track) => track.title.toLowerCase().includes(query.toLowerCase())),
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    await terminal.stdin.write("2");
+    await terminal.stdin.write("second");
+    expect(terminal.lastFrame()).toContain("> Second Track");
+    expect(terminal.lastFrame()).not.toContain("> First Track");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("a");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);
   });
 });
 
