@@ -89,6 +89,7 @@ export class AppCoordinator {
   private activeLocalOpen: AbortController | null = null;
   private activeYouTubeDownload: AbortController | null = null;
   private activeGlobalSearch: AbortController | null = null;
+  private readonly globalSearchAttempts = new Map<string, number>();
   private reportingSessionKey: string | null = null;
   private completedPlayReported = false;
   private naturalAdvanceInFlight = false;
@@ -640,7 +641,11 @@ export class AppCoordinator {
     };
     this.appState.lastEvent = `searching for ${trimmed}`;
     this.notifyStateChanged();
-    await Promise.all(providers.map((provider) => this.searchProvider(provider, requestId, controller.signal, resultTypeFilter)));
+    this.globalSearchAttempts.clear();
+    await Promise.all(providers.map((provider) => {
+      this.globalSearchAttempts.set(provider.id, 1);
+      return this.searchProvider(provider, requestId, 1, controller.signal, resultTypeFilter);
+    }));
     if (this.activeGlobalSearch === controller) this.activeGlobalSearch = null;
   }
 
@@ -655,12 +660,15 @@ export class AppCoordinator {
       providers: { ...search.providers, [providerId]: { providerLabel: provider.label, status: "loading", results: [] } },
     };
     this.notifyStateChanged();
-    await this.searchProvider(provider, requestId, controller.signal, search.resultTypeFilter);
+    const attemptId = (this.globalSearchAttempts.get(providerId) ?? 0) + 1;
+    this.globalSearchAttempts.set(providerId, attemptId);
+    await this.searchProvider(provider, requestId, attemptId, controller.signal, search.resultTypeFilter);
   }
 
   private clearGlobalSearch(): void {
     this.activeGlobalSearch?.abort();
     this.activeGlobalSearch = null;
+    this.globalSearchAttempts.clear();
     this.appState.globalSearch = {
       requestId: this.appState.globalSearch.requestId + 1,
       query: "", providerFilter: "all", resultTypeFilter: "all", providers: {},
@@ -682,6 +690,7 @@ export class AppCoordinator {
   private async searchProvider(
     provider: Provider,
     requestId: number,
+    attemptId: number,
     signal: AbortSignal,
     resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>,
   ): Promise<void> {
@@ -692,14 +701,16 @@ export class AppCoordinator {
       const results = resultTypes.length === 0 ? [] : await provider.search!({
         query: this.appState.globalSearch.query, resultTypes, limit: 50, signal,
       });
-      if (signal.aborted || this.appState.globalSearch.requestId !== requestId) return;
+      if (signal.aborted || this.appState.globalSearch.requestId !== requestId
+        || this.globalSearchAttempts.get(provider.id) !== attemptId) return;
       this.appState.globalSearch.providers[provider.id] = {
         providerLabel: provider.label,
         status: results.length === 0 ? "empty" : "success",
         results: resultTypes.flatMap((type) => results.filter((result) => result.type === type).slice(0, 50)),
       };
     } catch (error) {
-      if (signal.aborted || this.appState.globalSearch.requestId !== requestId) return;
+      if (signal.aborted || this.appState.globalSearch.requestId !== requestId
+        || this.globalSearchAttempts.get(provider.id) !== attemptId) return;
       const message = error instanceof Error ? error.message : String(error);
       const kind = typeof error === "object" && error !== null && "kind" in error ? String(error.kind) : "failure";
       this.appState.globalSearch.providers[provider.id] = {

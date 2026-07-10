@@ -272,4 +272,30 @@ describe("Global Search", () => {
       query: "", selectedResultIndex: 3, providerLocation: { providerId: "local", path: ["/music"] },
     });
   });
+
+  test("dismissal clears overlay-local search state and Retry is unavailable on successes", async () => {
+    const appState = createInitialAppState({ local: provider("local", async () => []) });
+    const trackResult = result("local", "track", "amber");
+    appState.globalSearch = {
+      requestId: 1, query: "amber", providerFilter: "local", resultTypeFilter: "track",
+      providers: { local: { providerLabel: "Local", status: "success", results: [trackResult] } },
+    };
+    const ui = new UiStateStore(createInitialUiState());
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "amber", selectedIdentity: null,
+      selectedResultIndex: globalSearchRows(appState.globalSearch).findIndex((row) => row.kind === "result"),
+      scroll: 0, providerFilter: "local", resultTypeFilter: "track",
+    } });
+    const intents: unknown[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+    });
+
+    await router.route("r");
+    expect(intents).toEqual([]);
+    await router.route("q");
+    expect(intents).toEqual([{ type: "globalSearch", operation: "clear" }]);
+    expect(ui.snapshot.overlays).toEqual([]);
+  });
 });
