@@ -5,6 +5,7 @@ import {
   navigationTargetIndex,
   sameIdentity,
   type AppIntent,
+  type LegacyAppIntent,
   type AppState,
   type LastQueueSnapshot,
   type Player,
@@ -156,9 +157,37 @@ export class AppCoordinator {
     this.notifyStateChanged();
   }
 
-  async dispatch(intent: AppIntent): Promise<void> {
+  async dispatch(intent: AppIntent | LegacyAppIntent): Promise<void> {
     try {
       switch (intent.type) {
+        case "enqueueTrack":
+          this.enqueueTrack(intent.track);
+          return;
+        case "playQueueTrack":
+          await this.startQueueTrack(intent.track);
+          return;
+        case "removeQueueTrack":
+          this.removeQueueTrack(intent.identity);
+          return;
+        case "moveQueueTrack":
+          this.moveQueueTrack(intent.identity, intent.delta);
+          return;
+        case "providerOperation":
+          if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
+          else if (intent.operation === "search") await this.searchProvider(intent.providerId, intent.query);
+          else await this.openProviderPath(intent.providerId, intent.path, intent.signal);
+          return;
+        case "downloadOperation":
+          if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
+          else this.cancelYouTubeDownload();
+          return;
+        case "persistenceOperation":
+          if (intent.operation === "save") await this.saveLastQueueSnapshot();
+          else await this.restoreLastQueueSnapshot();
+          return;
+        case "playerOperation":
+          await this.dispatchPlayerOperation(intent);
+          return;
         case "selectNavigationTarget":
           await this.selectNavigationTarget(intent.targetId);
           return;
@@ -464,6 +493,112 @@ export class AppCoordinator {
     this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(entry)));
     this.appState.lastEvent = `added ${selected.title} to shared Queue`;
     this.syncQueueState();
+  }
+
+  private enqueueTrack(track: Track): void {
+    const entry = this.queue.enqueue(track);
+    this.markSelectedOfflineYouTubeCacheAvailability(entry);
+    this.appState.lastEvent = `added ${track.title} to shared Queue`;
+    this.syncQueueState();
+  }
+
+  private async startQueueTrack(track: Track): Promise<void> {
+    if (this.blockPlaybackActionIfUnavailable()) return;
+    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
+    const entry = index < 0 ? undefined : this.queue.startAt(index);
+    if (!entry) {
+      this.appState.lastEvent = "Track is not in Queue";
+      this.syncQueueState();
+      return;
+    }
+    if (entry.availability.status === "unavailable") {
+      this.markUnavailable(entry, entry.availability.reason);
+      return;
+    }
+    await this.playQueueEntry(entry);
+  }
+
+  private removeQueueTrack(identity: Track["identity"]): void {
+    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    const removed = index < 0 ? undefined : this.queue.remove(index);
+    if (!removed) {
+      this.appState.lastEvent = "Track is not in Queue";
+      this.syncQueueState();
+      return;
+    }
+    if (sameIdentity(removed.track.identity, this.appState.playback.currentTrackIdentity)) {
+      this.appState.playback = { status: "idle", currentTrackIdentity: null };
+    }
+    this.appState.lastEvent = `removed ${removed.track.title}`;
+    this.syncQueueState();
+  }
+
+  private moveQueueTrack(identity: Track["identity"], delta: number): void {
+    const fromIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    const toIndex = clampIndex(fromIndex + delta, this.queue.entries.length);
+    const moved = fromIndex < 0 ? undefined : this.queue.move(fromIndex, toIndex);
+    if (!moved) {
+      this.appState.lastEvent = "Track is not in Queue";
+      this.syncQueueState();
+      return;
+    }
+    this.appState.lastEvent = `moved ${moved.track.title}`;
+    this.syncQueueState();
+  }
+
+  private async refreshProvider(providerId: string): Promise<void> {
+    if (providerId !== "navidrome") {
+      this.appState.lastEvent = `${providerId} Provider does not support refresh`;
+      return;
+    }
+    await this.refreshNavidromeLibrary();
+  }
+
+  private async searchProvider(providerId: string, query: string): Promise<void> {
+    const provider = this.appState.providers[providerId];
+    if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
+      this.appState.lastEvent = `${providerId} Provider does not support search`;
+      return;
+    }
+    try {
+      const results = await provider.searchTracks(query);
+      this.appState.lastEvent = results.length === 0
+        ? `Navidrome search found no Tracks for ${query.trim()}`
+        : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
+    } catch (error) {
+      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  private async openProviderPath(providerId: string, path: string, signal?: AbortSignal): Promise<void> {
+    if (providerId !== "local") {
+      this.appState.lastEvent = `${providerId} Provider cannot open paths`;
+      return;
+    }
+    await this.openLocalPath(path, signal);
+  }
+
+  private async dispatchPlayerOperation(intent: Extract<AppIntent, { type: "playerOperation" }>): Promise<void> {
+    switch (intent.operation) {
+      case "toggle-play-pause": await this.togglePlayPause(); return;
+      case "stop":
+        if (this.blockPlaybackActionIfUnavailable()) return;
+        await this.runPlayerCommand(() => this.player.stop(), "stopped", { clearCurrentTrack: true });
+        return;
+      case "next-track": await this.nextTrack(); return;
+      case "previous-track": await this.previousTrack(); return;
+      case "toggle-shuffle": await this.toggleShuffle(); return;
+      case "toggle-repeat-all": await this.toggleRepeatAll(); return;
+      case "seek": await this.seekBy(intent.seconds); return;
+      case "adjust-volume":
+        await this.setVolume((this.appState.volume.ready ? this.appState.volume.percent : 100) + intent.delta, true);
+        return;
+      case "set-volume": await this.setVolume(intent.percent, intent.ready); return;
+      case "quit":
+        this.appState.lastEvent = "quit requested";
+        await this.teardown();
+        return;
+    }
   }
 
   private async activateSelectedContent(): Promise<void> {
