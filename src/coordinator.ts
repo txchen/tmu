@@ -15,6 +15,7 @@ import {
   type QueueEntry,
   type NavigationTargetId,
   type Track,
+  type PlayableTarget,
   type UiState,
 } from "./domain";
 import {
@@ -160,11 +161,11 @@ export class AppCoordinator {
   async dispatch(intent: AppIntent | LegacyAppIntent): Promise<void> {
     try {
       switch (intent.type) {
-        case "enqueueTrack":
-          this.enqueueTrack(intent.track);
+        case "playNext":
+          this.playNextTarget(intent.target);
           return;
-        case "playQueueTrack":
-          await this.startQueueTrack(intent.track);
+        case "playNow":
+          await this.playNowTarget(intent.target);
           return;
         case "removeQueueTrack":
           this.removeQueueTrack(intent.identity);
@@ -495,16 +496,50 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private enqueueTrack(track: Track): void {
-    const entry = this.queue.enqueue(track);
-    this.markSelectedOfflineYouTubeCacheAvailability(entry);
-    this.appState.lastEvent = `added ${track.title} to shared Queue`;
+  private playNextTarget(target: PlayableTarget): void {
+    const tracks = uniqueTargetTracks(target);
+    const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
+    const upcoming = tracks.filter((track) => !sameIdentity(track.identity, currentIdentity));
+    for (const track of upcoming) {
+      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
+      if (existingIndex >= 0) this.queue.remove(existingIndex);
+    }
+
+    const insertionIndex = this.queue.currentIndex >= 0 ? this.queue.currentIndex + 1 : 0;
+    upcoming.forEach((track, offset) => {
+      const entry = this.queue.enqueue(track);
+      this.markSelectedOfflineYouTubeCacheAvailability(entry);
+      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
+      this.queue.move(fromIndex, insertionIndex + offset);
+    });
+    this.appState.lastEvent = upcoming.length === 0
+      ? "Play Next left Current Track in place"
+      : `placed ${upcoming.length} Track${upcoming.length === 1 ? "" : "s"} next`;
     this.syncQueueState();
   }
 
-  private async startQueueTrack(track: Track): Promise<void> {
+  private async playNowTarget(target: PlayableTarget): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
-    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
+    const tracks = uniqueTargetTracks(target);
+    const first = tracks[0];
+    if (!first) {
+      this.appState.lastEvent = "Music Collection has no Tracks";
+      return;
+    }
+    const currentIdentity = this.queue.entries[this.queue.currentIndex]?.track.identity;
+    const formerCurrentIsRequested = tracks.some((track) => sameIdentity(track.identity, currentIdentity));
+    for (const track of tracks) {
+      const existingIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, track.identity));
+      if (existingIndex >= 0) this.queue.remove(existingIndex);
+    }
+    const insertionIndex = currentIdentity && !formerCurrentIsRequested ? this.queue.currentIndex + 1 : 0;
+    tracks.forEach((track, offset) => {
+      const entry = this.queue.enqueue(track);
+      this.markSelectedOfflineYouTubeCacheAvailability(entry);
+      const fromIndex = this.queue.entries.findIndex((candidate) => sameIdentity(candidate.track.identity, track.identity));
+      this.queue.move(fromIndex, insertionIndex + offset);
+    });
+    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, first.identity));
     const entry = index < 0 ? undefined : this.queue.startAt(index);
     if (!entry) {
       this.appState.lastEvent = "Track is not in Queue";
@@ -575,7 +610,7 @@ export class AppCoordinator {
       this.appState.lastEvent = `${providerId} Provider cannot open paths`;
       return;
     }
-    await this.openLocalPath(path, signal);
+    await this.openLocalPathTracks(path, signal);
   }
 
   private async dispatchPlayerOperation(intent: Extract<AppIntent, { type: "playerOperation" }>): Promise<void> {
@@ -778,6 +813,17 @@ export class AppCoordinator {
     });
     await this.persistLastSelectedTarget("local");
 
+    const selectedEntry = await this.openLocalPathTracks(path, signal);
+    if (selectedEntry) this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(selectedEntry)));
+  }
+
+  private async openLocalPathTracks(path: string, signal?: AbortSignal): Promise<QueueEntry | undefined> {
+    const localProvider = this.appState.providers.local;
+    if (!isLocalProvider(localProvider)) {
+      this.appState.lastEvent = "Local Provider cannot open paths";
+      return undefined;
+    }
+
     const result = await localProvider.createTracksFromOpenPath(path, {
       signal,
       softCap: this.appState.config.providers.local.directorySoftCap,
@@ -787,27 +833,24 @@ export class AppCoordinator {
       selectedEntry = this.queue.enqueue(track);
     }
 
-    if (selectedEntry) {
-      this.selectQueueIndex(Math.max(0, this.queue.entries.indexOf(selectedEntry)));
-    }
-
     this.syncQueueState();
     if (result.cancelled) {
       this.appState.lastEvent = `cancelled Local open after ${result.tracks.length} Tracks`;
-      return;
+      return selectedEntry;
     }
 
     if (result.capped) {
       this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue; soft cap reached`;
-      return;
+      return selectedEntry;
     }
 
     if (result.tracks.length === 0) {
       this.appState.lastEvent = "no Local audio files found";
-      return;
+      return selectedEntry;
     }
 
     this.appState.lastEvent = `added ${result.tracks.length} Local Tracks to shared Queue`;
+    return selectedEntry;
   }
 
   private async startSelectedQueueEntry(): Promise<void> {
@@ -1464,10 +1507,6 @@ export class AppCoordinator {
 
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
-    this.uiStateStore.dispatch({
-      type: "syncQueue",
-      identities: this.queueIdentities(),
-    });
   }
 
   private updateUiState(patch: Partial<UiState>): void {
@@ -1505,4 +1544,15 @@ function completedPlayThresholdSeconds(durationSeconds: number | null | undefine
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(240, durationSeconds / 2)
     : 240;
+}
+
+function uniqueTargetTracks(target: PlayableTarget): Track[] {
+  const tracks = "tracks" in target ? target.tracks : [target];
+  const seen = new Set<string>();
+  return tracks.filter((track) => {
+    const key = identityKey(track.identity);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

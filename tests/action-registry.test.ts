@@ -10,6 +10,9 @@ import {
   createInitialAppState,
   createInitialUiState,
   discoveryActions,
+  commandPaletteActions,
+  footerActions,
+  shortcutHelpActions,
   type AppIntent,
 } from "../src/index";
 
@@ -41,11 +44,27 @@ describe("action registry contracts", () => {
     expect(direct).toMatchObject({
       id: "queue.play-next",
       name: "Play Next",
-      aliases: ["enqueue", "add next"],
+      aliases: ["queue next", "add next"],
       bindings: ["Enter"],
       enabled: true,
-      intent: { type: "playQueueTrack", track: amber },
+      intent: { type: "playNext", target: amber },
     });
+  });
+
+  test("all discovery surfaces and direct bindings resolve from the same definitions", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    const discovery = discoveryActions(registry, current);
+
+    expect(footerActions(registry, current)).toEqual(discovery);
+    expect(shortcutHelpActions(registry, current)).toEqual(discovery);
+    expect(commandPaletteActions(registry, current)).toEqual(discovery);
+    for (const definition of registry.filter((action) => action.applies(current))) {
+      const discovered = discovery.find((action) => action.id === definition.id) ?? null;
+      for (const binding of definition.bindings) {
+        expect(actionForBinding(registry, binding.key, current)).toEqual(discovered);
+      }
+    }
   });
 
   test("omits unsupported actions from discovery and makes their bindings inert", () => {
@@ -70,13 +89,66 @@ describe("action registry contracts", () => {
       queue: new MemoryQueue(),
       player: new NoopPlayer(),
     });
+    const uiBefore = structuredClone(coordinator.uiState);
 
-    await coordinator.dispatch({ type: "enqueueTrack", track: amber });
-    await coordinator.dispatch({ type: "enqueueTrack", track: cinder });
+    await coordinator.dispatch({ type: "playNext", target: amber });
+    await coordinator.dispatch({ type: "playNext", target: cinder });
     await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([cinder]);
-    expect(coordinator.uiState.selectedQueueIdentity).toEqual(cinder.identity);
+    expect(coordinator.uiState).toEqual(uiBefore);
+  });
+
+  test("keeps context-relevant actions discoverable with disabled reasons", () => {
+    const registry = createActionRegistry();
+    const current = context();
+    current.appState.queue.entries = [];
+    current.uiState.selectedQueueIdentity = null;
+
+    expect(discoveryActions(registry, current).find((action) => action.id === "queue.play-next")).toMatchObject({
+      enabled: false,
+      disabledReason: "Queue is empty",
+      intent: null,
+    });
+  });
+
+  test("keeps Play Next and Play Now distinct for a Music Collection", async () => {
+    const cinder = {
+      identity: { providerId: "local", stableId: "/music/cinder.flac" },
+      title: "Cinder Room",
+      providerLabel: "Local",
+    };
+    const drift = {
+      identity: { providerId: "local", stableId: "/music/drift.flac" },
+      title: "Drift Signal",
+      providerLabel: "Local",
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({ type: "playNext", target: amber });
+    await coordinator.dispatch({ type: "playNow", target: amber });
+
+    await coordinator.dispatch({
+      type: "playNext",
+      target: {
+        kind: "music-collection",
+        id: "night-drive",
+        label: "Night Drive",
+        tracks: [cinder, amber, drift, cinder],
+      },
+    });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      "Amber Path",
+      "Cinder Room",
+      "Drift Signal",
+    ]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
   });
 });
 
