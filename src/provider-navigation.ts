@@ -3,11 +3,13 @@ import type {
   ProviderBrowserEntry,
   ProviderLocation,
   PickerOverlay,
+  ProviderId,
   ResponsiveTier,
 } from "./domain";
+import { isProviderId } from "./domain";
 
 export type ProviderNavigationRow = Omit<ProviderBrowserEntry, "kind"> & {
-  readonly providerId: string;
+  readonly providerId: ProviderId;
   readonly kind: ProviderBrowserEntry["kind"] | "provider";
 };
 
@@ -17,20 +19,20 @@ export function providerNavigationRows(
 ): readonly ProviderNavigationRow[] {
   if (location.providerId) {
     const provider = appState.providers[location.providerId];
-    return provider?.listBrowserEntries?.(location).map((entry) => ({ ...entry, providerId: provider.id })) ?? [];
+    return provider?.listBrowserEntries?.(location).map((entry) => ({ ...entry, providerId: location.providerId! })) ?? [];
   }
 
   return Object.values(appState.providers)
     .map((provider) => ({ provider, root: provider.getNavigationRoot() }))
     .filter(({ root }) => root.visible)
     .sort((left, right) => left.root.order - right.root.order || left.provider.label.localeCompare(right.provider.label))
-    .map(({ provider, root }) => ({
+    .flatMap(({ provider, root }) => isProviderId(provider.id) ? [{
       id: provider.id,
       providerId: provider.id,
       kind: "provider" as const,
       label: provider.label,
       detail: root.detail,
-    }));
+    }] : []);
 }
 
 export type OverlayGeometry = { readonly width: number; readonly height: number };

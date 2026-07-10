@@ -69,7 +69,7 @@ describe("StatePublicationGate", () => {
   test("publishes semantic input, resize, playback, Queue, Provider, download, and error changes immediately", () => {
     const { appState, uiState, publications, gate } = harness();
 
-    uiState.promptInput = "m";
+    uiState.filterText = "m";
     gate.notify("input");
     uiState.terminal = { columns: 80, rows: 24, tier: "medium" };
     gate.notify("resize");
@@ -237,9 +237,9 @@ describe("StatePublicationGate", () => {
     expect("resolvePlaybackLocator" in (snapshot.appState.providers.local ?? {})).toBe(false);
 
     appState.appErrors.push("later mutation");
-    uiState.promptInput = "later mutation";
+    uiState.filterText = "later mutation";
     expect(snapshot.appState.appErrors).toEqual([]);
-    expect(snapshot.uiState.promptInput).toBe("");
+    expect(snapshot.uiState.filterText).toBe("");
   });
 
   test("stop cancels pending work and idle time schedules nothing", () => {

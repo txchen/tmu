@@ -142,7 +142,6 @@ describe("UI State reducer", () => {
     state = reduceUiState(state, { type: "dismissOverlay", queueIdentities: [beta, gamma] });
     expect(state.overlays).toEqual([]);
     expect(state.focusedPane).toBe("queue");
-    expect(state.promptInput).toBe("prior query");
     expect(state.filterText).toBe("Tracks");
     expect(state.providerLocation).toEqual({ providerId: "local", path: [{ kind: "album", id: "albums" }] });
     expect(state.selectedQueueIdentity).toEqual(beta);

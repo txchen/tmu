@@ -1127,8 +1127,9 @@ describe("AppCoordinator", () => {
     expect(player.seeks).toEqual([37]);
   });
 
-  test("manual invalid restore also suppresses quit replacement until a meaningful change", async () => {
+  test("invalid startup restore suppresses quit replacement until a meaningful change", async () => {
     const persistence = new RecordingSnapshotPersistence();
+    persistence.quarantined = true;
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ local: fakeProvider("local") }),
       uiState: createInitialUiState(),
@@ -1137,9 +1138,6 @@ describe("AppCoordinator", () => {
       snapshotPersistence: persistence,
     });
     await coordinator.start();
-    persistence.quarantined = true;
-
-    await coordinator.dispatch({ type: "persistenceOperation", operation: "restore" });
     await coordinator.teardown();
 
     expect(persistence.saves).toEqual([]);

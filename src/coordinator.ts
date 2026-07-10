@@ -177,7 +177,6 @@ export class AppCoordinator {
         case "providerOperation":
           if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
           else if (intent.operation === "retry") await this.retryProvider(intent.providerId);
-          else if (intent.operation === "browse-query") await this.queryProviderBrowsingSurface(intent.providerId, intent.query);
           else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
           else if (intent.operation === "open-entry") await this.openProviderBrowserEntry(intent.providerId, intent.location, intent.index);
           else this.cancelLocalOpen();
@@ -197,10 +196,6 @@ export class AppCoordinator {
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
           else this.cancelYouTubeDownload();
           return;
-        case "persistenceOperation":
-          if (intent.operation === "save") await this.saveLastQueueSnapshot({ announce: true });
-          else await this.restoreLastQueueSnapshot();
-          return;
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
           return;
@@ -210,8 +205,7 @@ export class AppCoordinator {
       }
     } finally {
       this.notifyStateChanged();
-      const persistenceIntent = intent.type === "persistenceOperation"
-        || (intent.type === "playerOperation" && intent.operation === "quit");
+      const persistenceIntent = intent.type === "playerOperation" && intent.operation === "quit";
       const forceSave = intent.type === "playerOperation"
         && ["toggle-play-pause", "stop"].includes(intent.operation);
       if (!this.tornDown && !persistenceIntent) {
@@ -470,15 +464,6 @@ export class AppCoordinator {
       : `Navidrome retry failed: ${state.message}`;
   }
 
-  private async queryProviderBrowsingSurface(providerId: string, query: string): Promise<void> {
-    const provider = this.appState.providers[providerId];
-    if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
-      this.appState.lastEvent = `${providerId} Provider Browsing Surface does not support queries`;
-      return;
-    }
-    await this.runNavidromeBrowsingQuery(provider, query);
-  }
-
   private async openProviderPath(providerId: string, path: string, signal?: AbortSignal): Promise<void> {
     if (providerId !== "local") {
       this.appState.lastEvent = `${providerId} Provider cannot open paths`;
@@ -652,53 +637,6 @@ export class AppCoordinator {
     }
   }
 
-  private async openLocalPathPrompt(): Promise<void> {
-    this.updateUiState({
-      activeTargetId: "local",
-      selectedTargetIndex: navigationTargetIndex("local"),
-      focusedPane: "content",
-      activePrompt: "local-open-path",
-      promptInput: "",
-      providerLocation: { providerId: "local", path: [] },
-    });
-    this.appState.lastEvent = "opened Local path prompt";
-    await this.persistLastSelectedTarget("local");
-  }
-
-  private setPromptInput(value: string): void {
-    if (!this.uiState.activePrompt) return;
-    this.updateUiState({ promptInput: value });
-  }
-
-  private async submitPrompt(): Promise<void> {
-    if (this.uiState.activePrompt === "local-open-path") {
-      const path = this.uiState.promptInput;
-      this.updateUiState({ activePrompt: null, promptInput: "" });
-      this.startLocalOpen(path);
-      return;
-    }
-
-    if (this.uiState.activePrompt === "youtube-url") {
-      const url = this.uiState.promptInput;
-      this.updateUiState({ activePrompt: null, promptInput: "" });
-      this.startYouTubeUrlDownload(url);
-      return;
-    }
-
-    if (this.uiState.activePrompt === "navidrome-search") {
-      const query = this.uiState.promptInput;
-      this.updateUiState({ activePrompt: null, promptInput: "" });
-      await this.searchNavidromeTracks(query);
-    }
-  }
-
-  private cancelPrompt(): void {
-    if (!this.uiState.activePrompt) return;
-
-    this.updateUiState({ activePrompt: null, promptInput: "" });
-    this.appState.lastEvent = "cancelled prompt";
-  }
-
   private startLocalOpen(path: string): void {
     this.activeLocalOpen?.abort();
     const controller = new AbortController();
@@ -773,8 +711,6 @@ export class AppCoordinator {
       activeTargetId: "local",
       selectedTargetIndex: navigationTargetIndex("local"),
       focusedPane: "content",
-      activePrompt: null,
-      promptInput: "",
       providerLocation: { providerId: "local", path: [{ kind: "local-directory", path }] },
     });
     await this.persistLastSelectedTarget("local");
@@ -1021,14 +957,13 @@ export class AppCoordinator {
     this.appState.lastEvent = `seeked ${seconds}s`;
   }
 
-  private async saveLastQueueSnapshot(options: { meaningful?: boolean; announce?: boolean } = {}): Promise<void> {
+  private async saveLastQueueSnapshot(options: { meaningful?: boolean } = {}): Promise<void> {
     if (this.snapshotSaveBlockedUntilMeaningfulChange && !options.meaningful) return;
     if (options.meaningful) this.snapshotSaveBlockedUntilMeaningfulChange = false;
     const snapshot = this.currentLastQueueSnapshot();
     const write = async () => {
       try {
         await this.snapshotPersistence.save(snapshot);
-        if (options.announce) this.appState.lastEvent = "saved Last Queue Snapshot";
       } catch (error) {
         const message = `Could not save Last Queue Snapshot: ${error instanceof Error ? error.message : String(error)}. Will retry on the next state change or quit.`;
         this.appState.appErrors.push(message);
@@ -1038,19 +973,6 @@ export class AppCoordinator {
     };
     this.snapshotWriteTail = this.snapshotWriteTail.then(write, write);
     await this.snapshotWriteTail;
-  }
-
-  private async restoreLastQueueSnapshot(): Promise<void> {
-    const snapshot = await this.snapshotPersistence.load();
-    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
-    this.snapshotSaveBlockedUntilMeaningfulChange = this.snapshotPersistence.wasLastLoadQuarantined?.() ?? false;
-    if (!snapshot) {
-      this.appState.lastEvent = "no Last Queue Snapshot";
-      return;
-    }
-
-    await this.applyLastQueueSnapshot(snapshot);
-    this.appState.lastEvent = "restored Last Queue Snapshot";
   }
 
   private snapshotFingerprint(): string {
@@ -1395,48 +1317,6 @@ export class AppCoordinator {
 
     this.appState.lastEvent = "refreshed Navidrome Library Browser";
     return true;
-  }
-
-  private async searchNavidromeTracks(query: string): Promise<void> {
-    const provider = this.appState.providers.navidrome;
-    if (!isNavidromeProvider(provider)) {
-      this.appState.lastEvent = "Navidrome Library Browser is unavailable";
-      return;
-    }
-
-    if (this.uiState.activeTargetId !== "navidrome") {
-      this.updateUiState({
-        activeTargetId: "navidrome",
-        selectedTargetIndex: navigationTargetIndex("navidrome"),
-        providerLocation: { providerId: "navidrome", path: [] },
-      });
-    }
-    this.updateUiState({ focusedPane: "content" });
-
-    const results = await this.runNavidromeBrowsingQuery(provider, query);
-    if (!results) return;
-    this.updateUiState({
-      providerLocation: { providerId: "navidrome", path: [{ kind: "search", query: query.trim() }] },
-    });
-    const entries = provider.getLibraryBrowserEntries(this.uiState.providerLocation);
-    const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
-    this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
-  }
-
-  private async runNavidromeBrowsingQuery(
-    provider: import("./navidrome").NavidromeProvider,
-    query: string,
-  ): Promise<readonly Track[] | undefined> {
-    try {
-      const results = await provider.searchTracks(query);
-      this.appState.lastEvent = results.length === 0
-        ? `Navidrome search found no Tracks for ${query.trim()}`
-        : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
-      return results;
-    } catch (error) {
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      return undefined;
-    }
   }
 
   private async runPlayerCommand(

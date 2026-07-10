@@ -152,13 +152,7 @@ export class RootInputRouter {
       const visibleRows = overlayContentRows(overlay.kind,
         this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
         this.uiState.snapshot.terminal.rows);
-      const movement = movementForUiOperation(uiOperation, visibleRows);
-      if (movement) {
-        this.uiState.dispatch(movement.kind === "boundary"
-          ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: actions.length, visibleRows }
-          : { type: "moveOverlaySelection", delta: movement.delta, rowCount: actions.length, visibleRows });
-        return true;
-      }
+      if (this.routeOverlayRowMovement(uiOperation, actions.length, visibleRows)) return true;
       if (overlay.kind === "shortcut-help" && uiOperation === "help-filter") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
         return true;
@@ -196,19 +190,6 @@ export class RootInputRouter {
       return true;
     }
     if (overlay) return true;
-
-    if (this.uiState.snapshot.activePrompt) {
-      const query = this.uiState.snapshot.promptInput;
-      if (key === "\r") {
-        await this.dispatchBinding(key);
-        this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-      } else if (key === "\x1b") this.uiState.dispatch({ type: "updateView", patch: { activePrompt: null, promptInput: "" } });
-      else {
-        const edited = editText(query, key);
-        if (edited !== null) this.uiState.dispatch({ type: "setQuery", query: edited });
-      }
-      return true;
-    }
 
     const identities = queueIdentities(this.appState());
     if (uiOperation === "first" && key === "g") {
@@ -343,7 +324,7 @@ export class RootInputRouter {
       }
       const location = overlay.providerLocation ?? { providerId: null, path: [] };
       if (location.providerId === null) {
-        this.uiState.dispatch({ type: "setProviderLocation", location: { providerId: selected.providerId as UiState["providerLocation"]["providerId"], path: [] } });
+        this.uiState.dispatch({ type: "setProviderLocation", location: { providerId: selected.providerId, path: [] } });
         return true;
       }
       if (selected.kind === "local-directory") {

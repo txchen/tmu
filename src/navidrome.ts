@@ -43,7 +43,6 @@ export type NavidromePlaylist = {
 export type NavidromeLibraryBrowserEntry =
   | { kind: "artists-root"; label: string; depth: 0 }
   | { kind: "playlists-root"; label: string; depth: 0 }
-  | { kind: "search-root"; label: string; depth: 0 }
   | { kind: "artist"; id: string; label: string; albumCount?: number; coverArtId?: string; depth: 1 }
   | {
     kind: "album";
@@ -85,16 +84,7 @@ export type NavidromeLibraryBrowserEntry =
     coverArtId?: string;
     depth: 2;
   }
-  | { kind: "load-more-playlist-tracks"; playlistId: string; label: string; depth: 2 }
-  | {
-    kind: "search-result";
-    id: string;
-    label: string;
-    track: Track;
-    coverArtId?: string;
-    depth: 1;
-  }
-  | { kind: "load-more-search-results"; label: string; depth: 1 };
+  | { kind: "load-more-playlist-tracks"; playlistId: string; label: string; depth: 2 };
 
 export type NavidromeProvider = Provider & {
   getConnectionState(): NavidromeConnectionState;
@@ -106,7 +96,6 @@ export type NavidromeProvider = Provider & {
   listAlbumTracks(albumId: string): Promise<readonly Track[]>;
   listPlaylists(): Promise<readonly NavidromePlaylist[]>;
   listPlaylistTracks(playlistId: string): Promise<readonly Track[]>;
-  searchTracks(query: string): Promise<readonly Track[]>;
   openSearchResult(result: GlobalSearchProviderResult): Promise<ProviderLocation>;
   resolveMusicCollection(
     collection: MusicCollection,
@@ -172,7 +161,6 @@ export function isNavidromeProvider(provider: Provider | undefined): provider is
     && typeof (provider as Partial<NavidromeProvider>).listAlbumTracks === "function"
     && typeof (provider as Partial<NavidromeProvider>).listPlaylists === "function"
     && typeof (provider as Partial<NavidromeProvider>).listPlaylistTracks === "function"
-    && typeof (provider as Partial<NavidromeProvider>).searchTracks === "function"
     && typeof (provider as Partial<NavidromeProvider>).openSearchResult === "function"
     && typeof (provider as Partial<NavidromeProvider>).resolveMusicCollection === "function"
     && typeof (provider as Partial<NavidromeProvider>).openLibraryBrowserEntry === "function"
@@ -267,9 +255,6 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
   private playlists: NavidromePlaylist[] | null = null;
   private readonly playlistTracks = new Map<string, Track[]>();
   private readonly playlistTrackVisibleCounts = new Map<string, number>();
-  private searchQuery = "";
-  private searchResults: Track[] = [];
-  private searchHasMore = false;
 
   constructor(options: NavidromeProviderOptions) {
     this.config = options.config;
@@ -315,11 +300,8 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
           break;
         case "track":
         case "playlist-track":
-        case "search-result":
           rows.push({ entry, row: { id: entry.track.identity.stableId, kind: "track", label: entry.label } });
           break;
-        case "search-root":
-        case "load-more-search-results":
         default:
           break;
       }
@@ -354,9 +336,6 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     const expandedArtistId = locationSegmentId(location, "artist");
     const expandedAlbumId = locationSegmentId(location, "album");
     const expandedPlaylistId = locationSegmentId(location, "playlist");
-    const visibleSearchQuery = location.providerId === "navidrome"
-      ? location.path.find((segment) => segment.kind === "search")?.query.trim() ?? ""
-      : "";
 
     const entries: NavidromeLibraryBrowserEntry[] = [
       { kind: "artists-root", label: "Artists", depth: 0 },
@@ -462,30 +441,6 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
           depth: 2,
         });
       }
-    }
-
-    entries.push({
-      kind: "search-root",
-      label: visibleSearchQuery ? `Search: ${visibleSearchQuery}` : "Search",
-      depth: 0,
-    });
-    const visibleSearchResults = visibleSearchQuery === this.searchQuery ? this.searchResults : [];
-    for (const track of visibleSearchResults) {
-      entries.push({
-        kind: "search-result",
-        id: this.trackIdFromIdentity(track.identity) ?? track.identity.stableId,
-        label: track.title,
-        track,
-        coverArtId: track.coverArtId,
-        depth: 1,
-      });
-    }
-    if (visibleSearchResults.length > 0 && this.searchHasMore) {
-      entries.push({
-        kind: "load-more-search-results",
-        label: "Load more search results",
-        depth: 1,
-      });
     }
 
     return entries;
@@ -604,19 +559,6 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
       this.connectionState = failedConnectionState(apiError);
       throw apiError;
     }
-  }
-
-  async searchTracks(query: string): Promise<readonly Track[]> {
-    const trimmed = query.trim();
-    this.searchQuery = trimmed;
-    this.searchResults = [];
-    this.searchHasMore = false;
-    if (!trimmed) return this.searchResults;
-
-    const firstPage = await this.searchTracksPage(trimmed, 0);
-    this.searchResults = firstPage;
-    this.searchHasMore = firstPage.length >= this.pageSize;
-    return this.searchResults;
   }
 
   async search(request: GlobalSearchProviderRequest): Promise<readonly GlobalSearchProviderResult[]> {
@@ -770,18 +712,8 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
         this.playlistTrackVisibleCounts.set(entry.playlistId, Math.min(current + this.pageSize, tracks.length));
         return;
       }
-      case "load-more-search-results": {
-        if (!this.searchQuery || !this.searchHasMore) return;
-
-        const nextPage = await this.searchTracksPage(this.searchQuery, this.searchResults.length);
-        this.searchResults = [...this.searchResults, ...nextPage];
-        this.searchHasMore = nextPage.length >= this.pageSize;
-        return;
-      }
       case "track":
       case "playlist-track":
-      case "search-result":
-      case "search-root":
         return;
     }
   }
@@ -797,14 +729,11 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     this.playlists = null;
     this.playlistTracks.clear();
     this.playlistTrackVisibleCounts.clear();
-    this.searchQuery = "";
-    this.searchResults = [];
-    this.searchHasMore = false;
     await this.refreshArtists();
   }
 
   trackForLibraryBrowserEntry(entry: NavidromeLibraryBrowserEntry): Track | undefined {
-    return entry.kind === "track" || entry.kind === "playlist-track" || entry.kind === "search-result"
+    return entry.kind === "track" || entry.kind === "playlist-track"
       ? entry.track
       : undefined;
   }
@@ -838,23 +767,6 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     const prefix = `${this.label}:${normalizedServerUrl(this.config.serverUrl)}:track:`;
     if (!identity.stableId.startsWith(prefix)) return undefined;
     return identity.stableId.slice(prefix.length);
-  }
-
-  private async searchTracksPage(query: string, offset: number): Promise<Track[]> {
-    try {
-      const response = await this.requestSubsonic<{ searchResult3?: unknown }>("search3", {
-        query,
-        artistCount: "0",
-        albumCount: "0",
-        songCount: String(this.pageSize),
-        songOffset: String(Math.max(0, offset)),
-      });
-      return parseTracks(response.searchResult3, normalizedServerUrl(this.config.serverUrl));
-    } catch (error) {
-      const apiError = toNavidromeApiError(error, this.config);
-      this.connectionState = failedConnectionState(apiError);
-      throw apiError;
-    }
   }
 
   private async reportScrobble(identity: TrackIdentity, submission: boolean): Promise<void> {

@@ -175,11 +175,11 @@ describe("Last Queue Snapshot persistence", () => {
       await first.coordinator.dispatch({ type: "providerOperation", providerId: "local", operation: "open-path", path: seededFile });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "set-volume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
-      await first.coordinator.dispatch({ type: "persistenceOperation", operation: "save" });
+      await first.coordinator.teardown();
+      first = undefined;
 
       second = await createTmuRuntime({ configPath, dependencyRunner: runner });
       await second.coordinator.start();
-      await second.coordinator.dispatch({ type: "persistenceOperation", operation: "restore" });
 
       expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("song-a.flac");
       expect(second.coordinator.appState.queue.shuffle).toBe(true);

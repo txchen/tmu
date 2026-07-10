@@ -102,8 +102,6 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     selectedTargetIndex: 0,
     selectedContentIndexByTarget,
     selectedQueueIndex: 0,
-    activePrompt: null,
-    promptInput: "",
     filterText: "",
     scrollByPane: { targets: 0, content: 0, queue: 0 },
     overlays: [],
@@ -158,7 +156,6 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
           ...action.overlay,
           returnTo: {
             focusedPane: state.focusedPane,
-            query: state.promptInput,
             filterText: state.filterText,
             selectedQueueIdentity: state.selectedQueueIdentity,
             selectedQueueIndex: state.selectedQueueIndex,
@@ -179,7 +176,6 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       ...state,
       overlays,
       focusedPane: dismissed.returnTo.focusedPane,
-      promptInput: dismissed.returnTo.query,
       filterText: dismissed.returnTo.filterText,
       selectedQueueIdentity: dismissed.returnTo.selectedQueueIdentity,
       selectedQueueIndex: dismissed.returnTo.selectedQueueIndex,
@@ -200,8 +196,7 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       ...((overlay.kind === "shortcut-help" || overlay.kind === "command-palette")
         ? { selectedResultIndex: 0, scroll: 0 }
         : {}),
-    }))
-      ?? { ...state, promptInput: action.query };
+    })) ?? state;
   }
 
   if (action.type === "setOverlayMessage") {

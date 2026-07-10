@@ -654,46 +654,6 @@ describe("root input router", () => {
     expect(intents).toEqual([{ type: "playerOperation", operation: "quit" }]);
   });
 
-  test("turns submitted text into an explicit Provider operation", async () => {
-    const current = context();
-    current.uiState.activePrompt = "local-open-path";
-    current.uiState.promptInput = "/music/album";
-    const ui = new UiStateStore(current.uiState);
-    const intents: AppIntent[] = [];
-    const router = new RootInputRouter({
-      registry: createActionRegistry(),
-      appState: () => current.appState,
-      uiState: ui,
-      dispatchApp: async (intent) => { intents.push(intent); },
-    });
-
-    await router.route("\r");
-
-    expect(intents).toEqual([{
-      type: "providerOperation",
-      providerId: "local",
-      operation: "open-path",
-      path: "/music/album",
-    }]);
-    expect(ui.snapshot.activePrompt).toBeNull();
-  });
-
-  test("supports word deletion and clearing in Provider prompt text fields", async () => {
-    const current = context();
-    current.uiState.activePrompt = "local-open-path";
-    current.uiState.promptInput = "/music/night drive";
-    const ui = new UiStateStore(current.uiState);
-    const router = new RootInputRouter({
-      registry: createActionRegistry(), appState: () => current.appState, uiState: ui,
-      dispatchApp: async () => undefined,
-    });
-
-    await router.route("\x17");
-    expect(ui.snapshot.promptInput).toBe("/music/night");
-    await router.route("\x15");
-    expect(ui.snapshot.promptInput).toBe("");
-  });
-
   test("routes only the top overlay and dismisses one non-text layer", async () => {
     const current = context();
     const ui = new UiStateStore(current.uiState);

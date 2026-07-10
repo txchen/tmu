@@ -21,8 +21,7 @@ export type ProviderNavigationSegment =
   | { kind: "artist"; id: string }
   | { kind: "album"; id: string }
   | { kind: "playlists" }
-  | { kind: "playlist"; id: string }
-  | { kind: "search"; query: string };
+  | { kind: "playlist"; id: string };
 export type ProviderLocation = {
   providerId: ProviderId | null;
   path: readonly ProviderNavigationSegment[];
@@ -31,7 +30,6 @@ export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-downloa
 
 export type FocusReturnToken = {
   focusedPane: FocusedPane;
-  query: string;
   filterText: string;
   selectedQueueIdentity: TrackIdentity | null;
   selectedQueueIndex: number;
@@ -295,8 +293,6 @@ export type UiState = {
   selectedTargetIndex: number;
   selectedContentIndexByTarget: Record<NavigationTargetId, number>;
   selectedQueueIndex: number;
-  activePrompt: null | "youtube-url" | "local-open-path" | "navidrome-search";
-  promptInput: string;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
   overlays: readonly PickerOverlay[];
@@ -329,7 +325,6 @@ export type AppIntent =
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
   | { type: "providerOperation"; providerId: string; operation: "refresh" | "retry" }
-  | { type: "providerOperation"; providerId: string; operation: "browse-query"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
   | { type: "providerOperation"; providerId: string; operation: "open-entry"; location: ProviderLocation; index: number }
   | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
@@ -339,7 +334,6 @@ export type AppIntent =
   | { type: "globalSearch"; operation: "clear" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
-  | { type: "persistenceOperation"; operation: "save" | "restore" }
   | {
     type: "playerOperation";
     operation:
