@@ -191,4 +191,35 @@ describe("Last Queue Snapshot persistence", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("runtime opens on Playback and restores the full Last Queue Snapshot without autoplay", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-full-restore-"));
+    const configPath = join(dir, "config.json");
+    const snapshotPath = join(dir, "last-queue.json");
+    const preferencesPath = join(dir, "preferences.json");
+    const runner: DependencyCommandRunner = async ({ helper }) => ({
+      exitCode: 0, stdout: `${helper} 1.0\n`, stderr: "",
+    });
+    let runtime: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
+    try {
+      await writeFile(configPath, JSON.stringify({
+        persistence: { lastQueueSnapshotPath: snapshotPath, appPreferencesPath: preferencesPath },
+      }));
+      await new FileLastQueueSnapshotPersistence(snapshotPath).save({ ...snapshot(), repeatAll: true });
+
+      runtime = await createTmuRuntime({ configPath, dependencyRunner: runner, startPlayer: false });
+      await runtime.coordinator.start();
+
+      expect(runtime.coordinator.uiState.activeTab).toBe("playback");
+      expect(runtime.coordinator.appState.queue).toMatchObject({ currentIndex: 0, shuffle: true, repeatAll: true });
+      expect(runtime.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Track");
+      expect(runtime.coordinator.appState.playback).toMatchObject({
+        status: "paused", positionSeconds: 42, currentTrackIdentity: snapshot().entries[0]?.track.identity,
+      });
+      expect(runtime.coordinator.appState.volume).toEqual({ percent: 88, ready: true });
+    } finally {
+      await runtime?.coordinator.teardown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
