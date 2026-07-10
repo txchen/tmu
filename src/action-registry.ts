@@ -27,7 +27,7 @@ export function footerActions(
   );
 }
 
-export function searchDiscoveryActions(registry: ActionRegistry, query: string): ActionRegistry {
+export function searchCommandActions(registry: ActionRegistry, query: string): ActionRegistry {
   const normalized = query.trim().toLocaleLowerCase();
   return normalized
     ? registry.filter((action) => action.label.toLocaleLowerCase().includes(normalized))
