@@ -21,4 +21,4 @@ bun install --global tmu
 tmu
 ```
 
-The npm executable uses Bun at runtime. `mpv`, `ffprobe`, and `yt-dlp` remain external helpers discovered through TMU Config and dependency health checks.
+The npm executable uses Bun at runtime. `mpv` and `yt-dlp` remain external helpers discovered through TMU Config and dependency health checks.

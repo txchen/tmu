@@ -151,6 +151,8 @@ export type AppState = {
   downloads: {
     active: boolean;
     lines: string[];
+    confirmation?: { title: string; itemCount: number };
+    summary?: { downloaded: number; alreadyCached: number; failed: number; cancelled: number };
   };
   appErrors: string[];
   lastEvent: string;
@@ -198,6 +200,7 @@ export type AppIntent =
   | { type: "clearQueue" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
+  | { type: "downloadOperation"; operation: "confirm-playlist" | "cancel-playlist" }
   | {
     type: "playerOperation";
     operation:

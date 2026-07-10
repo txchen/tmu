@@ -17,7 +17,7 @@ import type { DependencyHealthRefresh } from "./coordinator";
 import { FileAppPreferencesPersistence, type AppPreferencesPersistence } from "./preferences";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
 import type { Player } from "./domain";
-import type { YouTubeDownloader } from "./youtube-url-download";
+import type { executeYouTubeDownloadBatch, prepareYouTubeDownloadBatch } from "./youtube-url-download";
 
 export type TmuAppOptions = {
   config?: TmuConfigInput;
@@ -29,7 +29,8 @@ export type TmuAppOptions = {
   appPreferencesPersistence?: AppPreferencesPersistence;
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
-  youtubeDownloader?: YouTubeDownloader;
+  prepareDownloadBatch?: typeof prepareYouTubeDownloadBatch;
+  executeDownloadBatch?: typeof executeYouTubeDownloadBatch;
 };
 
 export type TmuRuntimeOptions = {
@@ -58,7 +59,8 @@ export function createTmuApp(options: TmuAppOptions = {}): {
     snapshotPersistence: options.snapshotPersistence,
     appPreferencesPersistence: options.appPreferencesPersistence,
     dependencyRunner: options.dependencyRunner,
-    youtubeDownloader: options.youtubeDownloader,
+    prepareDownloadBatch: options.prepareDownloadBatch,
+    executeDownloadBatch: options.executeDownloadBatch,
   });
 
   return { coordinator };

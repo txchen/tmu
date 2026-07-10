@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import type { TmuConfig } from "./config";
 
-export type HelperName = "mpv" | "ffprobe" | "yt-dlp";
+export type HelperName = "mpv" | "yt-dlp";
 
 export type DependencyCommandRequest = {
   helper: HelperName;
@@ -34,10 +34,6 @@ export type DependencyHealthState = {
     enabled: boolean;
     message?: string;
   };
-  metadata: {
-    degraded: boolean;
-    message?: string;
-  };
   youtubeUrlDownload: {
     enabled: boolean;
     message?: string;
@@ -56,14 +52,10 @@ export function createDefaultDependencyHealth(overrides: DependencyHealthInput =
   const base: DependencyHealthState = {
     helpers: {
       mpv: { name: "mpv", command: "mpv", status: "present" },
-      ffprobe: { name: "ffprobe", command: "ffprobe", status: "present" },
       "yt-dlp": { name: "yt-dlp", command: "yt-dlp", status: "present" },
     },
     playback: {
       enabled: true,
-    },
-    metadata: {
-      degraded: false,
     },
     youtubeUrlDownload: {
       enabled: true,
@@ -76,10 +68,6 @@ export function createDefaultDependencyHealth(overrides: DependencyHealthInput =
         ...base.helpers.mpv,
         ...overrides.helpers?.mpv,
       },
-      ffprobe: {
-        ...base.helpers.ffprobe,
-        ...overrides.helpers?.ffprobe,
-      },
       "yt-dlp": {
         ...base.helpers["yt-dlp"],
         ...overrides.helpers?.["yt-dlp"],
@@ -88,10 +76,6 @@ export function createDefaultDependencyHealth(overrides: DependencyHealthInput =
     playback: {
       ...base.playback,
       ...overrides.playback,
-    },
-    metadata: {
-      ...base.metadata,
-      ...overrides.metadata,
     },
     youtubeUrlDownload: {
       ...base.youtubeUrlDownload,
@@ -107,15 +91,13 @@ export async function checkDependencyHealth(
   const runner = options.runner ?? nodeDependencyCommandRunner;
   const timeoutMs = config.dependencyPolicy.checkTimeoutMs;
 
-  const [mpv, ffprobe, ytDlp] = await Promise.all([
-    checkHelper("mpv", helperCommand(config, "mpv"), helperVersionArgs("mpv"), timeoutMs, runner),
-    checkHelper("ffprobe", helperCommand(config, "ffprobe"), helperVersionArgs("ffprobe"), timeoutMs, runner),
-    checkHelper("yt-dlp", helperCommand(config, "yt-dlp"), helperVersionArgs("yt-dlp"), timeoutMs, runner),
+  const [mpv, ytDlp] = await Promise.all([
+    checkHelper("mpv", helperCommand(config, "mpv"), ["--version"], timeoutMs, runner),
+    checkHelper("yt-dlp", helperCommand(config, "yt-dlp"), ["--version"], timeoutMs, runner),
   ]);
 
   return dependencyHealthFromHelpers({
     mpv,
-    ffprobe,
     "yt-dlp": ytDlp,
   });
 }
@@ -130,7 +112,7 @@ export async function checkHelperDependencyHealth(
   const checked = await checkHelper(
     helper,
     helperCommand(config, helper),
-    helperVersionArgs(helper),
+    ["--version"],
     config.dependencyPolicy.checkTimeoutMs,
     runner,
   );
@@ -187,7 +169,6 @@ function dependencyHealthFromHelpers(
   helpers: Record<HelperName, HelperDependencyHealth>,
 ): DependencyHealthState {
   const mpvMissing = helpers.mpv.status === "missing";
-  const ffprobeMissing = helpers.ffprobe.status === "missing";
   const ytDlpMissing = helpers["yt-dlp"].status === "missing";
 
   return {
@@ -195,10 +176,6 @@ function dependencyHealthFromHelpers(
     playback: {
       enabled: !mpvMissing,
       message: mpvMissing ? `Playback disabled: mpv missing at ${helpers.mpv.command}` : undefined,
-    },
-    metadata: {
-      degraded: ffprobeMissing,
-      message: ffprobeMissing ? `Metadata degraded: ffprobe missing at ${helpers.ffprobe.command}` : undefined,
     },
     youtubeUrlDownload: {
       enabled: !ytDlpMissing,
@@ -212,7 +189,6 @@ function dependencyHealthFromHelpers(
 function detectVersion(name: HelperName, stdout: string, stderr: string): string | undefined {
   const text = `${stdout}\n${stderr}`;
   if (name === "mpv") return text.match(/\bmpv\s+([^\s]+)/i)?.[1];
-  if (name === "ffprobe") return text.match(/\bffprobe version\s+([^\s]+)/i)?.[1];
 
   const firstLine = text.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
   return firstLine;
@@ -221,10 +197,6 @@ function detectVersion(name: HelperName, stdout: string, stderr: string): string
 function helperCommand(config: DependencyCheckConfig, helper: HelperName): string {
   if (helper === "yt-dlp") return config.helpers.ytDlp;
   return config.helpers[helper];
-}
-
-function helperVersionArgs(helper: HelperName): string[] {
-  return helper === "ffprobe" ? ["-version"] : ["--version"];
 }
 
 export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, args, timeoutMs, signal }) => {

@@ -37,10 +37,10 @@ import {
   type LastQueueSnapshotPersistence,
 } from "./snapshot";
 import {
-  createFfprobeYouTubeMediaValidator,
-  downloadYouTubeUrl,
-  identifyYouTubeUrl,
-  type YouTubeDownloader,
+  executeYouTubeDownloadBatch,
+  prepareYouTubeDownloadBatch,
+  type PrepareYouTubeDownloadBatchResult,
+  type YouTubeDownloadBatch,
 } from "./youtube-url-download";
 import { UiStateStore, type UiStateAction } from "./ui-state";
 
@@ -59,7 +59,8 @@ export type AppCoordinatorOptions = {
   snapshotPersistence?: LastQueueSnapshotPersistence;
   appPreferencesPersistence?: AppPreferencesPersistence;
   dependencyRunner?: DependencyCommandRunner;
-  youtubeDownloader?: YouTubeDownloader;
+  prepareDownloadBatch?: typeof prepareYouTubeDownloadBatch;
+  executeDownloadBatch?: typeof executeYouTubeDownloadBatch;
   now?: () => number;
 };
 
@@ -72,7 +73,9 @@ export class AppCoordinator {
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
   private readonly appPreferencesPersistence: AppPreferencesPersistence;
   private readonly dependencyRunner: DependencyCommandRunner;
-  private readonly youtubeDownloader: YouTubeDownloader;
+  private readonly prepareDownloadBatch: typeof prepareYouTubeDownloadBatch;
+  private readonly executeDownloadBatch: typeof executeYouTubeDownloadBatch;
+  private pendingPlaylistConfirmation: Extract<PrepareYouTubeDownloadBatchResult, { kind: "confirmation-required" }> | null = null;
   private readonly unsubscribeFromPlayer: () => void;
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeYouTubeDownload: AbortController | null = null;
@@ -94,7 +97,8 @@ export class AppCoordinator {
     this.appPreferencesPersistence = options.appPreferencesPersistence
       ?? new InMemoryAppPreferencesPersistence();
     this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
-    this.youtubeDownloader = options.youtubeDownloader ?? downloadYouTubeUrl;
+    this.prepareDownloadBatch = options.prepareDownloadBatch ?? prepareYouTubeDownloadBatch;
+    this.executeDownloadBatch = options.executeDownloadBatch ?? executeYouTubeDownloadBatch;
     this.now = options.now ?? Date.now;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       const reachedNaturalEnd = playback.status === "idle" && playback.eof === true;
@@ -148,7 +152,9 @@ export class AppCoordinator {
           return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
-          else this.cancelYouTubeDownload();
+          else if (intent.operation === "cancel") this.cancelYouTubeDownload();
+          else if (intent.operation === "confirm-playlist") this.confirmPlaylistDownload();
+          else this.cancelPlaylistDownload();
           return;
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
@@ -695,8 +701,6 @@ export class AppCoordinator {
     this.syncQueueState();
     return true;
   }
-
-
   private async submitYouTubeUrl(url: string, signal: AbortSignal): Promise<void> {
     await this.refreshHelperDependency("yt-dlp");
     const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
@@ -706,79 +710,91 @@ export class AppCoordinator {
       return;
     }
 
-    const identified = await identifyYouTubeUrl(url, {
+    const prepared = await this.prepareDownloadBatch(url, {
       command: this.appState.config.helpers.ytDlp,
       timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
       signal,
       runner: this.dependencyRunner,
     });
-    if (!identified.ok) {
-      this.appState.lastEvent = identified.message;
+    if (prepared.kind === "rejected") {
+      this.appState.lastEvent = prepared.message;
       this.finishYouTubeDownload({ clearLines: true });
       return;
     }
-
-    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
-    if (!isYouTubeCacheProvider(provider)) {
-      this.appState.lastEvent = "YouTube Cache Provider is unavailable";
-      this.finishYouTubeDownload({ clearLines: true });
+    if (prepared.kind === "confirmation-required") {
+      this.pendingPlaylistConfirmation = prepared;
+      this.appState.downloads = {
+        active: false,
+        lines: [],
+        confirmation: prepared.confirmation,
+      };
+      this.appState.lastEvent = `confirm playlist ${prepared.confirmation.title} (${prepared.confirmation.itemCount} items)`;
       return;
     }
 
-    provider.refresh();
-    const cacheEntry = provider.findByIdentity(identified.identity);
-    if (cacheEntry?.availability.status === "available") {
-      this.appState.lastEvent = `already cached ${cacheEntry.track.title}`;
-      this.finishYouTubeDownload({ clearLines: true });
-      return;
-    }
+    await this.runPreparedDownloadBatch(prepared.batch, signal);
+  }
 
-    const download = await this.youtubeDownloader({
-      url,
+  private async runPreparedDownloadBatch(batch: YouTubeDownloadBatch, signal: AbortSignal): Promise<void> {
+    const summary = await this.executeDownloadBatch(batch, {
       command: this.appState.config.helpers.ytDlp,
       cache: { cacheDir: defaultYouTubeCacheDirectory() },
-      metadata: identified.metadata,
       cookiesFromBrowser: this.appState.config.youtube.cookiesFromBrowser,
       progressThrottleMs: this.appState.config.lowPower.downloadProgressThrottleMs,
       signal,
-      validateMedia: createFfprobeYouTubeMediaValidator({
-        command: this.appState.config.helpers.ffprobe,
-        timeoutMs: this.appState.config.dependencyPolicy.checkTimeoutMs,
-        runner: this.dependencyRunner,
-      }),
-      onProgress: (line) => this.recordYouTubeDownloadProgress(line),
+      onProgress: (_entryIndex, line) => this.recordYouTubeDownloadProgress(line),
     });
-
-    if (!download.ok) {
-      this.finishYouTubeDownload({ clearLines: Boolean(download.cancelled) });
-      this.appState.lastEvent = download.message;
-      return;
-    }
-    if (signal.aborted) {
-      this.finishYouTubeDownload({ clearLines: true });
-      this.appState.lastEvent = "YouTube download cancelled";
-      return;
-    }
-
-    provider.refresh();
-    const downloadedEntry = provider.findByIdentity(identified.identity);
-    if (!downloadedEntry) {
-      this.finishYouTubeDownload({ clearLines: false });
-      this.appState.lastEvent = `YouTube Cache entry is missing after download: ${identified.identity.stableId}`;
-      return;
-    }
-    if (downloadedEntry.availability.status !== "available") {
-      this.finishYouTubeDownload({ clearLines: false });
-      this.appState.lastEvent = downloadedEntry.availability.status === "unavailable"
-        ? `YouTube Cache entry is incomplete: ${downloadedEntry.availability.reason}`
-        : "YouTube Cache entry is incomplete";
-      return;
-    }
-    this.appState.lastEvent = `downloaded ${downloadedEntry.track.title}`;
-    this.finishYouTubeDownload({ clearLines: false });
+    this.appState.downloads = {
+      active: false,
+      lines: this.appState.downloads.lines,
+      summary: {
+        downloaded: summary.downloaded,
+        alreadyCached: summary.alreadyCached,
+        failed: summary.failed,
+        cancelled: summary.cancelled,
+      },
+    };
+    this.appState.lastEvent = `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`;
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (isYouTubeCacheProvider(provider)) provider.refresh();
   }
 
+  private confirmPlaylistDownload(): void {
+    const pending = this.pendingPlaylistConfirmation;
+    if (!pending) {
+      this.appState.lastEvent = "no playlist confirmation pending";
+      return;
+    }
+    this.pendingPlaylistConfirmation = null;
+    const batch = pending.confirm();
+    const controller = new AbortController();
+    this.activeYouTubeDownload = controller;
+    this.appState.downloads = { active: true, lines: [] };
+    this.appState.lastEvent = `starting confirmed playlist Download Batch`;
+    const task = this.runPreparedDownloadBatch(batch, controller.signal)
+      .catch((error) => {
+        this.appState.lastEvent = error instanceof Error ? error.message : String(error);
+      })
+      .finally(() => {
+        if (this.activeYouTubeDownload === controller) this.activeYouTubeDownload = null;
+        if (this.activeYouTubeDownloadTask === task) this.activeYouTubeDownloadTask = null;
+        this.notifyStateChanged();
+      });
+    this.activeYouTubeDownloadTask = task;
+  }
+
+  private cancelPlaylistDownload(): void {
+    const pending = this.pendingPlaylistConfirmation;
+    if (!pending) {
+      this.appState.lastEvent = "no playlist confirmation pending";
+      return;
+    }
+    pending.cancel();
+    this.pendingPlaylistConfirmation = null;
+    this.appState.downloads = { active: false, lines: [] };
+    this.appState.lastEvent = "playlist Download Batch cancelled before start";
+  }
 
   private recordYouTubeDownloadProgress(line: string): void {
     const lines = [...this.appState.downloads.lines, line].slice(-4);
