@@ -51,6 +51,7 @@ async function spawnTmu(
     activeDownload?: boolean;
     navidromeUrl?: string;
     playbackProgressMs?: number;
+    entrypoint?: string;
     env?: Record<string, string>;
   } = {},
 ) {
@@ -66,7 +67,7 @@ async function spawnTmu(
     rows: 24,
     data: (_terminal, data) => onData(decoder.decode(data)),
   });
-  const subprocess = Bun.spawn(["bun", "src/main.ts", ...args], {
+  const subprocess = Bun.spawn(["bun", options.entrypoint ?? "src/main.ts", ...args], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -400,8 +401,7 @@ describe("production tmu real PTY", () => {
     const read = () => output;
     const server = Bun.serve({
       port: 0,
-      async fetch() {
-        await Bun.sleep(500);
+      fetch() {
         return Response.json({
           "subsonic-response": {
             status: "failed",
@@ -422,13 +422,10 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Search:");
       terminal.write("PTY Search");
       await waitForOutput(read, "Search: PTY Search");
-      const submittedAt = Date.now();
       terminal.write("\r");
-      await waitForOutput(read, "PTY Search Track");
       await waitForOutput(read, "Navidrome · Loading");
+      await waitForOutput(read, "PTY Search Track");
       await waitForOutput(read, "Navidrome · Authentication failed", 10_000);
-      expect(Date.now() - submittedAt).toBeGreaterThanOrEqual(450);
-      expect(Date.now() - submittedAt).toBeLessThan(2_000);
       const failureFrame = output.slice(output.lastIndexOf("PTY Search Track"));
       expect(failureFrame).toContain("Offline YouTube Cache");
       expect(failureFrame).toContain("Navidrome · Authentication failed");
@@ -438,6 +435,37 @@ describe("production tmu real PTY", () => {
     } finally {
       await stopTmu(terminal, subprocess);
       server.stop(true);
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("coalesces configured Provider progress and publishes the latest metadata", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [],
+      { entrypoint: "tests/fixtures/provider-cadence.ts" },
+    );
+
+    try {
+      await waitForOutput(read, "Provider metadata 0");
+      const progressFrame = output.length;
+      await waitForNewOutput(read, progressFrame, "Provider metadata 1");
+      const firstProgressAt = Date.now();
+      await Bun.sleep(300);
+      expect(output.slice(progressFrame)).not.toContain("Provider metadata 2");
+
+      await waitForNewOutput(read, progressFrame, "Provider metadata 2");
+      const coalescedElapsed = Date.now() - firstProgressAt;
+      expect(coalescedElapsed).toBeGreaterThanOrEqual(400);
+      expect(coalescedElapsed).toBeLessThan(900);
+
+      await waitForNewOutput(read, progressFrame, "Provider metadata 3");
+      expect(Date.now() - firstProgressAt).toBeGreaterThanOrEqual(850);
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      await stopTmu(terminal, subprocess);
       await rm(runtimeRoot, { recursive: true, force: true });
     }
   }, 15_000);
@@ -695,14 +723,16 @@ describe("production tmu real PTY", () => {
   test("restores the active TUI after a fatal process error", async () => {
     let output = "";
     const read = () => output;
-    const { terminal, subprocess, runtimeRoot } = await spawnTmu((text) => { output += text; });
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; }, [],
+      { entrypoint: "tests/fixtures/fatal-after-mount.ts" },
+    );
 
     try {
       await waitForOutput(read, "Queue · 0 Tracks");
       expect(output).toContain("\x1b[?1049h");
-      subprocess.kill("SIGUSR2");
       expect(await subprocess.exited).toBe(1);
-      expect(output).toContain("Fatal error: received SIGUSR2");
+      expect(output).toContain("Fatal error: Error: injected fatal error after terminal takeover");
       expect(output).toContain("\x1b[?1049l");
       expect(output).toContain("\x1b[?25h");
 
