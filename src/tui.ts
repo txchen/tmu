@@ -5,11 +5,13 @@ import {
   type NavigationTargetId,
   type UiState,
 } from "./domain";
+import { RootInputRouter, createActionRegistry } from "./action-registry";
 import { renderPlaybackProgressLine, renderShellText } from "./renderer";
-import type { AppCoordinator, AppStateChangeReason } from "./coordinator";
+import { AppCoordinator, type AppStateChangeReason, type LegacyTuiController } from "./coordinator";
 
 export type RuntimeApp = {
-  coordinator: AppCoordinator;
+  coordinator: LegacyTuiController;
+  appCoordinator?: AppCoordinator;
 };
 
 export type RenderSchedulerCadence = AppState["config"]["lowPower"];
@@ -367,7 +369,6 @@ export class RenderScheduler {
 
 export class TerminalTui {
   private drewFullFrame = false;
-  private vimChordTimer: unknown | null = null;
 
   constructor(
     private readonly app: RuntimeApp,
@@ -399,6 +400,22 @@ export class TerminalTui {
     });
     scheduler.start();
     scheduler.requestImmediateRedraw();
+    const coordinator = this.app.coordinator;
+    const appCoordinator = this.app.appCoordinator ?? new AppCoordinator(coordinator);
+    const rootRouter = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => coordinator.appState,
+      uiState: {
+        get snapshot() { return coordinator.uiState; },
+        dispatch: (action) => coordinator.dispatchUi(action),
+      },
+      dispatchApp: (intent) => appCoordinator.dispatch(intent),
+      now: () => this.now(),
+      timers: {
+        setTimeout: (callback, delayMs) => this.timers.setTimeout?.(callback, delayMs) ?? setTimeout(callback, delayMs),
+        clearTimeout: (timer) => this.timers.clearTimeout?.(timer) ?? clearTimeout(timer as ReturnType<typeof setTimeout>),
+      },
+    });
 
     const handleResize = () => {
       const columns = this.output.columns;
@@ -422,19 +439,21 @@ export class TerminalTui {
     this.input.on("data", async (data) => {
       scheduler.requestInputRedraw();
       for (const key of splitKeys(data)) {
-        if (this.app.coordinator.uiState.activePrompt) {
-          const handled = await this.handlePromptKey(key);
-          if (handled) continue;
-        }
-
-        if (key === "g") {
-          this.handleVimG();
+        const uiBefore = coordinator.uiState;
+        const requestsQuit = key === "\u0003"
+          || (key === "q" && uiBefore.overlays.length === 0 && !uiBefore.activePrompt);
+        const handled = await rootRouter.route(key);
+        if (handled) {
+          if (requestsQuit) {
+            unsubscribe();
+            scheduler.stop();
+            rootRouter.cancelPendingSequence();
+            resizeOutput.removeListener?.("resize", handleResize);
+            this.output.write("\x1b[?25h\x1b[2J\x1b[H");
+            this.input.setRawMode(false);
+            process.exit(0);
+          }
           continue;
-        }
-
-        if (this.app.coordinator.uiState.pendingVimChord) {
-          this.clearVimChordTimer();
-          this.app.coordinator.dispatchUi({ type: "cancelVimChord" });
         }
 
         const intent = intentFromKey(key);
@@ -443,7 +462,7 @@ export class TerminalTui {
         if (intent.type === "quit") {
           unsubscribe();
           scheduler.stop();
-          this.clearVimChordTimer();
+          rootRouter.cancelPendingSequence();
           resizeOutput.removeListener?.("resize", handleResize);
           this.output.write("\x1b[?25h\x1b[2J\x1b[H");
           this.input.setRawMode(false);
@@ -453,71 +472,12 @@ export class TerminalTui {
     });
   }
 
-  private handleVimG(): void {
-    const now = this.now();
-    const completingChord = Boolean(
-      this.app.coordinator.uiState.pendingVimChord
-      && now <= this.app.coordinator.uiState.pendingVimChord.expiresAtMs,
-    );
-    this.app.coordinator.dispatchUi({
-      type: "pressVimG",
-      atMs: now,
-      identities: this.queueIdentities(),
-    });
-    this.clearVimChordTimer();
-    if (completingChord) return;
-
-    const setTimer = this.timers.setTimeout ?? setTimeout;
-    this.vimChordTimer = setTimer(() => {
-      this.vimChordTimer = null;
-      this.app.coordinator.dispatchUi({ type: "expireVimChord", atMs: this.now() });
-    }, 751);
-  }
-
-  private clearVimChordTimer(): void {
-    if (this.vimChordTimer === null) return;
-    if (this.timers.clearTimeout) {
-      this.timers.clearTimeout(this.vimChordTimer);
-    } else {
-      clearTimeout(this.vimChordTimer as ReturnType<typeof setTimeout>);
-    }
-    this.vimChordTimer = null;
-  }
-
   private now(): number {
     return this.timers.now?.() ?? Date.now();
   }
 
   private queueIdentities() {
     return this.app.coordinator.queueTrackIdentities();
-  }
-
-  private async handlePromptKey(key: string): Promise<boolean> {
-    if (key === "\u0003") return false;
-
-    if (key === "\x1b") {
-      await this.app.coordinator.dispatch({ type: "cancelPrompt" });
-      return true;
-    }
-
-    if (key === "\r") {
-      await this.app.coordinator.dispatch({ type: "submitPrompt" });
-      return true;
-    }
-
-    if (key === "\x7f" || key === "\b") {
-      const current = this.app.coordinator.uiState.promptInput;
-      await this.app.coordinator.dispatch({ type: "setPromptInput", value: current.slice(0, -1) });
-      return true;
-    }
-
-    if (isPrintableKey(key)) {
-      const current = this.app.coordinator.uiState.promptInput;
-      await this.app.coordinator.dispatch({ type: "setPromptInput", value: `${current}${key}` });
-      return true;
-    }
-
-    return false;
   }
 
   private drawPlaybackProgress(): void {
@@ -588,10 +548,6 @@ function splitKeys(data: string | Buffer): string[] {
   const raw = data.toString();
   if (raw.startsWith("\x1b[")) return [raw];
   return [...raw];
-}
-
-function isPrintableKey(key: string): boolean {
-  return key.length === 1 && key >= " " && key !== "\x7f";
 }
 
 function normalizeCadence(value: number): number {

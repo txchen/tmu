@@ -1,4 +1,4 @@
-import { AppCoordinator } from "./coordinator";
+import { AppCoordinator, LegacyTuiController } from "./coordinator";
 import {
   checkDependencyHealth,
   checkHelperDependencyHealth,
@@ -41,7 +41,10 @@ export type TmuRuntimeOptions = {
   startPlayer?: boolean;
 };
 
-export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoordinator } {
+export function createTmuApp(options: TmuAppOptions = {}): {
+  coordinator: LegacyTuiController;
+  appCoordinator: AppCoordinator;
+} {
   const config = createDefaultTmuConfig(options.config);
   const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
   const providers = createDefaultProviders({
@@ -59,7 +62,7 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     },
     offlineYouTubeCache: config.offlineYouTubeCache,
   });
-  const coordinator = new AppCoordinator({
+  const coordinator = new LegacyTuiController({
     appState: createInitialAppState(providers, {
       config,
       configPath: options.configPath,
@@ -76,10 +79,14 @@ export function createTmuApp(options: TmuAppOptions = {}): { coordinator: AppCoo
     youtubeDownloader: options.youtubeDownloader,
   });
 
-  return { coordinator };
+  return { coordinator, appCoordinator: new AppCoordinator(coordinator) };
 }
 
-export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise<{ coordinator: AppCoordinator; config: TmuConfig }> {
+export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise<{
+  coordinator: LegacyTuiController;
+  appCoordinator: AppCoordinator;
+  config: TmuConfig;
+}> {
   const loaded = await loadTmuConfig({ path: options.configPath });
   let dependencyHealth = await checkDependencyHealth(loaded.config, {
     runner: options.dependencyRunner,
