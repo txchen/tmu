@@ -7,7 +7,7 @@ import {
 } from "./dependencies";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { BunMpvProcessAdapter, MpvPlayer, NoopPlayer } from "./player";
+import { NodeMpvProcessAdapter, MpvPlayer, NoopPlayer } from "./player";
 import { createDefaultProviders } from "./providers";
 import { MemoryQueue } from "./queue";
 import { createInitialAppState, createInitialUiState } from "./state";
@@ -77,7 +77,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       command: loaded.config.helpers.mpv,
       ipcPath: join(tmpdir(), `tmu-mpv-${process.pid}-${Date.now()}.sock`),
       workDir: tmpdir(),
-      adapter: new BunMpvProcessAdapter(),
+      adapter: new NodeMpvProcessAdapter(),
       commandTimeoutMs: loaded.config.dependencyPolicy.checkTimeoutMs,
       positionPollMs: loaded.config.lowPower.playbackTickMs,
     })
