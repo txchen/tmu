@@ -16,7 +16,9 @@ export type UiStateAction =
   | { type: "resize"; columns: number; rows: number; queueIdentities?: readonly TrackIdentity[] }
   | { type: "switchTab"; tab: UiState["activeTab"] }
   | { type: "setLibraryQuery"; query: string }
+  | { type: "setLibraryInputFocus"; focused: boolean }
   | { type: "setDownloaderInput"; value: string }
+  | { type: "setDownloaderInputFocus"; focused: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
   | { type: "openOverlay"; kind: "shortcut-help" | "command-palette" }
   | { type: "dismissOverlay" }
@@ -32,8 +34,8 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     queueScroll: 0,
     overlays: [],
     selectedQueueIdentity: null,
-    library: { query: "", selectedIndex: 0, scroll: 0 },
-    downloader: { urlInput: "", selectedBatchIndex: 0, scroll: 0 },
+    library: { query: "", inputFocused: true, selectedIndex: 0, scroll: 0 },
+    downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
     pendingVimChord: null,
@@ -69,8 +71,12 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return { ...state, activeTab: action.tab };
     case "setLibraryQuery":
       return { ...state, library: { ...state.library, query: action.query, selectedIndex: 0, scroll: 0 } };
+    case "setLibraryInputFocus":
+      return { ...state, library: { ...state.library, inputFocused: action.focused } };
     case "setDownloaderInput":
       return { ...state, downloader: { ...state.downloader, urlInput: action.value } };
+    case "setDownloaderInputFocus":
+      return { ...state, downloader: { ...state.downloader, inputFocused: action.focused } };
     case "selectQueue": {
       const index = clampIndex(action.index, action.identities.length);
       return {

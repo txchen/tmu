@@ -24,13 +24,19 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("[2 Library]");
     expect(terminal.lastFrame()).toContain("Cache Search: cached");
 
+    await terminal.stdin.write("\x1b");
     await terminal.stdin.write("3");
-    await terminal.stdin.write("https://youtu.be/abc");
+    await terminal.stdin.write("https://youtu.be/abc123");
     expect(terminal.lastFrame()).toContain("[3 YouTube Downloader]");
-    expect(terminal.lastFrame()).toContain("https://youtu.be/abc");
+    expect(terminal.lastFrame()).toContain("https://youtu.be/abc123");
 
+    await terminal.stdin.write("\x1b");
     await terminal.stdin.write("2");
     expect(terminal.lastFrame()).toContain("Cache Search: cached");
+
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Library Help");
   });
 
   test("keeps core Playback queue actions available after provider narrowing", async () => {
@@ -60,6 +66,12 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Playback Help");
     await terminal.stdin.write("\x1b");
+
+    await terminal.stdin.write("2");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("s");
+    expect(coordinator.appState.playback.status).toBe("stopped");
+    await terminal.stdin.write("1");
 
     await terminal.stdin.write("C");
     expect(terminal.lastFrame()).toContain("Clear Queue permanently?");
