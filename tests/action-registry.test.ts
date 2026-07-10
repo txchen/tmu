@@ -829,6 +829,43 @@ describe("root input router", () => {
     await router.route("g");
     expect(ui.snapshot.pendingVimChord).toBeNull();
     expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(0);
+
+    ui.dispatch({ type: "dismissOverlay" });
+    current.appState.globalSearch = {
+      requestId: 1, query: "mix", providerFilter: "all", resultTypeFilter: "all",
+      providers: { local: { status: "success", results: [
+        { providerId: "local", providerLabel: "Local", type: "track", id: "one", label: "One" },
+        { providerId: "local", providerLabel: "Local", type: "track", id: "two", label: "Two" },
+      ] } },
+    };
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "mix", selectedIdentity: null,
+      selectedResultIndex: 3, scroll: 0, providerLocation: { providerId: null, path: [] },
+    } });
+    now = 4_000;
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toEqual({ key: "g", expiresAtMs: 4_750 });
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(3);
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(0);
+
+    ui.dispatch({ type: "dismissOverlay" });
+    current.appState.globalSearch = { requestId: 2, query: "", providerFilter: "all", resultTypeFilter: "all", providers: {} };
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "shortcut-help", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 3, scroll: 0,
+    } });
+    now = 5_000;
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toEqual({ key: "g", expiresAtMs: 5_750 });
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(3);
+    await router.route("x");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(3);
+    await router.route("g");
+    await router.route("g");
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(0);
   });
 
   test("derives executable navigation bindings from the registry", async () => {

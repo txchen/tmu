@@ -85,6 +85,10 @@ export class RootInputRouter {
     });
     const uiOperation = requestedUiOperation
       ?? (resolvedBinding?.intent?.type === "routeUi" ? resolvedBinding.intent.operation : null);
+    if (this.uiState.snapshot.pendingVimChord && !(uiOperation === "first" && key === "g")) {
+      this.cancelOverlayChord();
+      if (key === "\x1b") return true;
+    }
     if (overlay?.kind === "music-picker" && overlay.focus === "filter") {
       if (key === "\x1b" || key === "\r" || key === "\t") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
@@ -152,7 +156,7 @@ export class RootInputRouter {
       const visibleRows = overlayContentRows(overlay.kind,
         this.uiState.snapshot.terminal.tier, this.uiState.snapshot.terminal.columns,
         this.uiState.snapshot.terminal.rows);
-      if (this.routeOverlayRowMovement(uiOperation, actions.length, visibleRows)) return true;
+      if (this.routeOverlayRowMovement(uiOperation, actions.length, visibleRows, key)) return true;
       if (overlay.kind === "shortcut-help" && uiOperation === "help-filter") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
         return true;
@@ -205,12 +209,6 @@ export class RootInputRouter {
       }
       return true;
     }
-    if (this.uiState.snapshot.pendingVimChord) {
-      this.clearPendingChordTimer();
-      this.uiState.dispatch({ type: "cancelVimChord" });
-      if (key === "\x1b") return true;
-    }
-
     const visibleRows = visibleQueueRows(this.uiState.snapshot, this.appState());
     const queueFocused = this.uiState.snapshot.focusedPane === "queue"
       && this.uiState.snapshot.activeTargetId === "queue";
@@ -287,22 +285,7 @@ export class RootInputRouter {
     const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    if (uiOperation === "first" && key === "g") {
-      const completing = Boolean(this.uiState.snapshot.pendingVimChord
-        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
-      if (completing) {
-        this.routeOverlayRowMovement("first", rows.length, visibleRows);
-      } else {
-        this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
-        this.clearPendingChordTimer();
-        this.pendingChordTimer = this.timers.setTimeout(() => {
-          this.pendingChordTimer = null;
-          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
-        }, 751);
-      }
-      return true;
-    }
-    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
+    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows, key)) return true;
     this.cancelOverlayChord();
     if (uiOperation === "back") {
       const location = overlay.providerLocation ?? { providerId: null, path: [] };
@@ -357,7 +340,7 @@ export class RootInputRouter {
   ): Promise<boolean> {
     const terminal = this.uiState.snapshot.terminal;
     const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
-    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows)) return true;
+    if (this.routeOverlayRowMovement(uiOperation, rows.length, visibleRows, key)) return true;
     if (uiOperation === "retry") {
       const row = rows[overlay.selectedResultIndex ?? 0];
       const providerId = globalSearchRetryProviderId(row);
@@ -384,7 +367,21 @@ export class RootInputRouter {
     uiOperation: UiRouteOperation | null,
     rowCount: number,
     visibleRows: number,
+    key?: string,
   ): boolean {
+    if (uiOperation === "first" && key === "g") {
+      const completing = Boolean(this.uiState.snapshot.pendingVimChord
+        && this.now() <= this.uiState.snapshot.pendingVimChord.expiresAtMs);
+      if (!completing) {
+        this.uiState.dispatch({ type: "pressVimG", atMs: this.now(), identities: [] });
+        this.clearPendingChordTimer();
+        this.pendingChordTimer = this.timers.setTimeout(() => {
+          this.pendingChordTimer = null;
+          this.uiState.dispatch({ type: "expireVimChord", atMs: this.now() });
+        }, 751);
+        return true;
+      }
+    }
     const movement = movementForUiOperation(uiOperation, visibleRows);
     if (!movement) return false;
     this.cancelOverlayChord();
