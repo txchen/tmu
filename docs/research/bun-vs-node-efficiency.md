@@ -6,29 +6,41 @@ Research for **whether TMU should switch its runtime from Bun to Node.js to redu
 
 ## Conclusion
 
-**The playback-controller experiment favors Node.js for CPU efficiency.** In a complete 172-second playback with the same track, mpv options, Unix-socket IPC, JSON messages, and one-second position polling, Node used 0.123 controller CPU-seconds versus Bun's 1.051 seconds—about 88% less. Including mpv, Node used 3.099 CPU-seconds versus Bun's 3.973 seconds—about 22% less total CPU. The gap is large enough to justify evaluating a complete Node port.
+**The production playback benchmark favors Node.js for CPU efficiency.** Across three alternating complete 172-second runs, median controller CPU was 0.131 seconds under Node versus 1.028 seconds under Bun—about 87% less. Median controller-plus-mpv CPU was 2.291 seconds versus 3.214 seconds—about 29% less.
 
-Node did use more controller memory: 52,952 KiB peak RSS versus Bun's 46,392 KiB, about 14% more. Energy was not measured directly because this machine exposes no powercap counter. Lower CPU work over the same elapsed time is evidence pointing toward lower energy use, but it is not a joule measurement.
+Median controller peak RSS was effectively even: 93,292 KiB under Node and 93,336 KiB under Bun. Energy was not measured because this machine exposes no powercap counter. CPU and memory are reported separately, and no direct energy claim follows from them.
 
 TMU has subsequently decided to migrate the complete runtime to Node and benchmark the real TUI as validation rather than as a migration gate ([ADR 0002](../adr/0002-use-node-for-runtime-and-distribution.md)). The experiment establishes that Node is substantially more CPU-efficient for TMU's core mpv-control loop; it does not yet establish the size of the benefit once Vue TUI rendering, persistence, user input, and downloads are included.
 
-Before the migration, TMU used runtime-specific production APIs (`Bun.spawn`, `Bun.sleep`, and `Bun.write`), so moving to Node required a real port rather than a runtime flag change.
+The retained `npm run benchmark:playback` command requires Node. Bun was used only to record the migration comparison below from the same built production mpv-control implementation.
 
 ## Controlled playback experiment
 
-Run on 2026-07-10 with Bun 1.3.11, Node.js 24.13.0, mpv 0.41.0, and the same 172.241-second local WebM Track. Both controllers came from the same throwaway source and performed the same operations: spawn mpv, connect to its Unix socket, send a `get_property time-pos` JSON request once per second, consume replies, and wait for natural EOF. mpv used null audio output to remove audio-device variability. Both runs completed naturally in about 172.5 seconds and sent 171 polls.
+Run on 2026-07-10 on `vibe97`, on AC power in balanced mode, with Bun 1.3.11, Node.js 24.13.0, mpv 0.41.0, and cached Track `mLW35YMzELE`. Runs alternated Bun/Node. Production `MpvPlayer` used Unix-socket IPC, one-second position polling, null audio, and natural EOF. Every retained run completed.
 
-| Metric | Node.js | Bun | Node difference |
+| Median metric (three runs) | Node.js | Bun | Node difference |
 |---|---:|---:|---:|
-| Controller CPU time | 0.123 s | 1.051 s | 88% lower |
-| Controller user CPU | 0.108 s | 0.758 s | 86% lower |
-| Controller system CPU | 0.015 s | 0.293 s | 95% lower |
-| Controller + mpv CPU | 3.099 s | 3.973 s | 22% lower |
-| Controller peak RSS | 52,952 KiB | 46,392 KiB | 14% higher |
-| Voluntary context switches | 419 | 15,563 | 97% lower |
-| Involuntary context switches | 85 | 2,912 | 97% lower |
+| Controller CPU time | 0.130731 s | 1.028252 s | 87% lower |
+| mpv CPU time | 2.160 s | 2.200 s | 2% lower |
+| Controller + mpv CPU | 2.290731 s | 3.213720 s | 29% lower |
+| Controller peak RSS | 93,292 KiB | 93,336 KiB | effectively even |
+| mpv peak RSS | 58,144 KiB | 58,028 KiB | effectively even |
+| Controller voluntary context switches | 434 | 14,821 | 97% lower |
+| Controller involuntary context switches | 31 | 2,086 | 99% lower |
+| mpv voluntary context switches | 4,465 | 4,481 | effectively even |
+| mpv involuntary context switches | 188 | 159 | 18% higher |
+| Elapsed time | 172.424 s | 172.408 s | effectively even |
 
-The runs were performed in reverse order after discarding an initial instrumented pair whose in-process `/proc` sampling introduced runtime-dependent filesystem overhead. In the retained pair, controller metrics came from `process.cpuUsage()` and `process.resourceUsage()` after playback; Bash accounted for controller-plus-child CPU externally. This is one paired experiment, not a statistical benchmark, but the controller CPU gap is much larger than normal run-to-run noise would plausibly explain.
+Raw retained results follow. CPU values are seconds; RSS is KiB; context switches are voluntary/involuntary. `C` is controller and `M` is mpv. Controller metrics came from runtime process APIs and mpv metrics from Linux `/proc` at EOF. An extra pair with incomplete terminal capture was discarded.
+
+| Order | Runtime | C user/system/total | M user/system/total | Combined | C RSS | M RSS | C ctx | M ctx | Elapsed | Complete |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| 1 | Bun | .817042/.196678/1.013720 | 2.04/.16/2.20 | 3.213720 | 100268 | 58028 | 14714/2317 | 4506/159 | 172.408000 | yes |
+| 2 | Node | .114655/.016076/.130731 | 1.99/.17/2.16 | 2.290731 | 100312 | 58080 | 431/31 | 4493/193 | 172.410599 | yes |
+| 3 | Bun | .813336/.214916/1.028252 | 2.03/.17/2.20 | 3.228252 | 91596 | 58120 | 14821/2086 | 4481/239 | 172.425895 | yes |
+| 4 | Node | .117924/.021114/.139038 | 2.02/.18/2.20 | 2.339038 | 92452 | 58188 | 434/35 | 4465/188 | 172.430924 | yes |
+| 5 | Bun | .773273/.255334/1.028607 | 2.03/.14/2.17 | 3.198607 | 93336 | 57928 | 15099/2050 | 4456/108 | 172.392374 | yes |
+| 6 | Node | .115233/.012401/.127634 | 1.97/.15/2.12 | 2.247634 | 93292 | 58144 | 436/15 | 4458/95 | 172.423539 | yes |
 
 ## What the available evidence establishes
 

@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: { cli: "src/cli.ts" },
+  entry: { cli: "src/cli.ts", "playback-benchmark": "src/playback-benchmark-cli.ts" },
   format: "esm",
   platform: "node",
   target: "node24",
