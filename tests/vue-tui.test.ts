@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { afterEach, describe, expect, test } from "vitest";
 import { cleanup, render } from "@vue-tui/testing";
 import { createTmuApp } from "../src/app";
 import { AppCoordinator } from "../src/coordinator";
@@ -272,9 +273,10 @@ describe("TMU top-level surface smoke", () => {
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
-    await Bun.sleep(1);
+    await sleep(1);
   }
   throw new Error("timed out waiting for TUI state");
 }

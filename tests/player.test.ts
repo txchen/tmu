@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { afterEach, describe, expect, test } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -291,7 +292,7 @@ describe("MpvPlayer", () => {
 
     await player.start();
     await player.load({ kind: "file", path: "/music/amber.flac" });
-    await Bun.sleep(20);
+    await sleep(20);
 
     expect(adapter.ipc.sent).not.toContainEqual({ command: ["observe_property", 1, "time-pos"], request_id: 1 });
     expect(adapter.ipc.sent).toContainEqual(
@@ -301,7 +302,7 @@ describe("MpvPlayer", () => {
 
     await player.stop();
     const pollCountAfterStop = countTimePositionPolls(adapter.ipc.sent);
-    await Bun.sleep(20);
+    await sleep(20);
 
     expect(countTimePositionPolls(adapter.ipc.sent)).toBe(pollCountAfterStop);
   });
@@ -317,11 +318,11 @@ describe("MpvPlayer", () => {
 
     await player.start();
     await player.load({ kind: "file", path: "/music/amber.flac" });
-    await Bun.sleep(900);
+    await sleep(900);
 
     expect(countTimePositionPolls(adapter.ipc.sent)).toBe(1);
 
-    await Bun.sleep(200);
+    await sleep(200);
 
     expect(countTimePositionPolls(adapter.ipc.sent)).toBeGreaterThanOrEqual(2);
     await player.stop();
@@ -537,7 +538,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<v
   const startedAt = performance.now();
   while (!predicate()) {
     if (performance.now() - startedAt > timeoutMs) throw new Error("timed out waiting for playback state");
-    await Bun.sleep(25);
+    await sleep(25);
   }
 }
 

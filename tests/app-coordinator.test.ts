@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { describe, expect, test } from "vitest";
 import { AppCoordinator } from "../src/coordinator";
 import { PlaybackFailure, type PlaybackLocator, type Provider, type Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
@@ -561,9 +562,10 @@ describe("AppCoordinator with the narrow Provider", () => {
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
     if (predicate()) return;
-    await Bun.sleep(1);
+    await sleep(1);
   }
   throw new Error("timed out waiting for app state");
 }
