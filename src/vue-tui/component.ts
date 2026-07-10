@@ -255,7 +255,7 @@ function queuePane(
       ? h(Box, { flexDirection: "column" }, () => [
           h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Queue is empty"),
           h(Text, { dimColor: presentation.dimmed }, () => "/ Global Search"),
-          h(Text, { dimColor: presentation.dimmed }, () => "o Local music"),
+          h(Text, { dimColor: presentation.dimmed }, () => "o Music Providers"),
           h(Text, { dimColor: presentation.dimmed }, () => "u YouTube URL Download"),
         ])
       : entries.map((entry, visibleIndex) => {

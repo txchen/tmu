@@ -542,9 +542,24 @@ describe("root input router", () => {
     });
 
     await router.route("q");
+    await router.route("g");
 
-    expect(ui.snapshot.overlays.at(-1)?.query).toBe("q");
+    expect(ui.snapshot.overlays.at(-1)?.query).toBe("qg");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
     expect(intents).toEqual([]);
+
+    await router.route("\x15");
+    await router.route("\t");
+    expect(ui.snapshot.overlays.at(-1)?.focus).toBe("results");
+    await router.route("G");
+    const lastIndex = ui.snapshot.overlays.at(-1)?.selectedResultIndex;
+    expect(lastIndex).toBeGreaterThan(0);
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toEqual({ key: "g", expiresAtMs: 1_750 });
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(lastIndex);
+    await router.route("g");
+    expect(ui.snapshot.pendingVimChord).toBeNull();
+    expect(ui.snapshot.overlays.at(-1)?.selectedResultIndex).toBe(0);
   });
 
   test("opens YouTube URL entry when idle and current App State progress when active", async () => {

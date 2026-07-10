@@ -425,7 +425,7 @@ describe("production vue-tui", () => {
     const emptyTerminal = await render(createTmuRoot({ coordinator: empty.coordinator }), { columns: 80, rows: 20 });
     expect(emptyTerminal.lastFrame()).toContain("Queue is empty");
     expect(emptyTerminal.lastFrame()).toContain("/ Global Search");
-    expect(emptyTerminal.lastFrame()).toContain("o Local music");
+    expect(emptyTerminal.lastFrame()).toContain("o Music Providers");
     expect(emptyTerminal.lastFrame()).toContain("u YouTube URL Download");
     expect(emptyTerminal.lastFrame()).not.toContain("Enter Play Next");
     expect(emptyTerminal.lastFrame()).not.toContain("x Remove");
@@ -564,9 +564,23 @@ describe("production vue-tui", () => {
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write(":");
+    await terminal.stdin.write("toggleg");
+    expect(coordinator.uiState.overlays.at(-1)).toMatchObject({ query: "toggleg" });
+    expect(coordinator.uiState.pendingVimChord).toBeNull();
+    await terminal.stdin.write("\x15");
     await terminal.stdin.write("toggle");
     expect(terminal.lastFrame()).toContain("Toggle Shuffle");
     expect(terminal.lastFrame()).toContain("Toggle Repeat All");
+    await terminal.stdin.write("\t");
+    expect(coordinator.uiState.overlays.at(-1)?.focus).toBe("results");
+    await terminal.stdin.write("G");
+    const lastPaletteIndex = coordinator.uiState.overlays.at(-1)?.selectedResultIndex;
+    expect(lastPaletteIndex).toBeGreaterThan(0);
+    await terminal.stdin.write("g");
+    expect(terminal.lastFrame()).toContain("g… Go to first");
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(lastPaletteIndex);
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.overlays.at(-1)?.selectedResultIndex).toBe(0);
     await terminal.stdin.write("\x1b[B");
     await terminal.stdin.write("\r");
 
