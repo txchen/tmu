@@ -149,15 +149,21 @@ describe("AppCoordinator with the narrow Provider", () => {
     const playbackBefore = structuredClone(coordinator.appState.playback);
     const loadsBefore = player.loaded.length;
 
+    coordinator.dispatchUi({ type: "setDownloaderInput", value: "https://youtube.com/watch?v=One00000001" });
     await coordinator.dispatch({
       type: "downloadOperation",
       operation: "start",
       url: "https://youtube.com/watch?v=One00000001",
     });
     await waitFor(() => executed.length === 1);
+    expect(coordinator.uiState.downloader.urlInput).toBe("https://youtube.com/watch?v=One00000001");
+    expect(coordinator.appState.downloads.acceptedSubmission).toEqual({
+      id: 1, input: "https://youtube.com/watch?v=One00000001",
+    });
     expect(coordinator.appState.queue).toEqual(queueBefore);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
 
+    coordinator.dispatchUi({ type: "setDownloaderInput", value: "https://youtube.com/playlist?list=PL1" });
     await coordinator.dispatch({
       type: "downloadOperation",
       operation: "start",
@@ -166,16 +172,50 @@ describe("AppCoordinator with the narrow Provider", () => {
     await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
     expect(executed).toEqual(["https://youtube.com/watch?v=One00000001"]);
     expect(coordinator.appState.downloads.confirmation).toEqual({ title: "Road Trip", itemCount: 12 });
+    expect(coordinator.uiState.downloader.urlInput).toBe("https://youtube.com/playlist?list=PL1");
 
     await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-playlist" });
     await waitFor(() => coordinator.appState.downloads.summary !== undefined);
     expect(executed).toEqual(["https://youtube.com/watch?v=One00000001", batch.sourceUrl]);
+    expect(coordinator.appState.downloads.acceptedSubmission).toEqual({
+      id: 2, input: "https://youtube.com/playlist?list=PL1",
+    });
     expect(coordinator.appState.downloads.summary).toEqual({
       downloaded: 2, alreadyCached: 1, failed: 1, cancelled: 0,
     });
     expect(coordinator.appState.queue).toEqual(queueBefore);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
     expect(player.loaded).toHaveLength(loadsBefore);
+  });
+
+  test("Downloader keeps editable URL input after validation failure or cancelled playlist confirmation", async () => {
+    const { coordinator } = harness();
+    const playlistUrl = "https://youtube.com/playlist?list=PL1";
+    const rejectedUrl = "https://example.com/not-youtube";
+    const prepared = {
+      kind: "confirmation-required" as const,
+      confirmation: { title: "Road Trip", itemCount: 12 },
+      confirm: () => ({ sourceUrl: playlistUrl, kind: "playlist" as const, entries: [] }),
+      cancel: () => ({ kind: "cancelled" as const }),
+    };
+    const appState = createInitialAppState(coordinator.appState.providers);
+    const next = new AppCoordinator({
+      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new RecordingPlayer(),
+      prepareDownloadBatch: async (url) => url === rejectedUrl
+        ? { kind: "rejected", message: "YouTube Downloader rejects non-YouTube URLs" }
+        : prepared,
+    });
+
+    next.dispatchUi({ type: "setDownloaderInput", value: rejectedUrl });
+    await next.dispatch({ type: "downloadOperation", operation: "start", url: rejectedUrl });
+    await waitFor(() => next.appState.lastEvent.includes("rejects"));
+    expect(next.uiState.downloader.urlInput).toBe(rejectedUrl);
+
+    next.dispatchUi({ type: "setDownloaderInput", value: playlistUrl });
+    await next.dispatch({ type: "downloadOperation", operation: "start", url: playlistUrl });
+    await waitFor(() => next.appState.downloads.confirmation !== undefined);
+    await next.dispatch({ type: "downloadOperation", operation: "cancel-playlist" });
+    expect(next.uiState.downloader.urlInput).toBe(playlistUrl);
   });
 
   test("Download Pipeline is FIFO, removes pending work, and continues after active-batch cancellation", async () => {

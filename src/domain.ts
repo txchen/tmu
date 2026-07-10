@@ -153,7 +153,12 @@ export type AppState = {
     lines: string[];
     confirmation?: { title: string; itemCount: number };
     summary?: { downloaded: number; alreadyCached: number; failed: number; cancelled: number };
-    activeBatch?: { id: number; sourceUrl: string; kind: "single" | "playlist" };
+    activeBatch?: {
+      id: number;
+      sourceUrl: string;
+      kind: "single" | "playlist";
+      activeTrack?: { index: number; title?: string; stableId?: string };
+    };
     pendingBatches: Array<{ id: number; sourceUrl: string; kind: "single" | "playlist" }>;
     summaries: Array<{
       id: number;
@@ -165,6 +170,7 @@ export type AppState = {
     }>;
     quitConfirmationRequired: boolean;
     preparingSubmissions: number;
+    acceptedSubmission?: { id: number; input: string };
   };
   cacheConfirmation?: {
     kind: "delete-track" | "cleanup-incomplete";
@@ -223,6 +229,7 @@ export type AppIntent =
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" | "cancel-active" | "confirm-quit" | "cancel-quit" }
   | { type: "downloadOperation"; operation: "remove-pending"; batchId: number }
+  | { type: "downloadOperation"; operation: "acknowledge-accepted"; submissionId: number }
   | { type: "downloadOperation"; operation: "confirm-playlist" | "cancel-playlist" }
   | {
     type: "playerOperation";

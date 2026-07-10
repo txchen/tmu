@@ -21,6 +21,7 @@ export type UiStateAction =
   | { type: "setCacheHealthSelection"; index: number; resultCount: number }
   | { type: "setDownloaderInput"; value: string }
   | { type: "setDownloaderInputFocus"; focused: boolean }
+  | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
   | { type: "openOverlay"; kind: "shortcut-help" | "command-palette" }
   | { type: "dismissOverlay" }
@@ -89,6 +90,11 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return { ...state, downloader: { ...state.downloader, urlInput: action.value } };
     case "setDownloaderInputFocus":
       return { ...state, downloader: { ...state.downloader, inputFocused: action.focused } };
+    case "setDownloaderBatchSelection":
+      return {
+        ...state,
+        downloader: { ...state.downloader, selectedBatchIndex: clampIndex(action.index, action.resultCount) },
+      };
     case "selectQueue": {
       const index = clampIndex(action.index, action.identities.length);
       return {
