@@ -130,7 +130,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
   const tier = uiState.terminal.tier;
   const current = appState.queue.entries[appState.queue.currentIndex];
   const overlay = uiState.overlays.at(-1);
-  const underlyingPresentation = { ...presentation, dimmed: Boolean(overlay) };
+  const underlyingPresentation = { ...presentation, dimmed: Boolean(overlay || uiState.pendingConfirmation) };
 
   if (tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
@@ -154,6 +154,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
   const start = Math.min(uiState.scrollByPane.queue, Math.max(0, appState.queue.entries.length - visibleRows));
   const entries = appState.queue.entries.slice(start, start + visibleRows);
   const currentState = playingTrackState(current, appState.playback);
+  const hasLayer = Boolean(overlay || uiState.pendingConfirmation);
   const footer = footerText(
     tier,
     uiState.pendingVimChord !== null,
@@ -174,7 +175,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
     position: "relative",
   }, () => [
     h(Box, { flexDirection: "row", justifyContent: "space-between", width: "100%" }, () => [
-      h(Text, { bold: true, dimColor: Boolean(overlay), wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
+      h(Text, { bold: true, dimColor: hasLayer, wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
       tier === "narrow" ? null : h(Text, { dimColor: true, wrap: "truncate-start" }, () => settings),
     ]),
     tier === "narrow"
@@ -183,7 +184,13 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
     diagnostic ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => `! ${diagnostic}`) : null,
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay, snapshot, registry, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
-    uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.kind, uiState.pendingConfirmation.choice) : null,
+    uiState.pendingConfirmation ? confirmationView(
+      uiState.pendingConfirmation.kind,
+      uiState.pendingConfirmation.choice,
+      tier,
+      uiState.terminal.columns,
+      uiState.terminal.rows,
+    ) : null,
   ]);
 }
 
@@ -402,8 +409,14 @@ function overlayView(
   const visibleRows = overlay.kind === "music-picker"
     ? rows.slice(overlay.scroll, overlay.scroll + contentRows)
     : discoveryRows.slice(overlay.scroll, overlay.scroll + contentRows);
+  const locationSegment = overlay.providerLocation?.path.at(-1);
+  const locationDetail = locationSegment
+    ? "path" in locationSegment ? locationSegment.path
+      : "id" in locationSegment ? locationSegment.id
+        : "query" in locationSegment ? locationSegment.query : locationSegment.kind
+    : "";
   const location = overlay.providerLocation?.providerId
-    ? `${overlay.providerLocation.providerId}${overlay.providerLocation.path.length ? ` · ${overlay.providerLocation.path.at(-1)}` : ""}`
+    ? `${overlay.providerLocation.providerId}${locationDetail ? ` · ${locationDetail}` : ""}`
     : "Providers";
   return h(Box, {
     flexDirection: "column",
@@ -511,9 +524,21 @@ const CONFIRMATION_COPY: Record<ConfirmationKind, {
   },
 };
 
-function confirmationView(kind: ConfirmationKind, choice: "cancel" | "confirm") {
+function confirmationView(
+  kind: ConfirmationKind,
+  choice: "cancel" | "confirm",
+  tier: ResponsiveTier,
+  columns: number,
+  rows: number,
+) {
   const copy = CONFIRMATION_COPY[kind];
-  return h(Box, { flexDirection: "column", borderStyle: "single", paddingX: 1 }, () => [
+  const geometry = overlayGeometry("confirmation", tier, columns, rows);
+  return h(Box, {
+    flexDirection: "column", borderStyle: "single", paddingX: 1,
+    width: geometry.width, height: geometry.height, position: "absolute",
+    left: Math.max(0, Math.floor((columns - geometry.width) / 2)),
+    top: Math.max(0, Math.floor((rows - geometry.height) / 2)),
+  }, () => [
     h(Text, { bold: true }, () => copy.title),
     h(Text, () => copy.detail),
     h(Text, { inverse: choice === "cancel" }, () => choice === "cancel" ? `[${copy.cancel}]  ${copy.action}` : `${copy.cancel}  [${copy.action}]`),

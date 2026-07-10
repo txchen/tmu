@@ -10,9 +10,18 @@ export type NavigationTargetId =
 
 export type FocusedPane = "targets" | "content" | "queue";
 export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
+export type ProviderId = "local" | "navidrome" | "offline-youtube-cache";
+export type ProviderNavigationSegment =
+  | { kind: "local-directory"; path: string }
+  | { kind: "artists" }
+  | { kind: "artist"; id: string }
+  | { kind: "album"; id: string }
+  | { kind: "playlists" }
+  | { kind: "playlist"; id: string }
+  | { kind: "search"; query: string };
 export type ProviderLocation = {
-  providerId: NavigationTargetId | null;
-  path: readonly string[];
+  providerId: ProviderId | null;
+  path: readonly ProviderNavigationSegment[];
 };
 export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
 

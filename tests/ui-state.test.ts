@@ -110,7 +110,7 @@ describe("UI State reducer", () => {
     state = reduceUiState(state, { type: "setFilter", filterText: "Tracks" });
     state = reduceUiState(state, {
       type: "setProviderLocation",
-      location: { providerId: "local", path: ["albums"] },
+      location: { providerId: "local", path: [{ kind: "album", id: "albums" }] },
     });
     state = reduceUiState(state, { type: "syncQueue", identities: [alpha, beta], preferredIdentity: beta });
     state = reduceUiState(state, { type: "setScroll", pane: "queue", offset: 1 });
@@ -122,7 +122,7 @@ describe("UI State reducer", () => {
         focus: "search",
         query: "new query",
         filterText: "Albums",
-        providerLocation: { providerId: "navidrome", path: ["artist:1"] },
+        providerLocation: { providerId: "navidrome", path: [{ kind: "artist", id: "1" }] },
         selectedIdentity: alpha,
         scroll: 8,
       },
@@ -144,7 +144,7 @@ describe("UI State reducer", () => {
     expect(state.focusedPane).toBe("queue");
     expect(state.promptInput).toBe("prior query");
     expect(state.filterText).toBe("Tracks");
-    expect(state.providerLocation).toEqual({ providerId: "local", path: ["albums"] });
+    expect(state.providerLocation).toEqual({ providerId: "local", path: [{ kind: "album", id: "albums" }] });
     expect(state.selectedQueueIdentity).toEqual(beta);
     expect(state.selectedQueueIndex).toBe(0);
     expect(state.scrollByPane.queue).toBe(0);

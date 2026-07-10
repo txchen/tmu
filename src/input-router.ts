@@ -86,13 +86,13 @@ export class RootInputRouter {
     if (overlay?.kind === "music-picker" && overlay.focus === "filter") {
       if (key === "\x1b" || key === "\r" || key === "\t") {
         this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
-      } else if (key === "p") {
+      } else if (uiOperation === "cycle-provider-filter") {
         const providerIds = ["all", ...Object.values(this.appState().providers)
           .filter((provider) => provider.search && provider.getNavigationRoot().visible)
           .map((provider) => provider.id)];
         const current = providerIds.indexOf(overlay.providerFilter ?? "all");
         this.uiState.dispatch({ type: "setSearchProviderFilter", providerId: providerIds[(current + 1) % providerIds.length] ?? "all" });
-      } else if (key === "t") {
+      } else if (uiOperation === "cycle-result-type-filter") {
         const types = ["all", "track", "artist", "album", "playlist"] as const;
         const current = types.indexOf(overlay.resultTypeFilter ?? "all");
         this.uiState.dispatch({ type: "setSearchResultTypeFilter", resultType: types[(current + 1) % types.length] ?? "all" });
@@ -359,7 +359,7 @@ export class RootInputRouter {
       if (selected.kind === "local-directory") {
         this.uiState.dispatch({
           type: "setProviderLocation",
-          location: { providerId: location.providerId, path: [...location.path, selected.id] },
+          location: { providerId: "local", path: [...location.path, { kind: "local-directory", path: selected.id }] },
         });
         return true;
       }

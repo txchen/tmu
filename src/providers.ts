@@ -155,7 +155,12 @@ class FileSystemLocalProvider implements LocalProvider {
   }
 
   async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
-    return searchKnownTracks(this, this.listVisibleTracks(), request);
+    if (request.signal?.aborted || !request.query.trim()) return [];
+    const discovered = this.localBrowserRows({ providerId: "local", path: [] })
+      .flatMap((row) => row.track ? [row.track] : []);
+    const tracks = [...this.listVisibleTracks(), ...discovered]
+      .filter((track, index, all) => all.findIndex((candidate) => identityKey(candidate.identity) === identityKey(track.identity)) === index);
+    return searchKnownTracks(this, tracks, request);
   }
 
   listBrowserEntries(location: import("./domain").ProviderLocation): readonly ProviderBrowserEntry[] {
@@ -171,7 +176,8 @@ class FileSystemLocalProvider implements LocalProvider {
     track?: Track;
   }> {
     if (location.providerId !== LOCAL_PROVIDER_ID) return [];
-    const directory = location.path.at(-1) || process.cwd();
+    const segment = location.path.at(-1);
+    const directory = segment?.kind === "local-directory" ? segment.path : process.cwd();
     let names: string[];
     try {
       names = readdirSync(directory).sort(comparePathNames);

@@ -49,12 +49,13 @@ function result(providerId: string, type: ProviderSearchResult["type"], id: stri
 describe("Global Search", () => {
   test("Local and Offline YouTube Cache search known Tracks without inventing result types", async () => {
     const root = await mkdtemp(join(tmpdir(), "tmu-global-search-"));
+    const originalCwd = process.cwd();
     const localPath = join(root, "Amber Mix.flac");
     const cache = { cacheDir: join(root, "cache"), mediaDirName: "media", metadataFileName: "metadata.json" };
     try {
       await writeFile(localPath, "audio");
       const local = createLocalProvider();
-      await local.createTrackFromPath(localPath);
+      process.chdir(root);
       await writeOfflineYouTubeCacheMetadata(cache, {
         version: 1, extractor: "youtube", id: "cached", title: "Amber Cache", mediaFileName: "audio.webm",
       });
@@ -68,6 +69,7 @@ describe("Global Search", () => {
         ["track", "Amber Cache", "offline-youtube-cache"],
       ]);
     } finally {
+      process.chdir(originalCwd);
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -79,14 +81,25 @@ describe("Global Search", () => {
     const requests: string[] = [];
     const navidrome = createNavidromeProvider({ config, saltFactory: () => "salt", fetcher: async (url) => {
       requests.push(endpointName(url));
-      return new Response(JSON.stringify(endpointName(url) === "getPlaylists" ? {
+      const endpoint = endpointName(url);
+      if (endpoint === "search3") {
+        expect(url.searchParams.get("artistCount")).toBe("0");
+        expect(url.searchParams.get("albumCount")).toBe("0");
+      }
+      return new Response(JSON.stringify(endpoint === "getPlaylists" ? {
         "subsonic-response": { status: "ok", playlists: { playlist: [
           { id: "playlist-1", name: "Mix Tape", songCount: 12 },
         ] } },
+      } : endpoint === "getArtists" ? {
+        "subsonic-response": { status: "ok", artists: { index: [{ artist: [
+          { id: "artist-1", name: "The Mixers", albumCount: 3 },
+        ] }] } },
+      } : endpoint === "getArtist" ? {
+        "subsonic-response": { status: "ok", artist: { album: [
+          { id: "album-1", name: "Mixed", artist: "The Mixers", songCount: 9 },
+        ] } },
       } : {
         "subsonic-response": { status: "ok", searchResult3: {
-          artist: [{ id: "artist-1", name: "The Mixers", albumCount: 3 }],
-          album: [{ id: "album-1", name: "Mixed", artist: "The Mixers", songCount: 9 }],
           song: [{ id: "track-1", title: "First" }, { id: "track-2", title: "Second" }],
         } },
       }));
@@ -111,7 +124,7 @@ describe("Global Search", () => {
       kind: "music-collection", id: "navidrome:playlist:playlist-1", label: "Mix Tape",
       resolve: { providerId: "navidrome", operation: "playlist-tracks", collectionId: "playlist-1" },
     });
-    expect(requests).toEqual(["search3", "getPlaylists"]);
+    expect(requests).toEqual(["search3", "getArtists", "getArtist", "getPlaylists"]);
   });
 
   test("groups type then Provider, preserves rankings and caps every subgroup at 50", () => {
@@ -224,10 +237,10 @@ describe("Global Search", () => {
   test("text controls submit filters without triggering playback and clearing restores Provider context", async () => {
     const appState = createInitialAppState({ local: provider("local", async () => []) });
     const ui = new UiStateStore(createInitialUiState());
-    ui.dispatch({ type: "setProviderLocation", location: { providerId: "local", path: ["/music"] } });
+    ui.dispatch({ type: "setProviderLocation", location: { providerId: "local", path: [{ kind: "local-directory", path: "/music" }] } });
     ui.dispatch({ type: "openOverlay", overlay: {
       kind: "music-picker", focus: "search", query: "", selectedIdentity: null, scroll: 0,
-      providerLocation: { providerId: "local", path: ["/music"] }, selectedResultIndex: 4,
+      providerLocation: { providerId: "local", path: [{ kind: "local-directory", path: "/music" }] }, selectedResultIndex: 4,
       providerFilter: "local", resultTypeFilter: "track",
     } });
     const intents: unknown[] = [];
@@ -252,7 +265,7 @@ describe("Global Search", () => {
     await router.route("\x15");
     expect(intents.at(-1)).toEqual({ type: "globalSearch", operation: "clear" });
     expect(ui.snapshot.overlays.at(-1)).toMatchObject({
-      query: "", providerLocation: { providerId: "local", path: ["/music"] }, selectedResultIndex: 0,
+      query: "", providerLocation: { providerId: "local", path: [{ kind: "local-directory", path: "/music" }] }, selectedResultIndex: 0,
     });
   });
 
@@ -348,7 +361,7 @@ describe("Global Search", () => {
     const ui = new UiStateStore(createInitialUiState());
     ui.dispatch({ type: "openOverlay", overlay: {
       kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
-      selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "local", path: ["/music"] },
+      selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "local", path: [{ kind: "local-directory", path: "/music" }] },
     } });
     ui.dispatch({ type: "moveOverlaySelection", delta: 3, rowCount: 10, visibleRows: 5 });
     expect(ui.snapshot.providerNavigationMemory).toMatchObject({ selectedIndex: 3, location: { providerId: "local" } });
@@ -358,7 +371,7 @@ describe("Global Search", () => {
     ui.dispatch({ type: "moveOverlaySelection", delta: 5, rowCount: 10, visibleRows: 5 });
     ui.dispatch({ type: "restoreProviderNavigation" });
     expect(ui.snapshot.overlays.at(-1)).toMatchObject({
-      query: "", selectedResultIndex: 3, providerLocation: { providerId: "local", path: ["/music"] },
+      query: "", selectedResultIndex: 3, providerLocation: { providerId: "local", path: [{ kind: "local-directory", path: "/music" }] },
     });
   });
 

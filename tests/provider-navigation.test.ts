@@ -14,6 +14,9 @@ describe("Provider navigation", () => {
     expect(overlayGeometry("shortcut-help", "wide", 120, 40)).toEqual({ width: 88, height: 28 });
     expect(overlayGeometry("music-picker", "medium", 100, 24)).toEqual({ width: 96, height: 22 });
     expect(overlayGeometry("music-picker", "narrow", 70, 24)).toEqual({ width: 70, height: 22 });
+    expect(overlayGeometry("confirmation", "wide", 200, 50)).toEqual({ width: 56, height: 9 });
+    expect(overlayGeometry("confirmation", "medium", 100, 24)).toEqual({ width: 96, height: 22 });
+    expect(overlayGeometry("confirmation", "narrow", 70, 24)).toEqual({ width: 70, height: 22 });
   });
 
   test("starts at a source-neutral root and omits unconfigured Navidrome", () => {
@@ -99,7 +102,7 @@ describe("Provider navigation", () => {
     ]);
 
     await provider.openBrowserEntry!({ providerId: "navidrome", path: [] }, 0);
-    const artistsLocation = { providerId: "navidrome" as const, path: ["artists"] };
+    const artistsLocation = { providerId: "navidrome" as const, path: [{ kind: "artists" as const }] };
     const rows = providerNavigationRows(createInitialAppState({ navidrome: provider }), artistsLocation);
     expect(rows.map(({ kind, label }) => ({ kind, label }))).toEqual([
       { kind: "navigation", label: "Artists" },
@@ -109,10 +112,10 @@ describe("Provider navigation", () => {
     expect(provider.playableTargetAt?.(artistsLocation, 1)).toBeUndefined();
 
     expect(await provider.openBrowserEntry!(artistsLocation, 1)).toEqual({
-      providerId: "navidrome", path: ["artists", "artist:artist"],
+      providerId: "navidrome", path: [{ kind: "artists" }, { kind: "artist", id: "artist" }],
     });
     expect(providerNavigationRows(createInitialAppState({ navidrome: provider }), {
-      providerId: "navidrome", path: ["artists", "artist:artist"],
+      providerId: "navidrome", path: [{ kind: "artists" }, { kind: "artist", id: "artist" }],
     }).map(({ kind, label }) => ({ kind, label }))).toContainEqual({ kind: "album", label: "Album" });
   });
 
@@ -123,14 +126,14 @@ describe("Provider navigation", () => {
     try {
       const provider = createLocalProvider();
       const appState = createInitialAppState({ local: provider });
-      const rows = providerNavigationRows(appState, { providerId: "local", path: [root] });
+      const rows = providerNavigationRows(appState, { providerId: "local", path: [{ kind: "local-directory", path: root }] });
 
       expect(rows.map(({ kind, label }) => ({ kind, label }))).toEqual([
         { kind: "local-directory", label: "Album" },
         { kind: "track", label: "track.mp3" },
       ]);
-      expect(provider.playableTargetAt?.({ providerId: "local", path: [root] }, 0)).toBeUndefined();
-      expect(provider.playableTargetAt?.({ providerId: "local", path: [root] }, 1)).toMatchObject({
+      expect(provider.playableTargetAt?.({ providerId: "local", path: [{ kind: "local-directory", path: root }] }, 0)).toBeUndefined();
+      expect(provider.playableTargetAt?.({ providerId: "local", path: [{ kind: "local-directory", path: root }] }, 1)).toMatchObject({
         title: "track.mp3",
         identity: { providerId: "local", stableId: join(root, "track.mp3") },
       });
