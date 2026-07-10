@@ -62,6 +62,12 @@ export function globalSearchRetryProviderId(row: GlobalSearchRow | undefined): s
   return row?.kind === "provider-status" ? row.providerId : undefined;
 }
 
+export function isNavigableGlobalSearchResult(
+  result: ProviderSearchResult | undefined,
+): result is ProviderSearchResult & { type: "artist" | "album" | "playlist" } {
+  return result !== undefined && (result.type === "artist" || result.type === "album" || result.type === "playlist");
+}
+
 export function searchKnownTracks(
   provider: Pick<Provider, "id" | "label">,
   tracks: readonly import("./domain").Track[],
