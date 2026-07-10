@@ -45,16 +45,16 @@ export function createActionRegistry(): ActionRegistry {
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
-      aliases: ["enqueue", "add next"],
+      aliases: ["queue next", "add next"],
       bindings: [{ key: "\r", label: "Enter" }],
-      createIntent: (track) => ({ type: "playQueueTrack", track }),
+      createIntent: (track) => ({ type: "playNext", target: track }),
     }),
     queueTrackAction({
       id: "queue.play-now",
       name: "Play Now",
       aliases: ["play immediately"],
       bindings: [{ key: "\x1b[13;2u", label: "Shift+Enter" }],
-      createIntent: (track) => ({ type: "playQueueTrack", track }),
+      createIntent: (track) => ({ type: "playNow", target: track }),
     }),
     queueTrackAction({
       id: "queue.remove",
@@ -78,16 +78,16 @@ export function createActionRegistry(): ActionRegistry {
       createIntent: (track) => ({ type: "moveQueueTrack", identity: track.identity, delta: -1 }),
     }),
     {
-      id: "provider.enqueue-track",
+      id: "provider.play-next",
       name: "Play Next",
-      aliases: ["enqueue", "add next"],
+      aliases: ["queue next", "add next"],
       bindings: [{ key: "\r", label: "Enter" }],
       applies: (context) => context.uiState.activeTargetId !== "queue" && selectedProviderTrack(context) !== null,
       enabled: (context) => selectedProviderTrack(context) !== null,
       disabledReason: (context) => selectedProviderTrack(context) ? null : "No playable Track selected",
       createIntent: (context) => {
         const track = selectedProviderTrack(context);
-        return track ? { type: "enqueueTrack", track } : null;
+        return track ? { type: "playNext", target: track } : null;
       },
     },
     {

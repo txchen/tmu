@@ -63,6 +63,15 @@ export type Track = {
   coverArtId?: string;
 };
 
+export type MusicCollection = {
+  kind: "music-collection";
+  id: string;
+  label: string;
+  tracks: readonly Track[];
+};
+
+export type PlayableTarget = Track | MusicCollection;
+
 export type QueueEntry = {
   track: Track;
   availability: TrackAvailability;
@@ -218,8 +227,8 @@ export type UiState = {
 };
 
 export type AppIntent =
-  | { type: "enqueueTrack"; track: Track }
-  | { type: "playQueueTrack"; track: Track }
+  | { type: "playNext"; target: PlayableTarget }
+  | { type: "playNow"; target: PlayableTarget }
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "clearQueue" }
