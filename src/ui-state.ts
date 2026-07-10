@@ -1,7 +1,5 @@
 import {
-  NAVIGATION_TARGETS,
   sameIdentity,
-  type NavigationTargetId,
   type FocusedPane,
   type ConfirmationKind,
   type ProviderLocation,
@@ -90,17 +88,12 @@ export function selectedUnavailableQueueEntry(
 }
 
 export function createInitialUiState(options: InitialUiStateOptions = {}): UiState {
-  const selectedContentIndexByTarget = Object.fromEntries(
-    NAVIGATION_TARGETS.map((target) => [target.id, 0]),
-  ) as Record<NavigationTargetId, number>;
   const columns = options.columns ?? 120;
   const rows = options.rows ?? 30;
 
   return {
     activeTargetId: "queue",
     focusedPane: "queue",
-    selectedTargetIndex: NAVIGATION_TARGETS.findIndex((target) => target.id === "queue"),
-    selectedContentIndexByTarget,
     selectedQueueIndex: 0,
     filterText: "",
     scrollByPane: { targets: 0, content: 0, queue: 0 },

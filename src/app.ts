@@ -43,7 +43,6 @@ export type TmuRuntimeOptions = {
 
 export function createTmuApp(options: TmuAppOptions = {}): {
   coordinator: AppCoordinator;
-  appCoordinator: AppCoordinator;
 } {
   const config = createDefaultTmuConfig(options.config);
   const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
@@ -79,12 +78,11 @@ export function createTmuApp(options: TmuAppOptions = {}): {
     youtubeDownloader: options.youtubeDownloader,
   });
 
-  return { coordinator, appCoordinator: coordinator };
+  return { coordinator };
 }
 
 export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise<{
   coordinator: AppCoordinator;
-  appCoordinator: AppCoordinator;
   config: TmuConfig;
 }> {
   const loaded = await loadTmuConfig({ path: options.configPath });

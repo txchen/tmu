@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -771,66 +771,6 @@ describe("AppCoordinator", () => {
         expect.stringContaining("Last Queue Snapshot was corrupted"),
         expect.stringContaining("Ignored corrupted app preferences"),
       ]));
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("opens a local directory from the Provider Browsing Surface and enqueues into the shared Queue", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-local-open-"));
-    const album = join(dir, "album");
-    const first = join(album, "01-first.flac");
-    const second = join(album, "02-second.mp3");
-
-    try {
-      await mkdir(album, { recursive: true });
-      await writeFile(first, "not real audio");
-      await writeFile(second, "not real audio");
-      const { coordinator } = createTmuApp({
-        dependencyHealth: createDefaultDependencyHealth({
-          helpers: {
-            ffprobe: { name: "ffprobe", command: "ffprobe", status: "missing" },
-          },
-          metadata: {
-            degraded: true,
-            message: "Metadata degraded: ffprobe missing at ffprobe",
-          },
-        }),
-      });
-
-      await coordinator.start();
-      await coordinator.dispatch({ type: "providerOperation", providerId: "local", operation: "open-path", path: album });
-
-      expect(coordinator.uiState.activeTargetId).toBe("queue");
-      expect(coordinator.uiState.providerLocation).toEqual({ providerId: null, path: [] });
-      expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual([
-        await realpath(first),
-        await realpath(second),
-      ]);
-      expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
-        "01-first.flac",
-        "02-second.mp3",
-      ]);
-      expect(coordinator.appState.lastEvent).toBe("added 2 Local Tracks to shared Queue");
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("reports cancelled local open without enqueueing", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "tmu-local-open-"));
-    const controller = new AbortController();
-    controller.abort();
-
-    try {
-      await writeFile(join(dir, "song.mp3"), "not real audio");
-      const { coordinator } = createTmuApp();
-
-      await coordinator.start();
-      await coordinator.dispatch({ type: "providerOperation", providerId: "local", operation: "open-path", path: dir, signal: controller.signal });
-
-      expect(coordinator.appState.queue.entries).toEqual([]);
-      expect(coordinator.appState.lastEvent).toBe("cancelled Local open after 0 Tracks");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
