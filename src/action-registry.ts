@@ -47,7 +47,7 @@ export type ActionDefinition = {
   readonly disabledReason: (context: ActionContext) => string | null;
   readonly createIntent: (context: ActionContext) => ActionIntent | null;
   readonly scope: "context" | "global";
-  readonly contextLayer?: "underlying" | "overlay";
+  readonly contextLayer?: "underlying" | "overlay" | "surface";
 };
 
 export type ResolvedAction = {
@@ -134,7 +134,7 @@ export function createActionRegistry(): ActionRegistry {
     ], "retry", canRetryContext),
     routeAction("help.filter", "Filter Help", ["search shortcuts"], [
       { key: "/", label: "/" },
-    ], "help-filter", isHelpResultsContext, "overlay"),
+    ], "help-filter", isHelpResultsContext, "surface"),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -340,7 +340,7 @@ export function actionForBinding(
   context: ActionContext,
 ): ResolvedAction | null {
   const candidates = [...registry].sort((left, right) =>
-    Number(right.contextLayer === "overlay") - Number(left.contextLayer === "overlay"));
+    contextLayerPriority(right.contextLayer) - contextLayerPriority(left.contextLayer));
   const action = candidates.find((candidate) => candidate.applies(contextForAction(candidate, context))
     && candidate.bindings.some((binding) => binding.key === key));
   return action ? resolveAction(action, contextForAction(action, context)) : null;
@@ -532,7 +532,17 @@ function underlyingDiscoveryContext(context: ActionContext): ActionContext {
 }
 
 function contextForAction(action: ActionDefinition, context: ActionContext): ActionContext {
-  return action.contextLayer === "overlay" ? context : underlyingDiscoveryContext(context);
+  if (action.contextLayer === "overlay") return context;
+  if (action.contextLayer === "surface") {
+    return context.uiState.overlays.at(-1)?.kind === "command-palette"
+      ? { ...context, uiState: { ...context.uiState, overlays: context.uiState.overlays.slice(0, -1) } }
+      : context;
+  }
+  return underlyingDiscoveryContext(context);
+}
+
+function contextLayerPriority(layer: ActionDefinition["contextLayer"]): number {
+  return layer === "overlay" ? 2 : layer === "surface" ? 1 : 0;
 }
 
 function isListContext(context: ActionContext): boolean {
