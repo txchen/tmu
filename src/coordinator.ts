@@ -151,7 +151,7 @@ export class AppCoordinator {
           await this.playNowTarget(intent.target);
           return;
         case "removeQueueTrack":
-          this.removeQueueTrack(intent.identity);
+          await this.removeQueueTrack(intent.identity);
           return;
         case "moveQueueTrack":
           this.moveQueueTrack(intent.identity, intent.delta);
@@ -223,13 +223,13 @@ export class AppCoordinator {
           await this.startSelectedQueueEntry();
           return;
         case "removeSelectedQueueEntry":
-          this.removeSelectedQueueEntry();
+          await this.removeSelectedQueueEntry();
           return;
         case "moveSelectedQueueEntry":
           this.moveSelectedQueueEntry(intent.delta);
           return;
         case "clearQueue":
-          this.clearQueue();
+          await this.clearQueue();
           return;
         case "nextTrack":
           await this.nextTrack();
@@ -517,17 +517,20 @@ export class AppCoordinator {
     return target.tracks ?? [];
   }
 
-  private removeQueueTrack(identity: Track["identity"]): void {
+  private async removeQueueTrack(identity: Track["identity"]): Promise<void> {
     const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    const removingCurrent = sameIdentity(identity, this.appState.playback.currentTrackIdentity);
+    if (index >= 0 && removingCurrent) await this.runPlayerCommand(() => this.player.stop());
     const removed = index < 0 ? undefined : this.queue.remove(index);
     if (!removed) {
       this.appState.lastEvent = "Track is not in Queue";
       this.syncQueueState();
       return;
     }
-    if (sameIdentity(removed.track.identity, this.appState.playback.currentTrackIdentity)) {
+    if (removingCurrent) {
       this.appState.playback = { status: "idle", currentTrackIdentity: null };
     }
+    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
     this.appState.lastEvent = `removed ${removed.track.title}`;
     this.syncQueueState();
   }
@@ -541,6 +544,7 @@ export class AppCoordinator {
       this.syncQueueState();
       return;
     }
+    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
     this.appState.lastEvent = `moved ${moved.track.title}`;
     this.syncQueueState();
   }
@@ -828,7 +832,10 @@ export class AppCoordinator {
     await this.playQueueEntry(entry);
   }
 
-  private removeSelectedQueueEntry(): void {
+  private async removeSelectedQueueEntry(): Promise<void> {
+    const selected = this.queue.entries[this.uiState.selectedQueueIndex];
+    const removingCurrent = sameIdentity(selected?.track.identity, this.appState.playback.currentTrackIdentity);
+    if (selected && removingCurrent) await this.runPlayerCommand(() => this.player.stop());
     const removed = this.queue.remove(this.uiState.selectedQueueIndex);
     if (!removed) {
       this.appState.lastEvent = "Queue is empty";
@@ -837,7 +844,7 @@ export class AppCoordinator {
     }
 
     this.selectQueueIndex(clampIndex(this.uiState.selectedQueueIndex, this.queue.entries.length));
-    if (sameIdentity(removed.track.identity, this.appState.playback.currentTrackIdentity)) {
+    if (removingCurrent) {
       this.appState.playback = {
         status: "idle",
         currentTrackIdentity: null,
@@ -862,12 +869,14 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  private clearQueue(): void {
+  private async clearQueue(): Promise<void> {
+    await this.runPlayerCommand(() => this.player.stop());
     this.queue.clear();
     this.appState.playback = {
       status: "idle",
       currentTrackIdentity: null,
     };
+    this.uiStateStore.dispatch({ type: "syncQueue", identities: [] });
     this.appState.lastEvent = "cleared Queue";
     this.syncQueueState();
   }

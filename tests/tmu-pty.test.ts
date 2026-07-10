@@ -195,6 +195,48 @@ describe("production tmu real PTY", () => {
     }
   });
 
+  test("routes Queue reorder, removal, and Cancel-first Clear Queue through the production PTY", async () => {
+    let output = "";
+    const read = () => output;
+    const { terminal, subprocess, runtimeRoot } = await spawnTmu(
+      (text) => { output += text; },
+      [],
+      { playbackTrack: true },
+    );
+
+    try {
+      await waitForOutput(read, "Queue · 3 Tracks");
+      const writeAndWait = async (key: string, expected: string) => {
+        const nextFrame = output.length;
+        terminal.write(key);
+        await waitForNewOutput(read, nextFrame, expected);
+      };
+
+      terminal.write("j");
+      await Bun.sleep(100);
+      terminal.write("J");
+      await Bun.sleep(100);
+      await writeAndWait("x", "Queue · 2 Tracks");
+      terminal.write("g");
+      await Bun.sleep(100);
+      terminal.write("g");
+      await Bun.sleep(100);
+      await writeAndWait("x", "No Current Track");
+
+      await writeAndWait("c", "Clear Queue?");
+      await writeAndWait("\r", "Queue · 1 Tracks");
+      await writeAndWait("c", "[Cancel]");
+      await writeAndWait("y", "Queue · 0 Tracks");
+
+      terminal.write("\u0003");
+      expect(await subprocess.exited).toBe(0);
+    } finally {
+      if (subprocess.exitCode === null) subprocess.kill();
+      terminal.close();
+      await rm(runtimeRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   realPlaybackTest("routes Current Track controls through real production PTY key input", async () => {
     let output = "";
     const read = () => output;

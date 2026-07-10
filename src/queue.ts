@@ -50,10 +50,8 @@ export class MemoryQueue implements Queue {
 
     const [removed] = this.items.splice(index, 1);
 
-    if (this.items.length === 0) {
+    if (this.activeIndex === index) {
       this.activeIndex = -1;
-    } else if (this.activeIndex === index) {
-      this.activeIndex = Math.min(index, this.items.length - 1);
     } else if (this.activeIndex > index) {
       this.activeIndex -= 1;
     }

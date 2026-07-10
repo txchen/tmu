@@ -64,6 +64,11 @@ export class RootInputRouter {
 
     if (this.uiState.snapshot.terminal.tier === "terminal-too-small") return true;
 
+    if (this.uiState.snapshot.pendingConfirmation) {
+      await this.routeConfirmation(key);
+      return true;
+    }
+
     const overlay = this.uiState.snapshot.overlays.at(-1);
     if (overlay && isTextEntryFocus(overlay.focus)) {
       if (key === "\x1b") {
@@ -175,7 +180,43 @@ export class RootInputRouter {
       this.uiState.dispatch({ type: "openOverlay", overlay: overlayForIntent(intent) });
       return;
     }
+    if (intent.type === "requestConfirmation") {
+      this.uiState.dispatch({ type: "requestConfirmation", kind: intent.kind });
+      return;
+    }
     await this.dispatchApp(intent);
+  }
+
+  private async routeConfirmation(key: string): Promise<void> {
+    const confirmation = this.uiState.snapshot.pendingConfirmation;
+    if (!confirmation) return;
+
+    if (key === "n" || key === "\x1b" || key === "q") {
+      this.uiState.dispatch({ type: "cancelConfirmation" });
+      return;
+    }
+    if (key === "h" || key === "\x1b[D") {
+      this.uiState.dispatch({ type: "chooseConfirmation", choice: "cancel" });
+      return;
+    }
+    if (key === "l" || key === "\x1b[C") {
+      this.uiState.dispatch({ type: "chooseConfirmation", choice: "confirm" });
+      return;
+    }
+    if (key === "\t") {
+      this.uiState.dispatch({
+        type: "chooseConfirmation",
+        choice: confirmation.choice === "cancel" ? "confirm" : "cancel",
+      });
+      return;
+    }
+    if (key === "y" || (key === "\r" && confirmation.choice === "confirm")) {
+      await this.dispatchApp({ type: "clearQueue" });
+      this.uiState.dispatch({ type: "cancelConfirmation" });
+      this.syncQueueSelection();
+      return;
+    }
+    if (key === "\r") this.uiState.dispatch({ type: "cancelConfirmation" });
   }
 
   private syncQueueSelection(): void {
@@ -215,7 +256,7 @@ function isPrintableKey(key: string): boolean {
   return key.length === 1 && key >= " " && key !== "\x7f";
 }
 
-function overlayForIntent(intent: UiActionIntent) {
+function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" }>) {
   return {
     kind: intent.kind,
     focus: intent.focus,

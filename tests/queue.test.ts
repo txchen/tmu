@@ -58,6 +58,18 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
+  test("removing the Current Track clears its designation without advancing", () => {
+    const queue = new MemoryQueue();
+    queue.enqueue(track("local", "a", "A"));
+    queue.enqueue(track("local", "b", "B"));
+    queue.enqueue(track("local", "c", "C"));
+    queue.startAt(1);
+
+    expect(queue.remove(1)?.track.title).toBe("B");
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
+    expect(queue.snapshot().currentIndex).toBe(-1);
+  });
+
   test("navigates next and previous with repeat-all wrapping", () => {
     const queue = new MemoryQueue();
     queue.enqueue(track("local", "a", "A"));

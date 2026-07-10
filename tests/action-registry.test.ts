@@ -112,6 +112,20 @@ describe("action registry contracts", () => {
     });
   });
 
+  test("routes Queue editing bindings through identity targets and a Clear Queue confirmation request", () => {
+    const registry = createActionRegistry();
+    const current = context();
+
+    expect(actionForBinding(registry, "\x1b[3~", current)?.intent).toEqual({
+      type: "removeQueueTrack",
+      identity: amber.identity,
+    });
+    expect(actionForBinding(registry, "c", current)?.intent).toEqual({
+      type: "requestConfirmation",
+      kind: "clear-queue",
+    });
+  });
+
   test("Space carries the selected Track only when no Current Track exists", () => {
     const registry = createActionRegistry();
     const current = context();
@@ -256,6 +270,63 @@ describe("root input router", () => {
     await router.route("x");
 
     expect(ui.snapshot.selectedQueueIdentity).toEqual(cinder.identity);
+  });
+
+  test("keeps Clear Queue unchanged on default Cancel and dispatches only an explicit confirmation", async () => {
+    const current = context();
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: (intent) => { intents.push(intent); },
+    });
+
+    await router.route("c");
+    expect(ui.snapshot.pendingConfirmation).toEqual({ kind: "clear-queue", choice: "cancel" });
+    await router.route("\r");
+    expect(intents).toEqual([]);
+    expect(ui.snapshot.pendingConfirmation).toBeNull();
+
+    await router.route("c");
+    await router.route("l");
+    expect(ui.snapshot.pendingConfirmation?.choice).toBe("confirm");
+    await router.route("\r");
+    expect(intents).toEqual([{ type: "clearQueue" }]);
+    expect(ui.snapshot.pendingConfirmation).toBeNull();
+  });
+
+  test("supports every approved Clear Queue confirmation keyboard choice", async () => {
+    const current = context();
+    const ui = new UiStateStore(current.uiState);
+    const intents: AppIntent[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => current.appState,
+      uiState: ui,
+      dispatchApp: (intent) => { intents.push(intent); },
+    });
+
+    await router.route("c");
+    await router.route("\x1b[C");
+    expect(ui.snapshot.pendingConfirmation?.choice).toBe("confirm");
+    await router.route("\x1b[D");
+    expect(ui.snapshot.pendingConfirmation?.choice).toBe("cancel");
+    await router.route("l");
+    await router.route("h");
+    expect(ui.snapshot.pendingConfirmation?.choice).toBe("cancel");
+    await router.route("\t");
+    expect(ui.snapshot.pendingConfirmation?.choice).toBe("confirm");
+    await router.route("y");
+    expect(intents).toEqual([{ type: "clearQueue" }]);
+
+    for (const cancelKey of ["n", "q", "\x1b"]) {
+      await router.route("c");
+      await router.route(cancelKey);
+      expect(ui.snapshot.pendingConfirmation).toBeNull();
+    }
+    expect(intents).toEqual([{ type: "clearQueue" }]);
   });
 
   test("gives text entry precedence over global shortcuts", async () => {

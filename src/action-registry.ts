@@ -18,6 +18,9 @@ export type UiActionIntent = {
   type: "openOverlay";
   kind: "music-picker" | "shortcut-help" | "command-palette" | "youtube-url";
   focus: "results" | "search" | "input";
+} | {
+  type: "requestConfirmation";
+  kind: "clear-queue";
 };
 
 export type ActionIntent = AppIntent | UiActionIntent;
@@ -94,7 +97,7 @@ export function createActionRegistry(): ActionRegistry {
       id: "queue.remove",
       name: "Remove from Queue",
       aliases: ["delete track"],
-      bindings: [{ key: "x", label: "x" }],
+      bindings: [{ key: "x", label: "x" }, { key: "\x1b[3~", label: "Delete" }],
       createIntent: (track) => ({ type: "removeQueueTrack", identity: track.identity }),
     }),
     queueTrackAction({
@@ -173,7 +176,16 @@ export function createActionRegistry(): ActionRegistry {
     simpleAction("player.previous", "Previous Track", ["previous"], "p", "p", { type: "playerOperation", operation: "previous-track" }),
     simpleAction("queue.shuffle", "Toggle Shuffle", ["shuffle"], "z", "z", { type: "playerOperation", operation: "toggle-shuffle" }),
     simpleAction("queue.repeat-all", "Toggle Repeat All", ["repeat"], "r", "r", { type: "playerOperation", operation: "toggle-repeat-all" }),
-    simpleAction("queue.clear", "Clear Queue", ["empty queue"], "c", "c", { type: "clearQueue" }),
+    {
+      id: "queue.clear",
+      name: "Clear Queue",
+      aliases: ["empty queue"],
+      bindings: [{ key: "c", label: "c" }],
+      applies: (context) => context.uiState.activeTargetId === "queue",
+      enabled: (context) => context.appState.queue.entries.length > 0,
+      disabledReason: () => "Queue is empty",
+      createIntent: () => ({ type: "requestConfirmation", kind: "clear-queue" }),
+    },
     simpleAction("player.seek-backward", "Seek Backward", ["rewind"], "[", "[", {
       type: "playerOperation", operation: "seek", seconds: -5,
     }),

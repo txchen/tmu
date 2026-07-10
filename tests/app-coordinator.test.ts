@@ -1464,6 +1464,129 @@ describe("AppCoordinator", () => {
     expect(coordinator.appState.queue.repeatAll).toBe(true);
   });
 
+  test("repairs Queue selection to the next survivor after removing a non-current Track", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const drift = track("local", "drift", "Drift");
+    const queue = new MemoryQueue();
+    for (const candidate of [amber, cinder, drift]) queue.enqueue(candidate);
+    queue.startAt(0);
+    const uiState = createInitialUiState();
+    uiState.activeTargetId = "queue";
+    uiState.focusedPane = "queue";
+    uiState.selectedQueueIndex = 1;
+    uiState.selectedQueueIdentity = cinder.identity;
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}),
+      uiState,
+      queue,
+      player: new RecordingPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "removeQueueTrack", identity: cinder.identity });
+
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(drift.identity);
+    expect(coordinator.uiState.selectedQueueIndex).toBe(1);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+  });
+
+  test("repairs Queue selection to the previous row after removing the Queue end", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.enqueue(cinder);
+    queue.startAt(0);
+    const uiState = createInitialUiState();
+    uiState.selectedQueueIndex = 1;
+    uiState.selectedQueueIdentity = cinder.identity;
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}),
+      uiState,
+      queue,
+      player: new RecordingPlayer(),
+    });
+
+    await coordinator.dispatch({ type: "removeQueueTrack", identity: cinder.identity });
+
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(amber.identity);
+    expect(coordinator.uiState.selectedQueueIndex).toBe(0);
+  });
+
+  test("removing the Current Track stops playback, clears Current Track, and never advances", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.enqueue(cinder);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.playback = { status: "playing", currentTrackIdentity: amber.identity };
+    const uiState = createInitialUiState();
+    uiState.selectedQueueIdentity = amber.identity;
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({ appState, uiState, queue, player });
+
+    await coordinator.dispatch({ type: "removeQueueTrack", identity: amber.identity });
+
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(cinder.identity);
+    expect(player.loaded).toEqual([]);
+  });
+
+  test("reordering follows selected Track Identity without interrupting Current Track", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const drift = track("local", "drift", "Drift");
+    const queue = new MemoryQueue();
+    for (const candidate of [amber, cinder, drift]) queue.enqueue(candidate);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.playback = { status: "playing", currentTrackIdentity: amber.identity };
+    const uiState = createInitialUiState();
+    uiState.selectedQueueIndex = 1;
+    uiState.selectedQueueIdentity = cinder.identity;
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({ appState, uiState, queue, player });
+
+    await coordinator.dispatch({ type: "moveQueueTrack", identity: cinder.identity, delta: 1 });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Amber", "Drift", "Cinder"]);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(cinder.identity);
+    expect(coordinator.uiState.selectedQueueIndex).toBe(2);
+    expect(coordinator.appState.playback).toEqual({ status: "playing", currentTrackIdentity: amber.identity });
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(player.stops).toBe(0);
+    expect(player.loaded).toEqual([]);
+  });
+
+  test("clears Queue only after stopping playback and clears Current Track and selection together", async () => {
+    const amber = track("local", "amber", "Amber");
+    const cinder = track("local", "cinder", "Cinder");
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.enqueue(cinder);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.playback = { status: "playing", currentTrackIdentity: amber.identity };
+    const uiState = createInitialUiState();
+    uiState.selectedQueueIdentity = cinder.identity;
+    uiState.selectedQueueIndex = 1;
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({ appState, uiState, queue, player });
+
+    await coordinator.dispatch({ type: "clearQueue" });
+
+    expect(player.stops).toBe(1);
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
+    expect(coordinator.uiState.selectedQueueIdentity).toBeNull();
+    expect(coordinator.uiState.selectedQueueIndex).toBe(0);
+  });
+
   test("drives Queue-focused playback controls through App Coordinator intents", async () => {
     const playable = track("local", "/music/playable.flac", "Playable File");
     const missing = track("local", "/music/missing.flac", "Missing File");
