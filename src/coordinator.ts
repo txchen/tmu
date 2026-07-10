@@ -55,6 +55,7 @@ import {
   type YouTubeDownloader,
 } from "./youtube-url-download";
 import { UiStateStore, type UiStateAction } from "./ui-state";
+import { isNavigableGlobalSearchResult } from "./global-search";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -543,7 +544,7 @@ export class AppCoordinator {
     this.uiStateStore.dispatch({ type: "setOverlayMessage", message: undefined });
     if (signal?.aborted) {
       this.appState.lastEvent = "Music Collection resolution cancelled";
-      this.setPickerRecovery("Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
+      this.setPickerRecovery("Music Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
       return null;
     }
 
@@ -558,14 +559,14 @@ export class AppCoordinator {
       const result = await provider.resolveMusicCollection(target, { signal });
       if (result.status === "cancelled" || signal?.aborted) {
         this.appState.lastEvent = "Music Collection resolution cancelled";
-        this.setPickerRecovery("Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
+        this.setPickerRecovery("Music Collection resolution cancelled · Press Enter to retry or Esc to dismiss");
         return null;
       }
       return uniqueTracksByIdentity(result.tracks);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.appState.lastEvent = `Music Collection resolution failed: ${message}`;
-      this.setPickerRecovery(`Could not load collection: ${message} · Press Enter to retry or Esc to dismiss`);
+      this.setPickerRecovery(`Could not load Music Collection: ${message} · Press Enter to retry or Esc to dismiss`);
       return null;
     }
   }
@@ -711,7 +712,7 @@ export class AppCoordinator {
 
   private async openGlobalSearchResult(result: ProviderSearchResult): Promise<void> {
     const provider = this.appState.providers[result.providerId];
-    if (!["artist", "album", "playlist"].includes(result.type) || !isNavidromeProvider(provider)) {
+    if (!isNavigableGlobalSearchResult(result) || !isNavidromeProvider(provider)) {
       this.appState.lastEvent = "Global Search result cannot be opened";
       return;
     }

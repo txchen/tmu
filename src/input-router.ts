@@ -17,7 +17,12 @@ import {
   type UiStateAction,
 } from "./ui-state";
 import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
-import { globalSearchResultAt, globalSearchRows, globalSearchRetryProviderId } from "./global-search";
+import {
+  globalSearchResultAt,
+  globalSearchRows,
+  globalSearchRetryProviderId,
+  isNavigableGlobalSearchResult,
+} from "./global-search";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -351,7 +356,7 @@ export class RootInputRouter {
     }
     if (key === "\r" || key === "l" || key === "\x1b[C") {
       const result = globalSearchResultAt(this.appState().globalSearch, overlay.selectedResultIndex ?? 0);
-      const opensNavigation = result && ["artist", "album", "playlist"].includes(result.type)
+      const opensNavigation = isNavigableGlobalSearchResult(result)
         && (result.type === "artist" || key !== "\r");
       if (opensNavigation) {
         await this.dispatchApp({ type: "globalSearch", operation: "open", result });
