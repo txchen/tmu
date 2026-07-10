@@ -37,8 +37,6 @@ export type PickerOverlay = {
   returnTo?: FocusReturnToken;
 };
 
-export type StartupMode = "empty" | "cli-seeded";
-
 export type TrackAvailability =
   | { status: "unknown" }
   | { status: "available" }
@@ -195,7 +193,6 @@ export type AppState = {
   queue: QueueState;
   playback: PlaybackState;
   volume: VolumeState;
-  startupMode: StartupMode;
   downloads: {
     active: boolean;
     lines: string[];

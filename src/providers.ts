@@ -79,7 +79,7 @@ export type LocalProviderOptions = {
 };
 
 export type LocalProvider = Provider & {
-  createTrackFromCliArg(path: string): Promise<Track | undefined>;
+  createTrackFromPath(path: string): Promise<Track | undefined>;
   createTracksFromOpenPath(path: string, options?: LocalOpenOptions): Promise<LocalOpenResult>;
   onTrackMetadataChange(listener: LocalTrackMetadataListener): () => void;
 };
@@ -132,8 +132,8 @@ class FileSystemLocalProvider implements LocalProvider {
     return [...this.tracks.values()];
   }
 
-  async createTrackFromCliArg(path: string): Promise<Track | undefined> {
-    const file = canonicalLocalFileFromArg(path);
+  async createTrackFromPath(path: string): Promise<Track | undefined> {
+    const file = canonicalLocalFileFromPath(path);
     if (!file) return undefined;
 
     if (isCommonAudioExtension(file.path)) {
@@ -177,7 +177,7 @@ class FileSystemLocalProvider implements LocalProvider {
     if (checkCancelled() || !selectedKind) return result;
 
     if (selectedKind.kind === "file") {
-      addTrack(await this.createTrackFromCliArg(selectedPath));
+      addTrack(await this.createTrackFromPath(selectedPath));
       return result;
     }
 
@@ -387,7 +387,7 @@ export function createLocalProvider(options: LocalProviderOptions = {}): LocalPr
 
 export function isLocalProvider(provider: Provider | undefined): provider is LocalProvider {
   return Boolean(provider)
-    && typeof (provider as Partial<LocalProvider>).createTrackFromCliArg === "function"
+    && typeof (provider as Partial<LocalProvider>).createTrackFromPath === "function"
     && typeof (provider as Partial<LocalProvider>).createTracksFromOpenPath === "function"
     && typeof (provider as Partial<LocalProvider>).onTrackMetadataChange === "function";
 }
@@ -428,7 +428,7 @@ export function createDefaultProviders(options: {
   };
 }
 
-function canonicalLocalFileFromArg(path: string): CanonicalLocalFile | undefined {
+function canonicalLocalFileFromPath(path: string): CanonicalLocalFile | undefined {
   const normalizedPath = path.trim();
   if (!normalizedPath) return undefined;
 

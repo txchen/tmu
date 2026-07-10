@@ -1,22 +1,32 @@
 {
   "name": "tmu",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "tmu": "src/main.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "CONTEXT.md"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
   "scripts": {
     "start": "bun src/main.ts",
     "prototype:tui-experience": "bun src/prototypes/tui-experience/app.ts",
-    "tracer:vue-tui": "bun src/prototypes/vue-tui-tracer/app.ts",
-    "build:linux-x64": "bun build --compile --target=bun-linux-x64-baseline --outfile=dist/tmu-linux-x64 src/main.ts",
-    "smoke:linux-x64": "bun run build:linux-x64 && bun scripts/smoke-linux-x64.ts dist/tmu-linux-x64",
+    "smoke:package": "bun test tests/packaging-smoke.test.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@vue-tui/runtime": "0.0.3",
+    "vue": "3.5.39"
+  },
   "devDependencies": {
     "@types/bun": "^1.2.19",
-    "@vue-tui/runtime": "0.0.3",
     "@vue-tui/testing": "0.0.3",
-    "typescript": "^5.8.3",
-    "vue": "3.5.39"
+    "typescript": "^5.8.3"
   }
 }

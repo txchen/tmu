@@ -131,29 +131,9 @@ export class AppCoordinator {
     return this.queueIdentities();
   }
 
-  async start(cliArgs: readonly string[]): Promise<void> {
-    const fileArgs = cliArgs.filter((arg) => arg.trim());
-
-    if (fileArgs.length > 0) {
-      await this.restoreAppPreferences({ restoreProvider: false });
-      this.appState.startupMode = "cli-seeded";
-      this.updateUiState({
-        activeTargetId: "queue",
-        focusedPane: "queue",
-        selectedTargetIndex: navigationTargetIndex("queue"),
-        providerLocation: { providerId: null, path: [] },
-      });
-      this.appState.lastEvent = "CLI args seeded the shared Queue";
-    } else {
-      await this.restoreQueueSnapshotIfPresent();
-      this.appState.startupMode = "empty";
-      await this.restoreAppPreferences({ restoreProvider: true });
-    }
-
-    for (const arg of fileArgs) {
-      await this.seedLocalCliArg(arg);
-    }
-
+  async start(): Promise<void> {
+    await this.restoreQueueSnapshotIfPresent();
+    await this.restoreAppPreferences({ restoreProvider: true });
     this.syncQueueState();
     this.notifyStateChanged();
   }
@@ -1217,35 +1197,6 @@ export class AppCoordinator {
     const cacheEntry = provider.findByIdentity(entry.track.identity);
     if (!cacheEntry) return;
     this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
-  }
-
-  private async seedLocalCliArg(arg: string): Promise<void> {
-    try {
-      const track = await this.localCliTrackFromArg(arg);
-      if (!track || this.tornDown) return;
-
-      this.enqueueCliTrack(track);
-      this.syncQueueState();
-      this.notifyStateChanged();
-    } catch (error) {
-      if (this.tornDown) return;
-
-      this.appState.lastEvent = error instanceof Error ? error.message : String(error);
-      this.notifyStateChanged();
-    }
-  }
-
-  private async localCliTrackFromArg(arg: string): Promise<QueueEntry["track"] | undefined> {
-    const localProvider = this.appState.providers.local;
-    if (isLocalProvider(localProvider)) return await localProvider.createTrackFromCliArg(arg);
-    throw new Error("Local Provider cannot open CLI file arguments");
-  }
-
-  private enqueueCliTrack(track: QueueEntry["track"]): void {
-    const entry = this.queue.enqueue(track);
-    const index = this.queue.entries.indexOf(entry);
-    this.selectQueueIndex(Math.max(0, index));
-    this.appState.lastEvent = `added ${track.title} to shared Queue`;
   }
 
   private async togglePlayPause(): Promise<void> {

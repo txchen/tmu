@@ -15,25 +15,33 @@ async function waitForNewOutput(read: () => string, from: number, expected: stri
   await waitForOutput(() => read().slice(from), expected);
 }
 
-function spawnTracer(onData: (text: string) => void) {
+function spawnTmu(onData: (text: string) => void, args: readonly string[] = []) {
+  const runtimeRoot = `/tmp/tmu-pty-${process.pid}-${crypto.randomUUID()}`;
   const terminal = new Bun.Terminal({
     cols: 120,
     rows: 24,
     data: (_terminal, data) => onData(decoder.decode(data)),
   });
-  const subprocess = Bun.spawn(["bun", "src/prototypes/vue-tui-tracer/app.ts"], {
+  const subprocess = Bun.spawn(["bun", "src/main.ts", ...args], {
     cwd: process.cwd(),
-    env: { ...process.env, TERM: "xterm-256color", NO_COLOR: "1" },
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      NO_COLOR: "1",
+      XDG_CONFIG_HOME: `${runtimeRoot}/config`,
+      XDG_STATE_HOME: `${runtimeRoot}/state`,
+      XDG_CACHE_HOME: `${runtimeRoot}/cache`,
+    },
     terminal,
   });
   return { terminal, subprocess };
 }
 
-describe("development-only vue-tui real PTY", () => {
+describe("production tmu real PTY", () => {
   test("publishes only semantic frames, handles resize and graceful Ctrl-C, and restores the terminal", async () => {
     let output = "";
     const read = () => output;
-    const { terminal, subprocess } = spawnTracer((text) => { output += text; });
+    const { terminal, subprocess } = spawnTmu((text) => { output += text; }, ["/music/must-not-seed.flac"]);
 
     try {
       await waitForOutput(read, "Queue Home · wide");
@@ -43,13 +51,7 @@ describe("development-only vue-tui real PTY", () => {
       expect(output).toHaveLength(idleBytes);
 
       let nextFrame = output.length;
-      terminal.write(" ");
-      await waitForNewOutput(read, nextFrame, "Playing");
-      await Bun.sleep(80);
-      const beforePosition = output.length;
-      subprocess.kill("SIGUSR1");
-      await Bun.sleep(150);
-      expect(output).toHaveLength(beforePosition);
+      expect(output).not.toContain("must-not-seed.flac");
 
       terminal.write("o");
       await waitForOutput(read, "Picker Overlay · music-picker");
@@ -102,7 +104,7 @@ describe("development-only vue-tui real PTY", () => {
     ] as const) {
       let output = "";
       const read = () => output;
-      const { terminal, subprocess } = spawnTracer((text) => { output += text; });
+      const { terminal, subprocess } = spawnTmu((text) => { output += text; });
 
       try {
         await waitForOutput(read, "Queue Home · wide");

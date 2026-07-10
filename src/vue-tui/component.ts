@@ -1,26 +1,22 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
-import { createActionRegistry } from "../../action-registry";
-import type { AppCoordinator, AppStateChangeReason } from "../../coordinator";
-import { sameIdentity, type PickerOverlay, type ResponsiveTier } from "../../domain";
-import { RootInputRouter } from "../../input-router";
+import { createActionRegistry } from "../action-registry";
+import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
+import { sameIdentity, type PickerOverlay } from "../domain";
+import { RootInputRouter } from "../input-router";
 import {
   StatePublicationGate,
   type PublicationCause,
   type PublicationSnapshot,
-} from "../../state-publication";
+} from "../state-publication";
 
-export type VueTuiTracerOptions = {
+export type TmuRootOptions = {
   coordinator: AppCoordinator;
 };
 
-/**
- * Development-only compatibility tracer. Production startup deliberately does
- * not import this module; the #49 cutover will own the real component tree.
- */
-export function createVueTuiTracer(options: VueTuiTracerOptions) {
+export function createTmuRoot(options: TmuRootOptions) {
   return defineComponent({
-    name: "DevelopmentVueTuiTracer",
+    name: "TmuRoot",
     setup() {
       const { coordinator } = options;
       coordinator.dispatchUi({
@@ -113,12 +109,12 @@ export function createVueTuiTracer(options: VueTuiTracerOptions) {
         publication.stop();
       });
 
-      return () => renderTracer(snapshot.value);
+      return () => renderTmu(snapshot.value);
     },
   });
 }
 
-function renderTracer(snapshot: PublicationSnapshot) {
+function renderTmu(snapshot: PublicationSnapshot) {
   const { appState, uiState } = snapshot;
   const tier = uiState.terminal.tier;
   const current = appState.queue.entries[appState.queue.currentIndex];

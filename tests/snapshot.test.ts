@@ -126,13 +126,14 @@ describe("Last Queue Snapshot persistence", () => {
       }));
 
       first = await createTmuRuntime({ configPath, dependencyRunner: runner });
-      await first.coordinator.start([seededFile]);
+      await first.coordinator.start();
+      await first.coordinator.dispatch({ type: "openLocalPath", path: seededFile });
       await first.coordinator.dispatch({ type: "setVolume", percent: 61, ready: true });
       await first.coordinator.dispatch({ type: "toggleShuffle" });
       await first.coordinator.dispatch({ type: "saveLastQueueSnapshot" });
 
       second = await createTmuRuntime({ configPath, dependencyRunner: runner });
-      await second.coordinator.start([]);
+      await second.coordinator.start();
       await second.coordinator.dispatch({ type: "restoreLastQueueSnapshot" });
 
       expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("song-a.flac");
