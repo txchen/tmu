@@ -26,10 +26,12 @@ async function waitForJsonFile<T>(
   while (Date.now() - startedAt < timeoutMs) {
     try {
       latest = JSON.parse(await Bun.file(path).text()) as T;
-      if (predicate(latest)) return latest;
     } catch {
       // The snapshot may not exist yet or may be between atomic writes.
+      await Bun.sleep(10);
+      continue;
     }
+    if (predicate(latest)) return latest;
     await Bun.sleep(10);
   }
   throw new Error(`Timed out waiting for JSON state in ${path}: ${JSON.stringify(latest)}`);
