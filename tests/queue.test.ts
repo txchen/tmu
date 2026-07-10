@@ -70,7 +70,7 @@ describe("MemoryQueue", () => {
 
     queue.setRepeatAll(true);
     expect(queue.next()?.track.title).toBe("A");
-    expect(queue.previous()?.track.title).toBe("B");
+    expect(queue.previous()).toBeUndefined();
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
@@ -105,8 +105,8 @@ describe("MemoryQueue", () => {
     expect(queue.next()).toBeUndefined();
 
     queue.setRepeatAll(true);
-    expect(queue.next()?.track.title).toBe("C");
-    expect(queue.snapshot().entries[0]?.track.title).toBe("B");
+    expect(queue.next()?.track.title).toBe("A");
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
   });
 
   test("keeps unavailable Tracks visible in snapshots", () => {

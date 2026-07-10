@@ -1232,11 +1232,17 @@ export class AppCoordinator {
       return;
     }
 
-    if (this.appState.playback.status === "stopped"
-      || this.appState.playback.status === "idle"
-      || this.appState.playback.status === "error") {
+    const livePause = this.appState.playback.status === "paused"
+      && this.player.playback.status === "paused";
+    if (!livePause && this.appState.playback.status !== "playing") {
+      const resumePosition = this.appState.playback.status === "stopped"
+        ? 0
+        : this.appState.playback.positionSeconds;
       this.queue.startAt(this.queue.entries.indexOf(current));
-      await this.playQueueEntry(current);
+      const started = await this.playQueueEntry(current);
+      if (!started || typeof resumePosition !== "number" || resumePosition <= 0) return;
+      const resumed = await this.runPlayerCommand(() => this.player.seekBy(resumePosition));
+      if (resumed) this.appState.lastEvent = `resumed ${current.track.title}`;
       return;
     }
 

@@ -67,6 +67,7 @@ class RecordingPlayer implements Player {
   }
   publishPosition(positionSeconds: number) { this.publish({ ...this.state, positionSeconds }); }
   publishState(state: PlayerPlaybackState) { this.publish(state); }
+  setStateSilently(state: PlayerPlaybackState) { this.state = state; }
   private publish(state: PlayerPlaybackState) {
     this.state = state;
     for (const listener of this.listeners) listener(state);
@@ -223,6 +224,18 @@ describe("production vue-tui", () => {
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/dev/null" }]);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(secondTrack.identity);
+  });
+
+  test("Space reloads a restored Current Track and seeks to its resumable position", async () => {
+    const { coordinator, player } = await productionHarness();
+    player.setStateSilently({ status: "idle" });
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 120, rows: 24 });
+
+    await terminal.stdin.write(" ");
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/dev/null" }]);
+    expect(player.seeks).toEqual([37]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(restoredTrack.identity);
   });
 
   test("crosses responsive tiers without losing Current Track, Track Identity selection, or overlay state", async () => {
