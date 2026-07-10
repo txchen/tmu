@@ -105,6 +105,12 @@ describe("action registry contracts", () => {
     }];
     expect(shortcutHelpActions(registry, current).find((action) => action.id === "help.filter"))
       .toMatchObject({ bindings: ["/"], enabled: true });
+    current.uiState.overlays = [
+      current.uiState.overlays[0]!,
+      { kind: "command-palette", focus: "search", query: "", selectedIdentity: null, scroll: 0 },
+    ];
+    expect(commandPaletteActions(registry, current).find((action) => action.id === "help.filter"))
+      .toMatchObject({ bindings: ["/"], enabled: true });
   });
 
   test("omits unsupported actions from discovery and makes their bindings inert", () => {
