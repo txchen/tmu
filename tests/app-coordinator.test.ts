@@ -1296,7 +1296,16 @@ describe("AppCoordinator", () => {
     await coordinator.dispatch({ type: "refreshNavidromeLibrary" });
 
     expect(renderShellText(coordinator.appState, coordinator.uiState)).toContain("Artist 2");
-    expect(seenEndpoints).toEqual(["ping", "getArtists", "ping", "ping", "getArtists"]);
+    coordinator.dispatchUi({
+      type: "updateView",
+      patch: {
+        selectedContentIndexByTarget: { ...coordinator.uiState.selectedContentIndexByTarget, navidrome: 7 },
+      },
+    });
+    const uiBeforeSemanticRefresh = structuredClone(coordinator.uiState);
+    await coordinator.dispatch({ type: "providerOperation", providerId: "navidrome", operation: "refresh" });
+    expect(coordinator.uiState).toEqual(uiBeforeSemanticRefresh);
+    expect(seenEndpoints).toEqual(["ping", "getArtists", "ping", "ping", "getArtists", "ping", "getArtists"]);
   });
 
   test("ignores Navidrome refresh intent outside the Navidrome Library Browser", async () => {
