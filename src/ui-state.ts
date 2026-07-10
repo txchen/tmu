@@ -6,6 +6,7 @@ import {
   type ConfirmationKind,
   type ProviderLocation,
   type ResponsiveTier,
+  type QueueEntry,
   type TrackIdentity,
   type PickerOverlay,
   type UiState,
@@ -67,6 +68,14 @@ export function responsiveTier(columns: number, rows: number): ResponsiveTier {
 export function queueHomeVisibleRows(tier: ResponsiveTier, rows: number, hasExceptionalLine = false): number {
   const reservedRows = tier === "narrow" ? 4 + Number(hasExceptionalLine) : 3;
   return Math.max(1, rows - reservedRows);
+}
+
+export function selectedUnavailableQueueEntry(
+  entries: readonly QueueEntry[],
+  selectedIdentity: TrackIdentity | null,
+): QueueEntry | undefined {
+  return entries.find((entry) => sameIdentity(entry.track.identity, selectedIdentity)
+    && entry.availability.status === "unavailable");
 }
 
 export function createInitialUiState(options: InitialUiStateOptions = {}): UiState {
