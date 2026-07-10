@@ -7,7 +7,7 @@ import {
   type UiState,
 } from "./domain";
 import type { AppStateSnapshot } from "./state-publication";
-import { globalSearchResultAt } from "./global-search";
+import { globalSearchResultAt, globalSearchRetryProviderId, globalSearchRows } from "./global-search";
 
 export type ActionContext = {
   readonly appState: Readonly<AppState> | AppStateSnapshot;
@@ -31,7 +31,7 @@ export type UiActionIntent = {
 export type UiRouteOperation =
   | "move-down" | "move-up" | "first" | "last"
   | "half-page-down" | "half-page-up" | "page-down" | "page-up"
-  | "open" | "back" | "dismiss" | "search-filters";
+  | "open" | "back" | "dismiss" | "search-filters" | "retry";
 
 export type ActionIntent = AppIntent | UiActionIntent;
 
@@ -128,6 +128,9 @@ export function createActionRegistry(): ActionRegistry {
     routeAction("search.filters", "Search Filters", ["filter results"], [
       { key: "f", label: "f" },
     ], "search-filters", isMusicResultsContext),
+    routeAction("search.retry", "Retry", ["retry failed provider"], [
+      { key: "r", label: "r" },
+    ], "retry", canRetryContext),
     queueTrackAction({
       id: "queue.play-next",
       name: "Play Next",
@@ -197,7 +200,7 @@ export function createActionRegistry(): ActionRegistry {
       scope: "context",
       name: "Retry Provider",
       aliases: ["reconnect provider"],
-      bindings: [{ key: "r", label: "r" }],
+      bindings: [],
       applies: (context) => providerSupports(context, "retry"),
       enabled: always,
       disabledReason: neverDisabled,
@@ -543,6 +546,17 @@ function isMusicResultsContext(context: ActionContext): boolean {
 function isNonTextOverlayContext(context: ActionContext): boolean {
   const overlay = context.uiState.overlays.at(-1);
   return Boolean(overlay && overlay.focus === "results");
+}
+
+function canRetryContext(context: ActionContext): boolean {
+  const overlay = context.uiState.overlays.at(-1);
+  if (overlay?.kind !== "music-picker" || overlay.focus !== "results") return false;
+  if (context.appState.globalSearch.query) {
+    return Boolean(globalSearchRetryProviderId(
+      globalSearchRows(context.appState.globalSearch)[overlay.selectedResultIndex ?? 0],
+    ));
+  }
+  return providerSupports(context, "retry");
 }
 
 function selectedQueueTrack(context: ActionContext): Track | null {
