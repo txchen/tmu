@@ -32,6 +32,7 @@ export type UiStateAction =
   | { type: "dismissOverlay"; queueIdentities?: readonly TrackIdentity[] }
   | { type: "setFocus"; focusedPane: FocusedPane }
   | { type: "setQuery"; query: string }
+  | { type: "setOverlayMessage"; message?: string }
   | { type: "setFilter"; filterText: string }
   | { type: "setProviderLocation"; location: ProviderLocation }
   | { type: "setOverlayFocus"; focus: PickerOverlay["focus"] }
@@ -194,6 +195,10 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
   if (action.type === "setQuery") {
     return updateTopOverlay(state, (overlay) => ({ ...overlay, query: action.query }))
       ?? { ...state, promptInput: action.query };
+  }
+
+  if (action.type === "setOverlayMessage") {
+    return updateTopOverlay(state, (overlay) => ({ ...overlay, message: action.message })) ?? state;
   }
 
   if (action.type === "setFilter") {

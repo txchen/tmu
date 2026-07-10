@@ -311,6 +311,39 @@ describe("Global Search", () => {
     } }]);
   });
 
+  test("right arrow opens a lightweight Album result while Enter remains Play Next", async () => {
+    const collection = {
+      kind: "music-collection" as const, id: "navidrome:album:album", label: "Album",
+      resolve: { providerId: "navidrome", operation: "album-tracks" as const, collectionId: "album" },
+    };
+    const appState = createInitialAppState({ navidrome: provider("navidrome", async () => [], ["album"]) });
+    const albumResult = {
+      providerId: "navidrome", providerLabel: "Navidrome", type: "album" as const,
+      id: "album", label: "Album", detail: "Artist", target: collection,
+    };
+    appState.globalSearch = {
+      requestId: 1, query: "album", providerFilter: "all", resultTypeFilter: "album",
+      providers: { navidrome: { providerLabel: "Navidrome", status: "success", results: [albumResult] } },
+    };
+    const rows = globalSearchRows(appState.globalSearch);
+    const ui = new UiStateStore(createInitialUiState());
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "album", selectedIdentity: null, scroll: 0,
+      selectedResultIndex: rows.findIndex((row) => row.kind === "result"),
+    } });
+    const intents: unknown[] = [];
+    const router = new RootInputRouter({
+      registry: createActionRegistry(), appState: () => appState, uiState: ui,
+      dispatchApp: async (intent) => { intents.push(intent); },
+    });
+
+    await router.route("\x1b[C");
+    expect(intents).toEqual([{ type: "globalSearch", operation: "open", result: albumResult }]);
+    intents.length = 0;
+    await router.route("\r");
+    expect(intents).toEqual([{ type: "playNext", target: collection }]);
+  });
+
   test("search result movement cannot replace the remembered Provider navigation selection", () => {
     const ui = new UiStateStore(createInitialUiState());
     ui.dispatch({ type: "openOverlay", overlay: {

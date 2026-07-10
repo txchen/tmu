@@ -404,6 +404,9 @@ function overlayView(
     overlay.kind === "music-picker" ? h(Text, { inverse: overlay.focus === "filter", dimColor: overlay.focus !== "filter" }, () =>
       `Filters: Provider ${overlay.providerFilter ?? "all"} · Type ${overlay.resultTypeFilter ?? "all"}`) : null,
     overlay.kind === "music-picker" ? h(Text, { dimColor: true }, () => location) : null,
+    overlay.kind === "music-picker" && overlay.message
+      ? h(Text, { wrap: "truncate-end" }, () => `! ${overlay.message}`)
+      : null,
     ...visibleRows.map((row, visibleIndex) => {
       const index = overlay.scroll + visibleIndex;
       const selected = index === (overlay.selectedResultIndex ?? 0);
@@ -416,7 +419,7 @@ function overlayView(
       ? h(Text, { dimColor: true }, () => "No Tracks or navigation entries")
       : null,
     h(Text, { dimColor: true }, () => overlay.focus === "results"
-      ? searchActive ? "j/k move · Enter Play Next · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
+      ? searchActive ? "j/k move · Enter Play Next · l/→ open · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
       : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
   ]);
 }

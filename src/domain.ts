@@ -37,6 +37,7 @@ export type PickerOverlay = {
   providerLocation?: ProviderLocation;
   providerFilter?: ProviderSearchFilter<string>;
   resultTypeFilter?: ProviderSearchFilter<ProviderSearchResultType>;
+  message?: string;
   returnTo?: FocusReturnToken;
 };
 

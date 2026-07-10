@@ -486,13 +486,17 @@ describe("AppCoordinator", () => {
 
     await coordinator.dispatch({ type: "playNext", target });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
-    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.uiState.overlays[0]).toMatchObject({
+      ...uiState.overlays[0], message: expect.stringContaining("Press Enter to retry"),
+    });
     expect(coordinator.appState.lastEvent).toContain("Provider is offline");
 
     outcome = "cancel";
     await coordinator.dispatch({ type: "playNow", target });
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([a]);
-    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.uiState.overlays[0]).toMatchObject({
+      ...uiState.overlays[0], message: expect.stringContaining("cancelled"),
+    });
     expect(coordinator.appState.lastEvent).toBe("Music Collection resolution cancelled");
   });
 
@@ -521,6 +525,13 @@ describe("AppCoordinator", () => {
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Current", "One", "Two"]);
     expect(coordinator.appState.queue.currentIndex).toBe(0);
+
+    await coordinator.dispatch({ type: "playNow", target: {
+      kind: "music-collection", id: "navidrome:album:album", label: "Album",
+      resolve: { providerId: "navidrome", operation: "album-tracks", collectionId: "album" },
+    } });
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Current", "One", "Two"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(1);
   });
 
   test("keeps Queue and Picker Overlay unchanged when Navidrome collection resolution fails", async () => {
@@ -547,7 +558,9 @@ describe("AppCoordinator", () => {
     } });
 
     expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([current]);
-    expect(coordinator.uiState.overlays).toEqual(uiState.overlays);
+    expect(coordinator.uiState.overlays[0]).toMatchObject({
+      ...uiState.overlays[0], message: expect.stringContaining("Press Enter to retry"),
+    });
     expect(coordinator.appState.lastEvent).toContain("server offline");
   });
 
