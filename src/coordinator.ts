@@ -87,6 +87,7 @@ export class AppCoordinator {
   private activeYouTubeDownload: AbortController | null = null;
   private reportingSessionKey: string | null = null;
   private completedPlayReported = false;
+  private naturalAdvanceInFlight = false;
   private tornDown = false;
 
   constructor(options: AppCoordinatorOptions) {
@@ -101,9 +102,11 @@ export class AppCoordinator {
     this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
     this.youtubeDownloader = options.youtubeDownloader ?? downloadYouTubeUrl;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
+      const reachedNaturalEnd = playback.status === "idle" && playback.eof === true;
       this.mergePlayerPlayback(playback);
       this.maybeReportCompletedPlay(playback);
       this.notifyStateChanged("playback");
+      if (reachedNaturalEnd) void this.advanceAfterNaturalEnd();
     });
     this.unsubscribeFromProviders = Object.values(this.appState.providers)
       .filter(isLocalProvider)
@@ -260,12 +263,7 @@ export class AppCoordinator {
           return;
         case "stop":
           if (this.blockPlaybackActionIfUnavailable()) return;
-
-          await this.runPlayerCommand(
-            () => this.player.stop(),
-            "stopped",
-            { clearCurrentTrack: true },
-          );
+          await this.stopAndRetainCurrentTrack("stopped");
           return;
         case "quit":
           this.appState.lastEvent = "quit requested";
@@ -577,7 +575,7 @@ export class AppCoordinator {
       case "toggle-play-pause": await this.togglePlayPause(); return;
       case "stop":
         if (this.blockPlaybackActionIfUnavailable()) return;
-        await this.runPlayerCommand(() => this.player.stop(), "stopped", { clearCurrentTrack: true });
+        await this.stopAndRetainCurrentTrack("stopped");
         return;
       case "next-track": await this.nextTrack(); return;
       case "previous-track": await this.previousTrack(); return;
@@ -883,10 +881,12 @@ export class AppCoordinator {
       return;
     }
 
+    const originalIdentity = this.appState.playback.currentTrackIdentity;
     let skippedUnavailable = false;
     for (let attempts = 0; attempts < this.queue.entries.length; attempts += 1) {
       const entry = this.queue.next();
       if (!entry) {
+        await this.restoreAndStopCurrentTrack(originalIdentity);
         this.appState.lastEvent = skippedUnavailable ? "no available Tracks to play" : "end of Queue";
         this.syncQueueState();
         return;
@@ -908,17 +908,41 @@ export class AppCoordinator {
       return;
     }
 
+    await this.restoreAndStopCurrentTrack(originalIdentity);
     this.appState.lastEvent = "no available Tracks to play";
     this.syncQueueState();
+  }
+
+  private async advanceAfterNaturalEnd(): Promise<void> {
+    if (this.naturalAdvanceInFlight || this.tornDown) return;
+    this.naturalAdvanceInFlight = true;
+    try {
+      await this.nextTrack();
+    } finally {
+      this.naturalAdvanceInFlight = false;
+    }
   }
 
   private async previousTrack(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    const entry = this.queue.previous();
-    if (!entry) {
+    const current = this.currentQueueEntry();
+    if (!current) {
       this.appState.lastEvent = "start of Queue";
       this.syncQueueState();
+      return;
+    }
+
+    const positionSeconds = this.appState.playback.positionSeconds;
+    if (typeof positionSeconds === "number" && Number.isFinite(positionSeconds) && positionSeconds > 5) {
+      const restarted = await this.runPlayerCommand(() => this.player.seekBy(-positionSeconds));
+      if (restarted) this.appState.lastEvent = `restarted ${current.track.title}`;
+      return;
+    }
+
+    const entry = this.queue.previous();
+    if (!entry) {
+      await this.playQueueEntry(current);
       return;
     }
 
@@ -1202,14 +1226,52 @@ export class AppCoordinator {
   private async togglePlayPause(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    if (!this.appState.playback.currentTrackIdentity) {
+    const current = this.currentQueueEntry();
+    if (!current) {
       this.appState.lastEvent = "nothing is playing";
+      return;
+    }
+
+    if (this.appState.playback.status === "stopped"
+      || this.appState.playback.status === "idle"
+      || this.appState.playback.status === "error") {
+      this.queue.startAt(this.queue.entries.indexOf(current));
+      await this.playQueueEntry(current);
       return;
     }
 
     const ok = await this.runPlayerCommand(() => this.player.togglePause());
     if (!ok) return;
     this.appState.lastEvent = this.appState.playback.status === "paused" ? "paused" : "resumed";
+  }
+
+  private currentQueueEntry(): QueueEntry | undefined {
+    const identity = this.appState.playback.currentTrackIdentity;
+    return identity
+      ? this.queue.entries.find((entry) => sameIdentity(entry.track.identity, identity))
+      : undefined;
+  }
+
+  private async stopAndRetainCurrentTrack(event: string): Promise<boolean> {
+    const identity = this.appState.playback.currentTrackIdentity;
+    const stopped = await this.runPlayerCommand(() => this.player.stop());
+    if (!stopped) return false;
+    this.appState.playback = {
+      ...this.appState.playback,
+      status: "stopped",
+      positionSeconds: 0,
+      currentTrackIdentity: identity,
+    };
+    this.appState.lastEvent = event;
+    return true;
+  }
+
+  private async restoreAndStopCurrentTrack(identity: Track["identity"] | null): Promise<void> {
+    if (!identity) return;
+    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    if (index >= 0) this.queue.startAt(index);
+    this.appState.playback.currentTrackIdentity = identity;
+    await this.stopAndRetainCurrentTrack("end of Queue");
   }
 
   private markUnavailable(entry: QueueEntry, reason: string): void {

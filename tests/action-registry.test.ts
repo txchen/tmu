@@ -112,6 +112,22 @@ describe("action registry contracts", () => {
     });
   });
 
+  test("Space carries the selected Track only when no Current Track exists", () => {
+    const registry = createActionRegistry();
+    const current = context();
+
+    expect(actionForBinding(registry, " ", current)?.intent).toEqual({
+      type: "playNow",
+      target: amber,
+    });
+
+    current.appState.playback.currentTrackIdentity = amber.identity;
+    expect(actionForBinding(registry, " ", current)?.intent).toEqual({
+      type: "playerOperation",
+      operation: "toggle-play-pause",
+    });
+  });
+
   test("keeps Play Next and Play Now distinct for a Music Collection", async () => {
     const cinder = {
       identity: { providerId: "local", stableId: "/music/cinder.flac" },

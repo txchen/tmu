@@ -74,17 +74,21 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
-  test("shuffle mode changes next-track navigation while retaining previous history", () => {
-    const queue = new MemoryQueue({ random: () => 0.99 });
+  test("shuffle visibly randomizes only Tracks after Current Track and keeps that order when disabled", () => {
+    const queue = new MemoryQueue({ random: () => 0 });
     queue.enqueue(track("local", "a", "A"));
     queue.enqueue(track("local", "b", "B"));
     queue.enqueue(track("local", "c", "C"));
+    queue.enqueue(track("local", "d", "D"));
     queue.startAt(0);
 
     queue.setShuffle(true);
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
     expect(queue.next()?.track.title).toBe("C");
-    expect(queue.previous()?.track.title).toBe("A");
-    expect(queue.snapshot().shuffle).toBe(true);
+    queue.setShuffle(false);
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
+    expect(queue.next()?.track.title).toBe("D");
+    expect(queue.snapshot().shuffle).toBe(false);
   });
 
   test("shuffle mode stops after every Track has played unless repeat-all is enabled", () => {
@@ -95,12 +99,14 @@ describe("MemoryQueue", () => {
     queue.startAt(0);
     queue.setShuffle(true);
 
-    expect(queue.next()?.track.title).toBe("B");
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B"]);
     expect(queue.next()?.track.title).toBe("C");
+    expect(queue.next()?.track.title).toBe("B");
     expect(queue.next()).toBeUndefined();
 
     queue.setRepeatAll(true);
-    expect(queue.next()?.track.title).toBe("A");
+    expect(queue.next()?.track.title).toBe("C");
+    expect(queue.snapshot().entries[0]?.track.title).toBe("B");
   });
 
   test("keeps unavailable Tracks visible in snapshots", () => {
