@@ -62,6 +62,8 @@ export type YouTubeCacheProvider = Provider & {
   listCacheEntries(): readonly YouTubeCacheEntry[];
   listIncompleteEntries(): readonly IncompleteYouTubeCacheEntry[];
   findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined;
+  deleteCacheEntry(identity: TrackIdentity): Promise<boolean>;
+  cleanupIncompleteEntry(stem: string): Promise<boolean>;
 };
 
 export function createYouTubeCacheProvider(
@@ -77,6 +79,8 @@ export function isYouTubeCacheProvider(
     && typeof (provider as Partial<YouTubeCacheProvider>).listCacheEntries === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).listIncompleteEntries === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).findByIdentity === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).deleteCacheEntry === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).cleanupIncompleteEntry === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).refresh === "function";
 }
 
@@ -171,6 +175,22 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
       throw new Error(`YouTube Cache entry is missing: ${identity.stableId}`);
     }
     return { kind: "file", path: entry.mediaPath };
+  }
+
+  async deleteCacheEntry(identity: TrackIdentity): Promise<boolean> {
+    const entry = this.findByIdentity(identity);
+    if (!entry) return false;
+    await Promise.all([rm(entry.mediaPath, { force: true }), rm(entry.metadataPath, { force: true })]);
+    this.refresh();
+    return true;
+  }
+
+  async cleanupIncompleteEntry(stem: string): Promise<boolean> {
+    const entry = this.incompleteEntries.find((candidate) => candidate.stem === stem);
+    if (!entry) return false;
+    await Promise.all(entry.paths.map((path) => rm(path, { force: true })));
+    this.refresh();
+    return true;
   }
 }
 

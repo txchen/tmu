@@ -168,6 +168,12 @@ export class AppCoordinator {
           else if (intent.operation === "confirm-quit") await this.confirmQuitWithDownloads();
           else this.cancelQuitWithDownloads();
           return;
+        case "cacheOperation":
+          if (intent.operation === "request-delete") this.requestCacheDeletion(intent.identity);
+          else if (intent.operation === "request-cleanup") this.requestCacheHealthCleanup(intent.stem);
+          else if (intent.operation === "confirm") await this.confirmCacheOperation();
+          else this.cancelCacheOperation();
+          return;
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
           return;
@@ -411,6 +417,86 @@ export class AppCoordinator {
 
     this.activeDownloadBatch.controller.abort();
     this.appState.lastEvent = "cancelling active Download Batch and cleaning up partial files";
+  }
+
+  private requestCacheDeletion(identity: Track["identity"]): void {
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isYouTubeCacheProvider(provider)) {
+      this.appState.lastEvent = "YouTube Cache is unavailable";
+      return;
+    }
+    const entry = provider.findByIdentity(identity);
+    if (!entry) {
+      this.appState.lastEvent = `YouTube Cache entry is missing: ${identity.stableId}`;
+      return;
+    }
+    const isCurrent = sameIdentity(this.appState.playback.currentTrackIdentity, identity);
+    const stopsPlayback = isCurrent && ["playing", "paused"].includes(this.appState.playback.status);
+    this.appState.cacheConfirmation = {
+      kind: "delete-track",
+      stem: identity.stableId,
+      title: entry.track.title,
+      stopsPlayback,
+    };
+    this.appState.lastEvent = stopsPlayback
+      ? `confirm permanent Cache Deletion of playing Current Track ${entry.track.title}; playback will stop`
+      : `confirm permanent Cache Deletion of ${entry.track.title}`;
+  }
+
+  private requestCacheHealthCleanup(stem: string): void {
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    const entry = isYouTubeCacheProvider(provider)
+      ? provider.listIncompleteEntries().find((candidate) => candidate.stem === stem)
+      : undefined;
+    if (!entry) {
+      this.appState.lastEvent = `incomplete YouTube Cache entry is missing: ${stem}`;
+      return;
+    }
+    this.appState.cacheConfirmation = {
+      kind: "cleanup-incomplete",
+      stem,
+      ...(entry.title ? { title: entry.title } : {}),
+      stopsPlayback: false,
+    };
+    this.appState.lastEvent = `confirm cleanup of incomplete YouTube Cache entry ${stem}`;
+  }
+
+  private async confirmCacheOperation(): Promise<void> {
+    const confirmation = this.appState.cacheConfirmation;
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!confirmation || !isYouTubeCacheProvider(provider)) {
+      this.appState.lastEvent = "no Cache operation confirmation pending";
+      return;
+    }
+    delete this.appState.cacheConfirmation;
+    if (confirmation.kind === "cleanup-incomplete") {
+      const removed = await provider.cleanupIncompleteEntry(confirmation.stem);
+      this.appState.lastEvent = removed
+        ? `cleaned incomplete YouTube Cache entry ${confirmation.stem}`
+        : `incomplete YouTube Cache entry is missing: ${confirmation.stem}`;
+      return;
+    }
+
+    const identity = { providerId: YOUTUBE_CACHE_PROVIDER_ID, stableId: confirmation.stem };
+    const deletesPlayingCurrent = sameIdentity(this.appState.playback.currentTrackIdentity, identity)
+      && ["playing", "paused"].includes(this.appState.playback.status);
+    if (deletesPlayingCurrent && !await this.stopAndRetainCurrentTrack("stopped for Cache Deletion")) return;
+    const removed = await provider.deleteCacheEntry(identity);
+    if (!removed) {
+      this.appState.lastEvent = `YouTube Cache entry is missing: ${confirmation.stem}`;
+      return;
+    }
+    this.queue.markAvailability(identity, {
+      status: "unavailable",
+      reason: `YouTube Cache entry was deleted: ${confirmation.stem}`,
+    });
+    this.syncQueueState();
+    this.appState.lastEvent = `permanently deleted YouTube Cache entry ${confirmation.stem}`;
+  }
+
+  private cancelCacheOperation(): void {
+    delete this.appState.cacheConfirmation;
+    this.appState.lastEvent = "Cache operation cancelled";
   }
 
   private async startSelectedQueueEntry(): Promise<void> {

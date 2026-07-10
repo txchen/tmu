@@ -18,6 +18,7 @@ export type UiStateAction =
   | { type: "setLibraryQuery"; query: string }
   | { type: "setLibraryInputFocus"; focused: boolean }
   | { type: "setLibrarySelection"; index: number; resultCount: number }
+  | { type: "setCacheHealthSelection"; index: number; resultCount: number }
   | { type: "setDownloaderInput"; value: string }
   | { type: "setDownloaderInputFocus"; focused: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
@@ -35,7 +36,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     queueScroll: 0,
     overlays: [],
     selectedQueueIdentity: null,
-    library: { query: "", inputFocused: true, selectedIndex: 0, scroll: 0 },
+    library: { query: "", inputFocused: true, selectedIndex: 0, healthSelectedIndex: 0, scroll: 0 },
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
@@ -78,6 +79,11 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return {
         ...state,
         library: { ...state.library, selectedIndex: clampIndex(action.index, action.resultCount) },
+      };
+    case "setCacheHealthSelection":
+      return {
+        ...state,
+        library: { ...state.library, healthSelectedIndex: clampIndex(action.index, action.resultCount) },
       };
     case "setDownloaderInput":
       return { ...state, downloader: { ...state.downloader, urlInput: action.value } };

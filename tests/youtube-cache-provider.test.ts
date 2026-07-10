@@ -181,6 +181,28 @@ describe("YouTubeCacheProvider", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("permanently deletes one healthy entry and cleans only one targeted incomplete entry", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-delete-"));
+    try {
+      await writeEntry(dir, entry("healthy0001", "Healthy", "Ada"));
+      await writeFile(join(dir, "broken00001.opus"), "orphan bytes");
+      await writeFile(join(dir, "notes.txt"), "unrelated");
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
+
+      await expect(provider.deleteCacheEntry({ providerId: "youtube-cache", stableId: "healthy0001" }))
+        .resolves.toBe(true);
+      expect(provider.listTracks()).toEqual([]);
+      await expect(readFile(join(dir, "healthy0001.opus"), "utf8")).rejects.toThrow();
+      await expect(readFile(join(dir, "healthy0001.json"), "utf8")).rejects.toThrow();
+
+      await expect(provider.cleanupIncompleteEntry("broken00001")).resolves.toBe(true);
+      expect(provider.listIncompleteEntries()).toEqual([]);
+      expect(await readFile(join(dir, "notes.txt"), "utf8")).toBe("unrelated");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 function id(track: { identity: { stableId: string } }): string {

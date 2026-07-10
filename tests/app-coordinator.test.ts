@@ -4,6 +4,7 @@ import type { PlaybackLocator, Provider, Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
+import type { YouTubeCacheProvider } from "../src/youtube-cache";
 
 const cachedTrack: Track = {
   identity: { providerId: "youtube-cache", stableId: "cached-track" },
@@ -308,6 +309,55 @@ describe("AppCoordinator with the narrow Provider", () => {
 
     expect(preflightStarted).toBe(false);
     expect(player.teardownCount).toBe(1);
+  });
+
+  test("confirmed Cache Deletion recomputes playback state and retains the Current Queue entry unavailable", async () => {
+    let deleted = false;
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache",
+      listTracks: () => deleted ? [] : [cachedTrack],
+      searchTracks: () => deleted ? [] : [cachedTrack],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+      refresh: () => undefined,
+      listCacheEntries: () => deleted ? [] : [{
+        track: cachedTrack,
+        availability: { status: "available" },
+        metadata: {
+          videoId: "cached-track", title: "Cached Track", uploader: "Cache Artist",
+          cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached-track.opus", container: "opus",
+        },
+        metadataPath: "/cache/cached-track.json", mediaPath: "/cache/cached-track.opus",
+      }],
+      listIncompleteEntries: () => [],
+      findByIdentity: () => deleted ? undefined : ({
+        track: cachedTrack, availability: { status: "available" },
+        metadata: {
+          videoId: "cached-track", title: "Cached Track", uploader: "Cache Artist",
+          cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached-track.opus", container: "opus",
+        }, metadataPath: "/cache/cached-track.json", mediaPath: "/cache/cached-track.opus",
+      }),
+      deleteCacheEntry: async () => { deleted = true; return true; },
+      cleanupIncompleteEntry: async () => false,
+    };
+    const player = new RecordingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: cachedTrack.identity });
+    expect(coordinator.appState.cacheConfirmation).toMatchObject({
+      kind: "delete-track", stem: "cached-track", stopsPlayback: false,
+    });
+    expect(deleted).toBe(false);
+
+    await coordinator.dispatch({ type: "playNow", target: cachedTrack });
+    await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
+    expect(deleted).toBe(true);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.queue.entries[0]?.availability).toMatchObject({ status: "unavailable" });
+    expect(coordinator.appState.playback).toMatchObject({
+      status: "stopped", positionSeconds: 0, currentTrackIdentity: cachedTrack.identity,
+    });
   });
 });
 
