@@ -1,4 +1,7 @@
-import type {
+import {
+  identityKey,
+  type Provider,
+  type ProviderSearchRequest,
   GlobalSearchState,
   ProviderSearchResult,
   ProviderSearchResultType,
@@ -53,4 +56,27 @@ export function globalSearchRows(state: GlobalSearchState): GlobalSearchRow[] {
 export function globalSearchResultAt(state: GlobalSearchState, index: number): ProviderSearchResult | undefined {
   const row = globalSearchRows(state)[index];
   return row?.kind === "result" ? row.result : undefined;
+}
+
+export function globalSearchRowProviderId(row: GlobalSearchRow | undefined): string | undefined {
+  if (row?.kind === "provider-heading" || row?.kind === "provider-status") return row.providerId;
+  return row?.kind === "result" ? row.result.providerId : undefined;
+}
+
+export function searchKnownTracks(
+  provider: Pick<Provider, "id" | "label">,
+  tracks: readonly import("./domain").Track[],
+  request: ProviderSearchRequest,
+): ProviderSearchResult[] {
+  if (!request.resultTypes.includes("track") || request.signal?.aborted) return [];
+  const query = request.query.trim().toLocaleLowerCase();
+  if (!query) return [];
+  return tracks
+    .filter((track) => [track.title, track.artist, track.album]
+      .some((value) => value?.toLocaleLowerCase().includes(query)))
+    .slice(0, request.limit)
+    .map((track) => ({
+      providerId: provider.id, providerLabel: provider.label, type: "track" as const,
+      id: identityKey(track.identity), label: track.title, detail: track.artist, target: track,
+    }));
 }

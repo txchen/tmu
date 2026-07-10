@@ -68,16 +68,13 @@ describe("Global Search", () => {
     }
   });
 
-  test("configured Navidrome returns typed ranked results with playable Tracks and collections", async () => {
+  test("configured Navidrome returns ranked playable Tracks without taking on #56 browse capabilities", async () => {
     const config = createDefaultTmuConfig({ providers: { navidrome: {
       enabled: true, serverUrl: "https://music.example.test", username: "alex", password: "secret",
     } } }).providers.navidrome;
     const navidrome = createNavidromeProvider({ config, saltFactory: () => "salt", fetcher: async () => new Response(JSON.stringify({
       "subsonic-response": { status: "ok", searchResult3: {
         song: [{ id: "track-1", title: "First" }, { id: "track-2", title: "Second" }],
-        artist: [{ id: "artist-1", name: "Artist" }],
-        album: [{ id: "album-1", name: "Album" }],
-        playlist: [{ id: "playlist-1", name: "Playlist" }],
       } },
     })) });
 
@@ -85,10 +82,9 @@ describe("Global Search", () => {
       query: "mix", resultTypes: ["track", "artist", "album", "playlist"], limit: 50,
     });
     expect(results.map((item) => [item.type, item.label])).toEqual([
-      ["track", "First"], ["track", "Second"], ["artist", "Artist"], ["album", "Album"], ["playlist", "Playlist"],
+      ["track", "First"], ["track", "Second"],
     ]);
     expect(results.find((item) => item.type === "track")?.target).toBeDefined();
-    expect(results.find((item) => item.type === "album")?.target).toMatchObject({ kind: "music-collection" });
   });
 
   test("groups type then Provider, preserves rankings and caps every subgroup at 50", () => {
@@ -134,6 +130,47 @@ describe("Global Search", () => {
 
     await coordinator.dispatch({ type: "globalSearch", operation: "retry", providerId: "navidrome" });
     expect(coordinator.appState.globalSearch.providers.navidrome).toMatchObject({ status: "success" });
+  });
+
+  test("publishes partial success while another Provider is still loading", async () => {
+    let finishRemote: ((results: readonly ProviderSearchResult[]) => void) | undefined;
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        local: provider("local", async () => [result("local", "track", "ready")]),
+        navidrome: provider("navidrome", () => new Promise((resolve) => { finishRemote = resolve; })),
+      }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+
+    const search = coordinator.dispatch({
+      type: "globalSearch", operation: "submit", query: "mix", providerFilter: "all", resultTypeFilter: "all",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(coordinator.appState.globalSearch.providers).toMatchObject({
+      local: { status: "success" }, navidrome: { status: "loading" },
+    });
+    finishRemote?.([]);
+    await search;
+    expect(coordinator.appState.globalSearch.providers.navidrome).toMatchObject({ status: "empty" });
+  });
+
+  test("classifies Provider authentication, offline, and ordinary failures independently", async () => {
+    const failing = (id: string, error: Error) => provider(id, async () => { throw error; });
+    const auth = Object.assign(new Error("credentials expired"), { kind: "auth" });
+    const offline = Object.assign(new Error("server unreachable"), { kind: "api" });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({
+        auth: failing("auth", auth), offline: failing("offline", offline), broken: failing("broken", new Error("bad response")),
+      }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({
+      type: "globalSearch", operation: "submit", query: "mix", providerFilter: "all", resultTypeFilter: "all",
+    });
+    expect(coordinator.appState.globalSearch.providers).toMatchObject({
+      auth: { status: "auth" }, offline: { status: "offline" }, broken: { status: "failure" },
+    });
   });
 
   test("replacement submissions supersede stale Provider completions", async () => {
@@ -216,5 +253,23 @@ describe("Global Search", () => {
     });
     uiState.overlays = [{ ...uiState.overlays[0]!, selectedResultIndex: 0 }];
     expect(actionForBinding(createActionRegistry(), "\r", { appState, uiState })).toBeNull();
+  });
+
+  test("search result movement cannot replace the remembered Provider navigation selection", () => {
+    const ui = new UiStateStore(createInitialUiState());
+    ui.dispatch({ type: "openOverlay", overlay: {
+      kind: "music-picker", focus: "results", query: "", selectedIdentity: null,
+      selectedResultIndex: 0, scroll: 0, providerLocation: { providerId: "local", path: ["/music"] },
+    } });
+    ui.dispatch({ type: "moveOverlaySelection", delta: 3, rowCount: 10, visibleRows: 5 });
+    expect(ui.snapshot.providerNavigationMemory).toMatchObject({ selectedIndex: 3, location: { providerId: "local" } });
+
+    ui.dispatch({ type: "setQuery", query: "amber" });
+    ui.dispatch({ type: "prepareSearchResults" });
+    ui.dispatch({ type: "moveOverlaySelection", delta: 5, rowCount: 10, visibleRows: 5 });
+    ui.dispatch({ type: "restoreProviderNavigation" });
+    expect(ui.snapshot.overlays.at(-1)).toMatchObject({
+      query: "", selectedResultIndex: 3, providerLocation: { providerId: "local", path: ["/music"] },
+    });
   });
 });
