@@ -54,6 +54,7 @@ class RecordingPlayer implements Player {
     return this.state;
   }
   async setPaused(paused: boolean) {
+    this.toggles += 1;
     this.publish({ ...this.state, status: paused ? "paused" : "playing" });
     return this.state;
   }
@@ -176,6 +177,11 @@ describe("production vue-tui", () => {
     await terminal.stdin.write("p");
     expect(player.seeks).toEqual([-8]);
     expect(player.loaded).toEqual([]);
+
+    player.publishState({ status: "paused", positionSeconds: 8 });
+    await terminal.stdin.write("p");
+    expect(player.seeks).toEqual([-8, -8]);
+    expect(coordinator.appState.playback.status).toBe("playing");
 
     player.publishState({ status: "playing", positionSeconds: 5 });
     await terminal.stdin.write("p");

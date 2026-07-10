@@ -45,21 +45,43 @@ async function spawnTmu(
 
 async function seedPlaybackSnapshot(runtimeRoot: string): Promise<void> {
   const mediaPath = `${runtimeRoot}/media/pty-track.wav`;
+  const lastMediaPath = `${runtimeRoot}/media/pty-last.wav`;
+  const missingPath = `${runtimeRoot}/media/missing.wav`;
   const stateDir = `${runtimeRoot}/state/tmu`;
   await mkdir(`${runtimeRoot}/media`, { recursive: true });
   await mkdir(stateDir, { recursive: true });
-  await writeFile(mediaPath, createWavSample(8));
+  await writeFile(mediaPath, createWavSample(60));
+  await writeFile(lastMediaPath, createWavSample(60));
   await writeFile(`${stateDir}/last-queue.json`, JSON.stringify({
     version: 1,
-    entries: [{
-      track: {
-        identity: { providerId: "local", stableId: mediaPath },
-        title: "PTY Track",
-        providerLabel: "Local",
-        durationSeconds: 8,
+    entries: [
+      {
+        track: {
+          identity: { providerId: "local", stableId: mediaPath },
+          title: "PTY Track",
+          providerLabel: "Local",
+          durationSeconds: 60,
+        },
+        availability: { status: "unknown" },
       },
-      availability: { status: "unknown" },
-    }],
+      {
+        track: {
+          identity: { providerId: "local", stableId: missingPath },
+          title: "PTY Missing",
+          providerLabel: "Local",
+        },
+        availability: { status: "unknown" },
+      },
+      {
+        track: {
+          identity: { providerId: "local", stableId: lastMediaPath },
+          title: "PTY Last",
+          providerLabel: "Local",
+          durationSeconds: 60,
+        },
+        availability: { status: "unknown" },
+      },
+    ],
     currentIndex: 0,
     shuffle: false,
     repeatAll: false,
@@ -183,25 +205,26 @@ describe("production tmu real PTY", () => {
     );
 
     try {
-      await waitForOutput(read, "Queue · 1 Tracks");
-      let nextFrame = output.length;
-      terminal.write(" ");
-      await waitForNewOutput(read, nextFrame, "Playing · PTY Track");
+      await waitForOutput(read, "Queue · 3 Tracks");
+      const writeAndWait = async (key: string, expected: string) => {
+        const nextFrame = output.length;
+        terminal.write(key);
+        await waitForNewOutput(read, nextFrame, expected);
+        await Bun.sleep(250);
+      };
+      await writeAndWait(" ", "Playing · PTY Track");
 
-      nextFrame = output.length;
-      terminal.write("s");
-      await waitForNewOutput(read, nextFrame, "Stopped · starts from beginning");
+      await writeAndWait(" ", "Paused · Space to Resume");
+      await writeAndWait("j", "Paused · Space to Resume");
+      await writeAndWait(" ", "Playing · PTY Track");
+      await writeAndWait("s", "Stopped · starts from beginning");
+      await writeAndWait(" ", "Playing · PTY Track");
 
-      nextFrame = output.length;
-      terminal.write("p");
-      await waitForNewOutput(read, nextFrame, "Playing · PTY Track");
+      await writeAndWait("+", "Vol 75%");
 
-      nextFrame = output.length;
-      terminal.write("z");
-      await waitForNewOutput(read, nextFrame, "Shuffle On");
-      nextFrame = output.length;
-      terminal.write("r");
-      await waitForNewOutput(read, nextFrame, "Repeat All");
+      await writeAndWait("n", "Playing · PTY Last");
+      await writeAndWait("r", "Repeat All");
+      await writeAndWait("z", "Shuffle On");
 
       terminal.write("\u0003");
       expect(await subprocess.exited).toBe(0);
@@ -210,5 +233,5 @@ describe("production tmu real PTY", () => {
       terminal.close();
       await rm(runtimeRoot, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
