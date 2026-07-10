@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -12,6 +12,9 @@ let tarball = "";
 let packageFiles: string[] = [];
 
 beforeAll(async () => {
+  if (process.platform === "darwin") {
+    await chmod(join("node_modules", "node-pty", "prebuilds", `darwin-${process.arch}`, "spawn-helper"), 0o755);
+  }
   root = await mkdtemp(join(tmpdir(), "tmu-package-contract-"));
   const configDir = join(root, "config", "tmu");
   await mkdir(configDir, { recursive: true });
@@ -78,7 +81,7 @@ describe("Node npm package", () => {
     await exec("npm", ["install", "--global", "--prefix", globalPrefix, tarball]);
 
     const env = isolatedRuntimeEnv();
-    await expectPackedTerminal("/bin/sh", ["-c", "exec \"$1\"", "tmu-global", join(globalPrefix, "bin", "tmu")], env);
+    await expectPackedTerminal(join(globalPrefix, "bin", "tmu"), [], env);
     await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env);
   }, 30_000);
 
