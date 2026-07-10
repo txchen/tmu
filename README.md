@@ -16,7 +16,7 @@ YouTube URL Download stores downloaded audio in the YouTube Cache without adding
 
 ## Install and run
 
-TMU requires Node.js 24 or newer. Run it directly from the npm package:
+Node.js and npm are TMU's runtime and installation requirements. TMU requires Node.js 24 or newer. Run it directly from the npm package:
 
 ```sh
 npx tmu
@@ -29,4 +29,20 @@ npm install --global tmu
 tmu
 ```
 
-The npm package contains a prebuilt JavaScript executable, so no TypeScript loader or build step is needed after installation. `mpv` and `yt-dlp` remain optional External Tools discovered through TMU Config and dependency health checks; when either is missing, only its corresponding feature is disabled.
+The npm package contains a prebuilt JavaScript executable, so no TypeScript loader or build step is needed after installation. Linux, macOS, and WSL (through Linux behavior) are supported; native Windows is not supported.
+
+`mpv` and `yt-dlp` are separate External Tools discovered through TMU Config and dependency health checks. They are not Node packages or npm runtime requirements. When either is missing, only its corresponding feature is disabled.
+
+## Development
+
+Install the locked dependencies with `npm ci`, then use the public npm scripts:
+
+```sh
+npm run build
+npm run start
+npm run typecheck
+npm test
+npm run smoke:package
+```
+
+To capture a Node CPU profile for a representative full-Track playback, run `npm run benchmark:playback`, play a cached Track through to completion, and quit TMU. The profile is written to `tmu-playback.cpuprofile`; repeat the same Track and environment when comparing runs. This measurement reports runtime CPU activity, not hardware energy use.

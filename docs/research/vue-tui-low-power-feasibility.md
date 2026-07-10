@@ -2,20 +2,22 @@
 
 Research for **Evaluate vue-tui for TMU's low-power interaction model**. Reviewed 2026-07-09 against vue-tui commit [`3e44c9a`](https://github.com/vuejs-ai/vue-tui/tree/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a). External claims below use project-owned source, documentation, or published package metadata.
 
+> Historical note: the runtime and packaging constraints evaluated here predate TMU's Node/npm migration. ADR-0002 and the current README supersede that workflow guidance; the renderer findings remain useful background.
+
 ## Question
 
-Can vue-tui support TMU's Queue Home, stacked Picker Overlays, raw keyboard input including Vim chords and modifier keys, predictable focus and resize behavior, event-driven rendering with no steady-playback redraw loop by default, Bun/TypeScript packaging, and automated testing? If not, which TUI approach best satisfies those constraints and why?
+Could vue-tui support TMU's Queue Home, stacked Picker Overlays, raw keyboard input including Vim chords and modifier keys, predictable focus and resize behavior, event-driven rendering with no steady-playback redraw loop by default, the packaging workflow used at the time, and automated testing? If not, which TUI approach best satisfied those constraints?
 
 ## Decision
 
-**Do not adopt vue-tui for TMU now.** Its runtime primitives are capable enough to express the intended interface, but its current public contract is too young and its supported toolchain is too far from TMU's proven Bun executable path for the architecture to be implementation-ready.
+**The 2026-07-09 decision was not to adopt vue-tui.** Its runtime primitives were capable enough to express the intended interface, but its public contract was too young and its supported toolchain was too far from TMU's executable path at that time for the architecture to be implementation-ready.
 
-For the MVP, keep TMU's existing Bun/TypeScript terminal adapter and deepen it behind the current App State, UI State, App Coordinator, and `RenderScheduler` seams. Add a responsive layout model, explicit Picker Overlay stack, focus-return tokens, a context-aware action registry, and a real key-sequence parser as ordinary TypeScript domain/UI modules. This preserves the already-tested Low-Power TUI and packaging behavior while leaving the renderer replaceable.
+The recommendation was to deepen TMU's existing terminal adapter behind the App State, UI State, App Coordinator, and `RenderScheduler` seams. The proposed responsive layout model, Picker Overlay stack, focus-return tokens, action registry, and key-sequence parser remain ordinary TypeScript domain/UI modules, preserving Low-Power TUI behavior while leaving the renderer replaceable.
 
 Reconsider vue-tui after all three gates are true:
 
 1. its runtime and testing APIs share a stable release line;
-2. TMU has a passing Bun `--compile` proof for the full runtime, Yoga dependency, input, resize, and teardown paths; and
+2. TMU has a passing packaged-runtime proof covering Yoga, input, resize, and teardown paths; and
 3. an interactive TMU prototype shows no render-cadence or terminal-correctness regression.
 
 ## Capability assessment
@@ -48,17 +50,17 @@ This is compatible with Low-Power TUI behavior only if TMU keeps its higher-leve
 
 The testing package is intended to provide a fake TTY, input injection, frame assertions, resize, raw-mode inspection, teardown, and render-flush waiting ([testing API](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/testing/README.md#L10-L86)). Its own README nevertheless labels it early-stage and not recommended for production use ([testing maturity notice](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/testing/README.md#L1-L5)).
 
-As published on 2026-07-09, `@vue-tui/runtime` is `0.1.1`, while `@vue-tui/testing` is `0.0.3`; the registry package for testing depends exactly on runtime `0.0.3` ([runtime package](https://www.npmjs.com/package/@vue-tui/runtime), [testing package](https://www.npmjs.com/package/@vue-tui/testing)). A clean latest-to-latest Bun install therefore contains two runtime copies. Reproducing the documented component test with a component imported from runtime `0.1.1` fails inside the testing harness's runtime `0.0.3` with `Unknown vue-tui element type: tui-text`. Pinning all packages backward would test an older runtime, not the candidate currently being evaluated.
+As published on 2026-07-09, `@vue-tui/runtime` was `0.1.1`, while `@vue-tui/testing` was `0.0.3`; the registry package for testing depended exactly on runtime `0.0.3` ([runtime package](https://www.npmjs.com/package/@vue-tui/runtime), [testing package](https://www.npmjs.com/package/@vue-tui/testing)). A clean latest-to-latest install therefore contained two runtime copies. Reproducing the documented component test with a component imported from runtime `0.1.1` failed inside the testing harness's runtime `0.0.3` with `Unknown vue-tui element type: tui-text`. Pinning all packages backward would have tested an older runtime, not the candidate being evaluated.
 
 This blocks an implementation-ready automated-testing story even though the underlying harness design is promising.
 
-### Bun/TypeScript packaging: source mode works; TMU's executable path is unsupported
+### Historical packaging constraint: source mode worked; TMU's executable path was unsupported
 
-The runtime is ESM TypeScript output with Vue and Yoga dependencies, and a local smoke test successfully rendered a non-interactive component under Bun 1.3.14. That establishes basic Bun runtime compatibility, not deployable compatibility.
+The runtime was ESM TypeScript output with Vue and Yoga dependencies, and a local smoke test successfully rendered a non-interactive component under TMU's runtime at the time. That established basic source-mode compatibility, not deployable compatibility.
 
-The project's declared engine is Node `>=22.18.0` ([runtime package metadata](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/runtime/package.json#L49-L82)). Its documented production workflow explicitly targets a self-contained **Node** module built with `tsdown`, keeping Node built-ins external ([production build](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/vite/README.md#L50-L76)). The project does not document or test TMU's `bun build --compile --target=bun-linux-x64-baseline` path.
+The project's declared engine was Node `>=22.18.0` ([runtime package metadata](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/runtime/package.json#L49-L82)). Its documented production workflow targeted a self-contained Node module built with `tsdown`, keeping Node built-ins external ([production build](https://github.com/vuejs-ai/vue-tui/blob/3e44c9a266e52ebeba2db669b4bb96521b9e2f3a/packages/vite/README.md#L50-L76)). It did not document or test TMU's compiled executable path at the time.
 
-TMU already has tests around that Bun executable path and intentionally leaves mpv and yt-dlp as external helpers. Adopting vue-tui before a compiled Linux smoke proof would turn a settled delivery constraint into architecture risk.
+TMU already had tests around that executable path and intentionally left mpv and yt-dlp as External Tools. Adopting vue-tui before a packaged Linux smoke proof would have turned a settled delivery constraint into architecture risk.
 
 ### Maturity and maintenance risk: active, impressive, not settled
 
