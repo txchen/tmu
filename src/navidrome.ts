@@ -227,6 +227,24 @@ class SubsonicNavidromeProvider implements NavidromeProvider {
     operations: ["refresh", "retry"],
   };
 
+  getNavigationRoot() {
+    if (!this.config.serverUrl.trim()) return { visible: false, order: 20, detail: this.hint };
+    const state = this.connectionState;
+    if (state.status === "missing-config") return {
+      visible: true,
+      order: 20,
+      detail: state.missingFields.includes("enabled")
+        ? "Disabled · Enable in TMU Config"
+        : `${state.message} · Update TMU Config`,
+    };
+    if (state.status === "auth-failure") return {
+      visible: true, order: 20, detail: "Authentication failed · Check credentials and retry",
+    };
+    if (state.status === "api-failure") return { visible: true, order: 20, detail: "Offline · Retry" };
+    if (state.status === "checking") return { visible: true, order: 20, detail: "Checking connection · Retry" };
+    return { visible: true, order: 20, detail: this.hint };
+  }
+
   private readonly config: NavidromeConfig;
   private readonly fetcher: NavidromeFetcher;
   private readonly saltFactory: () => string;

@@ -12,6 +12,7 @@ export type ActionContext = {
   readonly appState: Readonly<AppState> | AppStateSnapshot;
   readonly uiState: Readonly<UiState>;
   readonly selectedPlayableTarget?: PlayableTarget | null;
+  readonly selectedProviderId?: string | null;
 };
 
 export type UiActionIntent = {
@@ -142,6 +143,20 @@ export function createActionRegistry(): ActionRegistry {
         operation: "refresh",
       }),
     },
+    {
+      id: "provider.retry",
+      name: "Retry Provider",
+      aliases: ["reconnect provider"],
+      bindings: [{ key: "r", label: "r" }],
+      applies: (context) => providerSupports(context, "retry"),
+      enabled: always,
+      disabledReason: neverDisabled,
+      createIntent: (context) => ({
+        type: "providerOperation",
+        providerId: selectedProviderId(context) ?? context.uiState.activeTargetId,
+        operation: "retry",
+      }),
+    },
     boundAction("provider.cancel-open", "Cancel Local Open", ["cancel open"], [
       { key: "\x1b", label: "Esc" },
     ], { type: "providerOperation", providerId: "local", operation: "cancel-open" }),
@@ -222,7 +237,8 @@ export function createActionRegistry(): ActionRegistry {
 }
 
 function selectedProviderId(context: ActionContext): string | null {
-  return context.uiState.overlays.at(-1)?.providerLocation?.providerId
+  return context.selectedProviderId
+    ?? context.uiState.overlays.at(-1)?.providerLocation?.providerId
     ?? (context.uiState.activeTargetId === "queue" ? null : context.uiState.activeTargetId);
 }
 

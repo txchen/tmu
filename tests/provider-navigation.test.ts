@@ -40,17 +40,32 @@ describe("Provider navigation", () => {
     });
   });
 
-  test("shows configured Navidrome disabled, offline, and authentication recovery states", () => {
-    for (const [state, expected] of [
-      [{ status: "missing-config", message: "set enabled", missingFields: ["enabled"] }, "Disabled · Enable in TMU Config"],
-      [{ status: "api-failure", message: "connection refused" }, "Offline · Retry"],
-      [{ status: "auth-failure", message: "wrong password" }, "Authentication failed · Check credentials and retry"],
-    ] as const) {
-      const config = createDefaultTmuConfig({ providers: { navidrome: { serverUrl: "https://music.example.test" } } });
-      const navidrome = createNavidromeProvider({ config: config.providers.navidrome });
-      Object.assign(navidrome, { getConnectionState: () => state });
-      const appState = createInitialAppState({ navidrome }, { config });
+  test("shows configured Navidrome disabled, offline, and authentication recovery states", async () => {
+    const disabledConfig = createDefaultTmuConfig({ providers: { navidrome: { serverUrl: "https://music.example.test" } } });
+    const disabled = createNavidromeProvider({ config: disabledConfig.providers.navidrome });
 
+    const connectedConfig = createDefaultTmuConfig({
+      providers: { navidrome: { enabled: true, serverUrl: "https://music.example.test", username: "listener", password: "secret" } },
+    });
+    const offline = createNavidromeProvider({
+      config: connectedConfig.providers.navidrome,
+      fetcher: async () => { throw new Error("connection refused"); },
+    });
+    await offline.validateConnection();
+    const authFailure = createNavidromeProvider({
+      config: connectedConfig.providers.navidrome,
+      fetcher: async () => new Response(JSON.stringify({
+        "subsonic-response": { status: "failed", error: { code: 40, message: "wrong password" } },
+      }), { status: 200 }),
+    });
+    await authFailure.validateConnection();
+
+    for (const [provider, config, expected] of [
+      [disabled, disabledConfig, "Disabled · Enable in TMU Config"],
+      [offline, connectedConfig, "Offline · Retry"],
+      [authFailure, connectedConfig, "Authentication failed · Check credentials and retry"],
+    ] as const) {
+      const appState = createInitialAppState({ navidrome: provider }, { config });
       expect(providerNavigationRows(appState, { providerId: null, path: [] })).toContainEqual(
         expect.objectContaining({ label: "Navidrome", detail: expected }),
       );

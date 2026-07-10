@@ -116,6 +116,10 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
     operations: ["refresh"],
   };
 
+  getNavigationRoot() {
+    return { visible: true, order: 30, detail: this.hint };
+  }
+
   private readonly entries = new Map<string, OfflineYouTubeCacheEntry>();
 
   constructor(private readonly options: OfflineYouTubeCacheProviderOptions) {

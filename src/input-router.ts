@@ -16,7 +16,7 @@ import {
   selectedUnavailableQueueEntry,
   type UiStateAction,
 } from "./ui-state";
-import { providerNavigationRows } from "./provider-navigation";
+import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -140,7 +140,7 @@ export class RootInputRouter {
     const visibleRows = visibleQueueRows(this.uiState.snapshot, this.appState());
     const queueFocused = this.uiState.snapshot.focusedPane === "queue"
       && this.uiState.snapshot.activeTargetId === "queue";
-    const movement = queueFocused ? queueMovementForKey(key, visibleRows) : null;
+    const movement = queueFocused ? listMovementForKey(key, visibleRows) : null;
     if (movement) {
       if (movement.kind === "boundary") {
         this.uiState.dispatch({
@@ -163,6 +163,7 @@ export class RootInputRouter {
     const action = actionForBinding(this.registry, key, {
       appState: this.appState(),
       uiState: this.uiState.snapshot,
+      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
     });
     if (!action) {
       const uiIntent = uiIntentForKey(key);
@@ -187,6 +188,7 @@ export class RootInputRouter {
     const action = actionForBinding(this.registry, key, {
       appState: this.appState(),
       uiState: this.uiState.snapshot,
+      selectedProviderId: selectedOverlayProviderId(this.appState(), this.uiState.snapshot),
     });
     if (action?.enabled && action.intent) {
       await this.dispatchIntent(action.intent);
@@ -198,14 +200,20 @@ export class RootInputRouter {
     key: string,
     overlay: UiState["overlays"][number],
   ): Promise<boolean> {
+    if (key === "r" || key === "f") {
+      this.cancelOverlayChord();
+      await this.dispatchBinding(key);
+      return true;
+    }
     if (key === "/") {
       this.cancelOverlayChord();
       this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
       return true;
     }
     const rows = providerNavigationRows(this.appState(), overlay.providerLocation ?? { providerId: null, path: [] });
-    const visibleRows = providerOverlayVisibleRows(this.uiState.snapshot.terminal.rows);
-    const movement = overlayMovementForKey(key, visibleRows);
+    const terminal = this.uiState.snapshot.terminal;
+    const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
+    const movement = listMovementForKey(key, visibleRows);
     if (movement) {
       this.cancelOverlayChord();
       if (movement.kind === "boundary") {
@@ -350,6 +358,13 @@ function queueIdentities(appState: Readonly<AppState>) {
   return appState.queue.entries.map((entry) => entry.track.identity);
 }
 
+function selectedOverlayProviderId(appState: Readonly<AppState>, uiState: Readonly<UiState>): string | null {
+  const overlay = uiState.overlays.at(-1);
+  if (overlay?.kind !== "music-picker" || overlay.focus !== "results") return null;
+  if (overlay.providerLocation?.providerId) return overlay.providerLocation.providerId;
+  return providerNavigationRows(appState, { providerId: null, path: [] })[overlay.selectedResultIndex ?? 0]?.providerId ?? null;
+}
+
 function isTextEntryFocus(focus: UiState["overlays"][number]["focus"]): boolean {
   return focus === "search" || focus === "filter" || focus === "input";
 }
@@ -377,25 +392,6 @@ function deletePreviousWord(value: string): string {
   return value.replace(/\s*\S+\s*$/, "");
 }
 
-function providerOverlayVisibleRows(rows: number): number {
-  return Math.max(1, Math.min(28, rows - 6));
-}
-
-function overlayMovementForKey(key: string, visibleRows: number):
-  | { kind: "relative"; delta: number }
-  | { kind: "boundary"; boundary: "first" | "last" }
-  | null {
-  if (key === "j" || key === "\x1b[B") return { kind: "relative", delta: 1 };
-  if (key === "k" || key === "\x1b[A") return { kind: "relative", delta: -1 };
-  if (key === "G" || key === "\x1b[F") return { kind: "boundary", boundary: "last" };
-  if (key === "\x1b[H") return { kind: "boundary", boundary: "first" };
-  if (key === "\x04") return { kind: "relative", delta: Math.max(1, Math.floor(visibleRows / 2)) };
-  if (key === "\x15") return { kind: "relative", delta: -Math.max(1, Math.floor(visibleRows / 2)) };
-  if (key === "\x1b[6~") return { kind: "relative", delta: visibleRows };
-  if (key === "\x1b[5~") return { kind: "relative", delta: -visibleRows };
-  return null;
-}
-
 function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppState>): number {
   const selected = selectedUnavailableQueueEntry(appState.queue.entries, uiState.selectedQueueIdentity);
   return queueHomeVisibleRows(
@@ -405,7 +401,7 @@ function visibleQueueRows(uiState: Readonly<UiState>, appState: Readonly<AppStat
   );
 }
 
-function queueMovementForKey(key: string, visibleRows: number):
+function listMovementForKey(key: string, visibleRows: number):
   | { kind: "relative"; delta: number }
   | { kind: "boundary"; boundary: "first" | "last" }
   | null {

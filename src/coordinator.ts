@@ -159,6 +159,7 @@ export class AppCoordinator {
           return;
         case "providerOperation":
           if (intent.operation === "refresh") await this.refreshProvider(intent.providerId);
+          else if (intent.operation === "retry") await this.retryProvider(intent.providerId);
           else if (intent.operation === "browse-query") await this.queryProviderBrowsingSurface(intent.providerId, intent.query);
           else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
           else this.cancelLocalOpen();
@@ -573,6 +574,18 @@ export class AppCoordinator {
       return;
     }
     await this.refreshNavidromeLibraryData();
+  }
+
+  private async retryProvider(providerId: string): Promise<void> {
+    const provider = this.appState.providers[providerId];
+    if (providerId !== "navidrome" || !isNavidromeProvider(provider)) {
+      this.appState.lastEvent = `${providerId} Provider does not support retry`;
+      return;
+    }
+    const state = await provider.validateConnection();
+    this.appState.lastEvent = state.status === "connected"
+      ? "Navidrome connection restored"
+      : `Navidrome retry failed: ${state.message}`;
   }
 
   private async queryProviderBrowsingSurface(providerId: string, query: string): Promise<void> {

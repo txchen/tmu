@@ -144,6 +144,7 @@ describe("production tmu real PTY", () => {
       await waitForOutput(read, "Queue · 0 Tracks");
       terminal.write("o");
       await waitForOutput(read, "Providers");
+      await waitForOutput(read, "Offline YouTube Cache");
       expect(output).toContain("Local · files and folders");
       expect(output).toContain("Offline YouTube Cache · downloaded YouTube audio");
       expect(output).not.toContain("Navidrome ·");
@@ -197,7 +198,7 @@ describe("production tmu real PTY", () => {
       terminal.resize(70, 24);
       await Bun.sleep(20);
       subprocess.kill("SIGWINCH");
-      await waitForNewOutput(read, nextFrame, "Current: No Current Track");
+      await waitForNewOutput(read, nextFrame, "Picker Overlay · music-picker");
       nextFrame = output.length;
       terminal.resize(50, 14);
       await Bun.sleep(20);

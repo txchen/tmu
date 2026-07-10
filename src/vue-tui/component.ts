@@ -11,7 +11,7 @@ import { isRestoredPlayback, sameIdentity, type PickerOverlay, type QueueEntry, 
 import { RootInputRouter } from "../input-router";
 import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
-import { overlayGeometry } from "../provider-navigation";
+import { overlayContentRows, overlayGeometry } from "../provider-navigation";
 import {
   StatePublicationGate,
   type PublicationCause,
@@ -109,6 +109,7 @@ export function createTmuRoot(options: TmuRootOptions) {
 type Presentation = {
   markers: { selected: string; current: string; unavailable: string };
   useColor: boolean;
+  dimmed: boolean;
 };
 
 function createPresentation(options: TmuRootOptions): Presentation {
@@ -119,6 +120,7 @@ function createPresentation(options: TmuRootOptions): Presentation {
       ? { selected: "›", current: "●", unavailable: "!" }
       : { selected: ">", current: "*", unavailable: "!" },
     useColor: !(options.noColor ?? process.env.NO_COLOR !== undefined),
+    dimmed: false,
   };
 }
 
@@ -127,6 +129,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
   const tier = uiState.terminal.tier;
   const current = appState.queue.entries[appState.queue.currentIndex];
   const overlay = uiState.overlays.at(-1);
+  const underlyingPresentation = { ...presentation, dimmed: Boolean(overlay) };
 
   if (tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
@@ -149,17 +152,28 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
     tier,
     uiState.pendingVimChord !== null,
     uiState.terminal.columns,
-    footerActions(registry, { appState, uiState }),
+    footerActions(registry, {
+      appState,
+      uiState,
+      selectedProviderId: overlay?.kind === "music-picker"
+        ? snapshot.providerNavigationRows[overlay.selectedResultIndex ?? 0]?.providerId ?? overlay.providerLocation?.providerId
+        : null,
+    }),
   );
 
-  return h(Box, { flexDirection: "column", width: "100%", height: "100%" }, () => [
+  return h(Box, {
+    flexDirection: "column",
+    width: uiState.terminal.columns,
+    height: uiState.terminal.rows,
+    position: "relative",
+  }, () => [
     h(Box, { flexDirection: "row", justifyContent: "space-between", width: "100%" }, () => [
-      h(Text, { bold: true, wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
+      h(Text, { bold: true, dimColor: Boolean(overlay), wrap: "truncate-end" }, () => `Queue · ${appState.queue.entries.length} Tracks`),
       tier === "narrow" ? null : h(Text, { dimColor: true, wrap: "truncate-start" }, () => settings),
     ]),
     tier === "narrow"
-      ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, settings, start, exceptionalGuidance)
-      : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, presentation, tier, start),
+      ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, settings, start, exceptionalGuidance)
+      : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
     overlay ? overlayView(overlay, snapshot.providerNavigationRows, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
     uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
@@ -180,13 +194,13 @@ function horizontalContent(
   return h(Box, { flexDirection: "row", gap: 2, flexGrow: 1 }, () => [
     queuePane(entries, currentIndex, uiState, queueWidth, presentation, tier, start),
     h(Box, { flexDirection: "column", flexGrow: tier === "wide" ? 2 : 1, flexBasis: 0 }, () => [
-      h(Text, { bold: true }, () => "Playing Track"),
-      h(Text, { bold: state.kind === "playing", color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.headline),
-      current?.track.artist ? h(Text, { wrap: "truncate-end" }, () => current.track.artist) : null,
-      tier === "wide" && current?.track.album ? h(Text, { wrap: "truncate-end" }, () => current.track.album) : null,
+      h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Playing Track"),
+      h(Text, { bold: state.kind === "playing", dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.headline),
+      current?.track.artist ? h(Text, { dimColor: presentation.dimmed, wrap: "truncate-end" }, () => current.track.artist) : null,
+      tier === "wide" && current?.track.album ? h(Text, { dimColor: presentation.dimmed, wrap: "truncate-end" }, () => current.track.album) : null,
       tier === "wide" && current ? h(Text, { dimColor: true, wrap: "truncate-end" }, () => `${current.track.providerLabel} · ${formatDuration(current.track.durationSeconds)}`) : null,
-      state.guidance ? h(Text, { color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.guidance) : null,
-      state.kind === "unavailable" ? h(Text, { color: presentation.useColor ? "yellow" : undefined }, () => "Retry or choose another Track") : null,
+      state.guidance ? h(Text, { dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => state.guidance) : null,
+      state.kind === "unavailable" ? h(Text, { dimColor: presentation.dimmed, color: presentation.useColor ? "yellow" : undefined }, () => "Retry or choose another Track") : null,
     ]),
   ]);
 }
@@ -204,11 +218,11 @@ function narrowContent(
   exceptionalGuidance: string,
 ) {
   return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, { bold: true, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => current
+    h(Text, { bold: true, dimColor: presentation.dimmed, color: state.kind === "unavailable" && presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => current
       ? `Current: ${current.track.title} · ${state.shortLabel} · ${settings}`
       : `Current: No Current Track · ${settings}`),
     queuePane(entries, currentIndex, uiState, queueWidth, presentation, "narrow", start),
-    exceptionalGuidance ? h(Text, { color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => exceptionalGuidance) : null,
+    exceptionalGuidance ? h(Text, { dimColor: presentation.dimmed, color: presentation.useColor ? "yellow" : undefined, wrap: "truncate-end" }, () => exceptionalGuidance) : null,
   ]);
 }
 
@@ -222,13 +236,13 @@ function queuePane(
   start: number,
 ) {
   return h(Box, { flexDirection: "column", flexGrow: tier === "wide" ? 3 : 2, flexBasis: 0, overflow: "hidden" }, () => [
-    h(Text, { bold: true }, () => "Queue"),
+    h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Queue"),
     entries.length === 0
       ? h(Box, { flexDirection: "column" }, () => [
-          h(Text, { bold: true }, () => "Queue is empty"),
-          h(Text, () => "/ Global Search"),
-          h(Text, () => "o Local music"),
-          h(Text, () => "u YouTube URL Download"),
+          h(Text, { bold: true, dimColor: presentation.dimmed }, () => "Queue is empty"),
+          h(Text, { dimColor: presentation.dimmed }, () => "/ Global Search"),
+          h(Text, { dimColor: presentation.dimmed }, () => "o Local music"),
+          h(Text, { dimColor: presentation.dimmed }, () => "u YouTube URL Download"),
         ])
       : entries.map((entry, visibleIndex) => {
           const index = start + visibleIndex;
@@ -237,6 +251,7 @@ function queuePane(
           const unavailable = entry.availability.status === "unavailable";
           return h(Text, {
             inverse: selected,
+            dimColor: presentation.dimmed,
             bold: isCurrent,
             color: unavailable && presentation.useColor ? "yellow" : undefined,
             wrap: "truncate-end",
@@ -362,7 +377,7 @@ function overlayView(
   terminalRows: number,
 ) {
   const geometry = overlayGeometry(overlay.kind, tier, columns, terminalRows);
-  const contentRows = Math.max(1, geometry.height - 5);
+  const contentRows = overlayContentRows(overlay.kind, tier, columns, terminalRows);
   const visibleRows = overlay.kind === "music-picker"
     ? rows.slice(overlay.scroll, overlay.scroll + contentRows)
     : [];
@@ -370,7 +385,14 @@ function overlayView(
     ? `${overlay.providerLocation.providerId}${overlay.providerLocation.path.length ? ` · ${overlay.providerLocation.path.at(-1)}` : ""}`
     : "Providers";
   return h(Box, {
-    flexDirection: "column", borderStyle: "single", paddingX: 1, width: geometry.width, height: geometry.height,
+    flexDirection: "column",
+    borderStyle: "single",
+    paddingX: 1,
+    width: geometry.width,
+    height: geometry.height,
+    position: "absolute",
+    left: Math.max(0, Math.floor((columns - geometry.width) / 2)),
+    top: Math.max(0, Math.floor((terminalRows - geometry.height) / 2)),
   }, () => [
     h(Text, { bold: true }, () => `Picker Overlay · ${overlay.kind}`),
     overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
