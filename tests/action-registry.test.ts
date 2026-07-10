@@ -201,6 +201,75 @@ describe("action registry contracts", () => {
 });
 
 describe("root input router", () => {
+  test("routes Enter and Shift+Enter with an explicit resolved Music Collection target", async () => {
+    const cinder = {
+      identity: { providerId: "remote", stableId: "cinder" },
+      title: "Cinder Room",
+      providerLabel: "Remote",
+    };
+    const drift = {
+      identity: { providerId: "remote", stableId: "drift" },
+      title: "Drift Signal",
+      providerLabel: "Remote",
+    };
+    const collection = {
+      kind: "music-collection" as const,
+      id: "navidrome:album:night-drive",
+      label: "Night Drive",
+      resolve: { providerId: "navidrome", operation: "album-tracks" as const, collectionId: "night-drive" },
+    };
+    let resolutions = 0;
+    const appState = createInitialAppState({
+      navidrome: {
+        id: "navidrome",
+        label: "Remote",
+        hint: "collections",
+        listVisibleTracks: () => [],
+        playableTargetAt: () => collection,
+        resolveMusicCollection: async () => {
+          resolutions += 1;
+          return { status: "resolved" as const, tracks: [cinder, drift] };
+        },
+        resolvePlaybackLocator: async (identity) => ({ kind: "file" as const, path: `/remote/${identity.stableId}` }),
+      },
+    });
+    const uiState = createInitialUiState();
+    uiState.activeTargetId = "navidrome";
+    uiState.focusedPane = "content";
+    uiState.providerLocation = { providerId: "navidrome", path: [] };
+    const queue = new MemoryQueue();
+    queue.enqueue(amber);
+    queue.startAt(0);
+    appState.playback.currentTrackIdentity = amber.identity;
+    const coordinator = new AppCoordinator({ appState, uiState, queue, player: new NoopPlayer() });
+    const router = new RootInputRouter({
+      registry: createActionRegistry(),
+      appState: () => coordinator.appState,
+      uiState: {
+        get snapshot() { return coordinator.uiState; },
+        dispatch: (action) => coordinator.dispatchUi(action),
+      },
+      dispatchApp: (intent) => coordinator.dispatch(intent),
+    });
+
+    await router.route("\r");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      amber.title,
+      cinder.title,
+      drift.title,
+    ]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(amber.identity);
+
+    await router.route("\x1b[13;2u");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual([
+      amber.title,
+      cinder.title,
+      drift.title,
+    ]);
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cinder.identity);
+    expect(resolutions).toBe(2);
+  });
+
   test("keeps superseded legacy bindings inert", async () => {
     const current = context();
     current.uiState.activeTargetId = "local";

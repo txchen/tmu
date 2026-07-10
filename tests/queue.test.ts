@@ -31,6 +31,72 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().entries[0]?.track).toEqual(first);
   });
 
+  test("Play Next moves one identity-deduplicated Music Collection block after Current Track", () => {
+    const queue = new MemoryQueue();
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    const d = track("local", "d", "D");
+    for (const value of [a, b, c, d]) queue.enqueue(value);
+    queue.startAt(1);
+    queue.markAvailability(d.identity, { status: "unavailable", reason: "offline" });
+
+    queue.playNext([d, b, c, { ...d, title: "Duplicate D" }]);
+
+    expect(queue.snapshot()).toMatchObject({
+      entries: [
+        { track: a, availability: { status: "unknown" } },
+        { track: b, availability: { status: "unknown" } },
+        { track: d, availability: { status: "unavailable", reason: "offline" } },
+        { track: c, availability: { status: "unknown" } },
+      ],
+      currentIndex: 1,
+    });
+  });
+
+  test("Play Next puts a Track block at Queue head when no Current Track exists", () => {
+    const queue = new MemoryQueue();
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    for (const value of [a, b]) queue.enqueue(value);
+
+    queue.playNext([b, c]);
+
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["B", "C", "A"]);
+    expect(queue.currentIndex).toBe(-1);
+  });
+
+  test("Play Now keeps a different former Current Track immediately before its collection block", () => {
+    const queue = new MemoryQueue();
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    const d = track("local", "d", "D");
+    for (const value of [a, b, c, d]) queue.enqueue(value);
+    queue.startAt(1);
+
+    const current = queue.playNow([d, c, { ...d, title: "Duplicate D" }]);
+
+    expect(current?.track).toEqual(d);
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "B", "D", "C"]);
+    expect(queue.currentIndex).toBe(2);
+    expect(queue.previous()?.track).toEqual(b);
+  });
+
+  test("Play Now puts a collection at Queue head without a former Current Track", () => {
+    const queue = new MemoryQueue();
+    const a = track("local", "a", "A");
+    const b = track("local", "b", "B");
+    const c = track("local", "c", "C");
+    for (const value of [a, b]) queue.enqueue(value);
+
+    queue.playNow([b, c]);
+
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["B", "C", "A"]);
+    expect(queue.currentIndex).toBe(0);
+  });
+
   test("removes, moves, clears, and preserves the current Track selection", () => {
     const queue = new MemoryQueue();
     const amber = track("local", "/music/amber.flac", "Amber");

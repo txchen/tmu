@@ -371,7 +371,7 @@ function confirmationView(choice: "cancel" | "confirm") {
 }
 
 function terminalKey(input: string, key: {
-  ctrl: boolean; escape: boolean; return: boolean; upArrow: boolean; downArrow: boolean;
+  ctrl: boolean; shift: boolean; escape: boolean; return: boolean; upArrow: boolean; downArrow: boolean;
   leftArrow: boolean; rightArrow: boolean; home: boolean; end: boolean; pageUp: boolean; pageDown: boolean;
   tab: boolean; delete: boolean;
 }): string {
@@ -379,6 +379,7 @@ function terminalKey(input: string, key: {
   if (key.ctrl && input === "d") return "\x04";
   if (key.ctrl && input === "u") return "\x15";
   if (key.escape) return "\x1b";
+  if (key.return && key.shift) return "\x1b[13;2u";
   if (key.return) return "\r";
   if (key.upArrow) return "\x1b[A";
   if (key.downArrow) return "\x1b[B";
