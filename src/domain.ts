@@ -10,24 +10,30 @@ export type NavigationTargetId =
 
 export type FocusedPane = "targets" | "content" | "queue";
 export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
+export type ProviderLocation = {
+  providerId: NavigationTargetId | null;
+  path: readonly string[];
+};
+export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
 
 export type FocusReturnToken = {
   focusedPane: FocusedPane;
   query: string;
   filterText: string;
   selectedQueueIdentity: TrackIdentity | null;
-  providerLocation: readonly string[];
+  selectedQueueIndex: number;
+  providerLocation: ProviderLocation;
   scrollByPane: Record<FocusedPane, number>;
 };
 
-export type UiOverlay = {
-  kind: string;
-  focus: string;
+export type PickerOverlay = {
+  kind: "music-picker" | "shortcut-help" | "command-palette" | "confirmation" | "youtube-url";
+  focus: "results" | "search" | "filter" | "choice" | "input";
   query: string;
   selectedIdentity: TrackIdentity | null;
   scroll: number;
   filterText?: string;
-  providerLocation?: readonly string[];
+  providerLocation?: ProviderLocation;
   returnTo?: FocusReturnToken;
 };
 
@@ -193,16 +199,16 @@ export type UiState = {
   promptInput: string;
   filterText: string;
   scrollByPane: Record<FocusedPane, number>;
-  overlays: readonly UiOverlay[];
+  overlays: readonly PickerOverlay[];
   selectedQueueIdentity: TrackIdentity | null;
-  providerLocation: readonly string[];
+  providerLocation: ProviderLocation;
   terminal: {
     columns: number;
     rows: number;
     tier: ResponsiveTier;
   };
   pendingConfirmation: null | {
-    kind: string;
+    kind: ConfirmationKind;
     choice: "cancel" | "confirm";
   };
   pendingVimChord: null | {

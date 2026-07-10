@@ -24,7 +24,7 @@ import {
   type DependencyHealthState,
   type HelperName,
 } from "./dependencies";
-import { isNavidromeProvider } from "./navidrome";
+import { isNavidromeProvider, type NavidromeLibraryBrowserEntry } from "./navidrome";
 import {
   OFFLINE_YOUTUBE_CACHE_PROVIDER_ID,
   isOfflineYouTubeCacheProvider,
@@ -48,7 +48,7 @@ import {
   identifyYouTubeUrl,
   type YouTubeDownloader,
 } from "./youtube-url-download";
-import { UiStateStore } from "./ui-state";
+import { UiStateStore, type UiStateAction } from "./ui-state";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -115,8 +115,14 @@ export class AppCoordinator {
     this.syncQueueState();
   }
 
-  get uiState(): UiState {
-    return this.uiStateStore.snapshot as UiState;
+  get uiState(): Readonly<UiState> {
+    return this.uiStateStore.snapshot;
+  }
+
+  dispatchUi(action: UiStateAction): Readonly<UiState> {
+    const snapshot = this.uiStateStore.dispatch(action);
+    this.notifyStateChanged();
+    return snapshot;
   }
 
   async start(cliArgs: readonly string[]): Promise<void> {
@@ -129,6 +135,7 @@ export class AppCoordinator {
         activeTargetId: "queue",
         focusedPane: "queue",
         selectedTargetIndex: navigationTargetIndex("queue"),
+        providerLocation: { providerId: null, path: [] },
       });
       this.appState.lastEvent = "CLI args seeded the shared Queue";
     } else {
@@ -285,6 +292,7 @@ export class AppCoordinator {
         activeTargetId: "local",
         selectedTargetIndex: navigationTargetIndex("local"),
         focusedPane: "targets",
+        providerLocation: { providerId: "local", path: [] },
       });
       this.appState.lastEvent = "opened Local";
 
@@ -294,6 +302,7 @@ export class AppCoordinator {
           activeTargetId: targetId,
           selectedTargetIndex: navigationTargetIndex(targetId),
           focusedPane: "targets",
+          providerLocation: { providerId: targetId, path: [] },
         });
         this.appState.lastEvent = `restored last selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? targetId}`;
       }
@@ -358,6 +367,7 @@ export class AppCoordinator {
       activeTargetId: targetId,
       selectedTargetIndex: navigationTargetIndex(targetId),
       focusedPane: targetId === "queue" ? "queue" : "content",
+      providerLocation: { providerId: targetId === "queue" ? null : targetId, path: [] },
     });
     await this.persistLastSelectedTarget(targetId);
     await this.refreshEnteredTarget(targetId);
@@ -372,7 +382,11 @@ export class AppCoordinator {
     if (this.uiState.focusedPane === "targets") {
       const selectedTargetIndex = clampIndex(this.uiState.selectedTargetIndex + delta, NAVIGATION_TARGETS.length);
       const activeTargetId = NAVIGATION_TARGETS[selectedTargetIndex]?.id ?? "local";
-      this.updateUiState({ selectedTargetIndex, activeTargetId });
+      this.updateUiState({
+        selectedTargetIndex,
+        activeTargetId,
+        providerLocation: { providerId: activeTargetId === "queue" ? null : activeTargetId, path: [] },
+      });
       await this.persistLastSelectedTarget(this.uiState.activeTargetId);
       await this.refreshEnteredTarget(this.uiState.activeTargetId);
       this.appState.lastEvent = `selected ${NAVIGATION_TARGETS[this.uiState.selectedTargetIndex]?.label ?? "target"}`;
@@ -469,6 +483,8 @@ export class AppCoordinator {
 
     try {
       await provider.openLibraryBrowserEntry(entry);
+      const providerLocation = navidromeLocationForEntry(entry);
+      if (providerLocation) this.updateUiState({ providerLocation });
     } catch (error) {
       this.appState.lastEvent = error instanceof Error ? error.message : String(error);
       return;
@@ -494,6 +510,7 @@ export class AppCoordinator {
       focusedPane: "content",
       activePrompt: "local-open-path",
       promptInput: "",
+      providerLocation: { providerId: "local", path: [] },
     });
     this.appState.lastEvent = "opened Local path prompt";
     await this.persistLastSelectedTarget("local");
@@ -618,6 +635,7 @@ export class AppCoordinator {
       focusedPane: "content",
       activePrompt: null,
       promptInput: "",
+      providerLocation: { providerId: "local", path: [path] },
     });
     await this.persistLastSelectedTarget("local");
 
@@ -1170,6 +1188,7 @@ export class AppCoordinator {
       this.updateUiState({
         activeTargetId: "navidrome",
         selectedTargetIndex: navigationTargetIndex("navidrome"),
+        providerLocation: { providerId: "navidrome", path: [] },
       });
     }
     this.updateUiState({ focusedPane: "content" });
@@ -1179,6 +1198,9 @@ export class AppCoordinator {
       const entries = provider.getLibraryBrowserEntries();
       const firstResultIndex = entries.findIndex((entry) => entry.kind === "search-result");
       this.selectContentIndex("navidrome", firstResultIndex === -1 ? 0 : firstResultIndex);
+      this.updateUiState({
+        providerLocation: { providerId: "navidrome", path: ["search", query.trim()] },
+      });
       this.appState.lastEvent = results.length === 0
         ? `Navidrome search found no Tracks for ${query.trim()}`
         : `Navidrome search found ${results.length} Tracks for ${query.trim()}`;
@@ -1303,7 +1325,7 @@ export class AppCoordinator {
     this.appState.queue = this.queue.snapshot();
     this.uiStateStore.dispatch({
       type: "syncQueue",
-      identities: this.queue.entries.map((entry) => entry.track.identity),
+      identities: this.queueIdentities(),
     });
   }
 
@@ -1324,9 +1346,13 @@ export class AppCoordinator {
     const selectedQueueIndex = clampIndex(index, this.queue.entries.length);
     this.uiStateStore.dispatch({
       type: "syncQueue",
-      identities: this.queue.entries.map((entry) => entry.track.identity),
+      identities: this.queueIdentities(),
       preferredIdentity: this.queue.entries[selectedQueueIndex]?.track.identity ?? null,
     });
+  }
+
+  private queueIdentities() {
+    return this.queue.entries.map((entry) => entry.track.identity);
   }
 
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
@@ -1338,4 +1364,24 @@ function completedPlayThresholdSeconds(durationSeconds: number | null | undefine
   return typeof durationSeconds === "number" && Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(240, durationSeconds / 2)
     : 240;
+}
+
+function navidromeLocationForEntry(entry: NavidromeLibraryBrowserEntry) {
+  switch (entry.kind) {
+    case "artists-root":
+      return { providerId: "navidrome" as const, path: ["artists"] };
+    case "artist":
+      return { providerId: "navidrome" as const, path: ["artists", `artist:${entry.id}`] };
+    case "album":
+      return {
+        providerId: "navidrome" as const,
+        path: ["artists", `artist:${entry.artistId}`, `album:${entry.id}`],
+      };
+    case "playlists-root":
+      return { providerId: "navidrome" as const, path: ["playlists"] };
+    case "playlist":
+      return { providerId: "navidrome" as const, path: ["playlists", `playlist:${entry.id}`] };
+    default:
+      return null;
+  }
 }

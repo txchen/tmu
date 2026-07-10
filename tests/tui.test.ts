@@ -27,8 +27,10 @@ class FakeInput extends EventEmitter {
   }
 }
 
-class FakeOutput {
+class FakeOutput extends EventEmitter {
   isTTY = true;
+  columns = 120;
+  rows = 30;
   readonly chunks: string[] = [];
 
   write(chunk: string) {
@@ -577,6 +579,7 @@ describe("TerminalTui", () => {
         return () => undefined;
       },
       dispatch: async () => undefined,
+      dispatchUi: () => undefined,
     };
     const input = new FakeInput();
     const output = new FakeOutput();
@@ -631,6 +634,7 @@ describe("TerminalTui", () => {
       appState: createInitialAppState(createDefaultProviders()),
       uiState: createInitialUiState(),
       onStateChange: () => () => undefined,
+      dispatchUi: () => undefined,
       dispatch: () => new Promise<void>((resolve) => {
         resolveDispatch = () => resolve();
       }),
@@ -651,5 +655,63 @@ describe("TerminalTui", () => {
     expect(output.chunks.length).toBeGreaterThan(writesAfterInitialDraw);
 
     resolveDispatch?.();
+  });
+
+  test("publishes resize tiers and recovers the preserved UI context", () => {
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+    });
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const tui = new TerminalTui(
+      { coordinator },
+      input as unknown as NodeJS.ReadStream,
+      output as unknown as NodeJS.WriteStream,
+      new ManualTimers(),
+    );
+
+    tui.run();
+    output.columns = 59;
+    output.emit("resize");
+
+    expect(coordinator.uiState.terminal.tier).toBe("terminal-too-small");
+    expect(output.chunks.at(-1)).toContain("Terminal too small (59x30)");
+
+    output.columns = 80;
+    output.emit("resize");
+    expect(coordinator.uiState.terminal.tier).toBe("medium");
+    expect(coordinator.uiState.focusedPane).toBe("targets");
+  });
+
+  test("shows and expires the one-shot gg pending state without recurring redraws", () => {
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(createDefaultProviders()),
+      uiState: createInitialUiState(),
+      queue: new MemoryQueue(),
+      player: new NoopPlayer(),
+    });
+    const input = new FakeInput();
+    const output = new FakeOutput();
+    const timers = new ManualTimers();
+    const tui = new TerminalTui(
+      { coordinator },
+      input as unknown as NodeJS.ReadStream,
+      output as unknown as NodeJS.WriteStream,
+      timers,
+    );
+
+    tui.run();
+    input.emit("data", "g");
+    expect(coordinator.uiState.pendingVimChord).toEqual({ key: "g", expiresAtMs: 750 });
+    expect(output.chunks.at(-1)).toContain("pending: g");
+
+    timers.advanceBy(751);
+    expect(coordinator.uiState.pendingVimChord).toBeNull();
+    const writesAfterExpiry = output.chunks.length;
+    timers.advanceBy(10_000);
+    expect(output.chunks).toHaveLength(writesAfterExpiry);
   });
 });
