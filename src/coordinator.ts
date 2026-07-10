@@ -519,20 +519,7 @@ export class AppCoordinator {
 
   private async removeQueueTrack(identity: Track["identity"]): Promise<void> {
     const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
-    const removingCurrent = sameIdentity(identity, this.appState.playback.currentTrackIdentity);
-    if (index >= 0 && removingCurrent) await this.runPlayerCommand(() => this.player.stop());
-    const removed = index < 0 ? undefined : this.queue.remove(index);
-    if (!removed) {
-      this.appState.lastEvent = "Track is not in Queue";
-      this.syncQueueState();
-      return;
-    }
-    if (removingCurrent) {
-      this.appState.playback = { status: "idle", currentTrackIdentity: null };
-    }
-    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
-    this.appState.lastEvent = `removed ${removed.track.title}`;
-    this.syncQueueState();
+    await this.removeQueueEntry(index, "Track is not in Queue");
   }
 
   private moveQueueTrack(identity: Track["identity"], delta: number): void {
@@ -833,23 +820,24 @@ export class AppCoordinator {
   }
 
   private async removeSelectedQueueEntry(): Promise<void> {
-    const selected = this.queue.entries[this.uiState.selectedQueueIndex];
-    const removingCurrent = sameIdentity(selected?.track.identity, this.appState.playback.currentTrackIdentity);
-    if (selected && removingCurrent) await this.runPlayerCommand(() => this.player.stop());
-    const removed = this.queue.remove(this.uiState.selectedQueueIndex);
-    if (!removed) {
-      this.appState.lastEvent = "Queue is empty";
+    await this.removeQueueEntry(this.uiState.selectedQueueIndex, "Queue is empty");
+  }
+
+  private async removeQueueEntry(index: number, missingEvent: string): Promise<void> {
+    const entry = this.queue.entries[index];
+    if (!entry) {
+      this.appState.lastEvent = missingEvent;
       this.syncQueueState();
       return;
     }
 
-    this.selectQueueIndex(clampIndex(this.uiState.selectedQueueIndex, this.queue.entries.length));
-    if (removingCurrent) {
-      this.appState.playback = {
-        status: "idle",
-        currentTrackIdentity: null,
-      };
-    }
+    const removingCurrent = sameIdentity(entry.track.identity, this.appState.playback.currentTrackIdentity);
+    if (removingCurrent) await this.runPlayerCommand(() => this.player.stop());
+    const removed = this.queue.remove(index);
+    if (!removed) return;
+
+    if (removingCurrent) this.appState.playback = { status: "idle", currentTrackIdentity: null };
+    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
     this.appState.lastEvent = `removed ${removed.track.title}`;
     this.syncQueueState();
   }
