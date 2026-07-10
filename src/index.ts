@@ -6,6 +6,7 @@ export * from "./coordinator";
 export * from "./dependencies";
 export * from "./domain";
 export * from "./json-persistence";
+export * from "./global-search";
 export * from "./navidrome";
 export * from "./offline-youtube-cache";
 export * from "./player";

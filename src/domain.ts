@@ -35,6 +35,8 @@ export type PickerOverlay = {
   scroll: number;
   filterText?: string;
   providerLocation?: ProviderLocation;
+  providerFilter?: ProviderSearchFilter<string>;
+  resultTypeFilter?: ProviderSearchFilter<ProviderSearchResultType>;
   returnTo?: FocusReturnToken;
 };
 
@@ -77,6 +79,36 @@ export type MusicCollection = {
 export type PlayableTarget = Track | MusicCollection;
 
 export type ProviderSearchResultType = "track" | "artist" | "album" | "playlist";
+export type ProviderSearchFilter<T> = "all" | T;
+export type ProviderSearchRequest = {
+  readonly query: string;
+  readonly resultTypes: readonly ProviderSearchResultType[];
+  readonly limit: number;
+  readonly signal?: AbortSignal;
+};
+export type ProviderSearchResult = {
+  readonly providerId: string;
+  readonly providerLabel: string;
+  readonly type: ProviderSearchResultType;
+  readonly id: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly target?: PlayableTarget;
+};
+export type ProviderSearchStatus = "loading" | "success" | "empty" | "auth" | "offline" | "failure";
+export type ProviderSearchState = {
+  providerLabel?: string;
+  status: ProviderSearchStatus;
+  results: readonly ProviderSearchResult[];
+  message?: string;
+};
+export type GlobalSearchState = {
+  requestId: number;
+  query: string;
+  providerFilter: ProviderSearchFilter<string>;
+  resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>;
+  providers: Record<string, ProviderSearchState>;
+};
 export type ProviderBrowseKind = "local-directory" | "artist" | "album" | "playlist" | "track";
 export type ProviderOperation = "refresh" | "retry";
 
@@ -175,6 +207,7 @@ export type Provider = {
   listVisibleTracks(): readonly Track[];
   listBrowserEntries?(location: ProviderLocation): readonly ProviderBrowserEntry[];
   playableTargetAt?(location: ProviderLocation, index: number): PlayableTarget | undefined;
+  search?(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]>;
   resolveMusicCollection?(
     collection: MusicCollection,
     options?: { signal?: AbortSignal },
@@ -234,6 +267,7 @@ export type AppState = {
     active: boolean;
     lines: string[];
   };
+  globalSearch: GlobalSearchState;
   appErrors: string[];
   lastEvent: string;
 };
@@ -281,6 +315,9 @@ export type AppIntent =
   | { type: "providerOperation"; providerId: string; operation: "browse-query"; query: string }
   | { type: "providerOperation"; providerId: string; operation: "open-path"; path: string; signal?: AbortSignal }
   | { type: "providerOperation"; providerId: string; operation: "cancel-open" }
+  | { type: "globalSearch"; operation: "submit"; query: string; providerFilter: ProviderSearchFilter<string>; resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType> }
+  | { type: "globalSearch"; operation: "retry"; providerId: string }
+  | { type: "globalSearch"; operation: "clear" }
   | { type: "downloadOperation"; operation: "start"; url: string }
   | { type: "downloadOperation"; operation: "cancel" }
   | { type: "persistenceOperation"; operation: "save" | "restore" }

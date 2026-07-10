@@ -17,6 +17,8 @@ import {
   type NavigationTargetId,
   type Track,
   type PlayableTarget,
+  type ProviderSearchFilter,
+  type ProviderSearchResultType,
   type UiState,
 } from "./domain";
 import {
@@ -86,6 +88,7 @@ export class AppCoordinator {
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeLocalOpen: AbortController | null = null;
   private activeYouTubeDownload: AbortController | null = null;
+  private activeGlobalSearch: AbortController | null = null;
   private reportingSessionKey: string | null = null;
   private completedPlayReported = false;
   private naturalAdvanceInFlight = false;
@@ -163,6 +166,15 @@ export class AppCoordinator {
           else if (intent.operation === "browse-query") await this.queryProviderBrowsingSurface(intent.providerId, intent.query);
           else if (intent.operation === "open-path") await this.openProviderPath(intent.providerId, intent.path, intent.signal);
           else this.cancelLocalOpen();
+          return;
+        case "globalSearch":
+          if (intent.operation === "submit") {
+            await this.submitGlobalSearch(intent.query, intent.providerFilter, intent.resultTypeFilter);
+          } else if (intent.operation === "retry") {
+            await this.retryGlobalSearchProvider(intent.providerId);
+          } else {
+            this.clearGlobalSearch();
+          }
           return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
@@ -603,6 +615,101 @@ export class AppCoordinator {
       return;
     }
     await this.openLocalPathTracks(path, signal);
+  }
+
+  private async submitGlobalSearch(
+    query: string,
+    providerFilter: ProviderSearchFilter<string>,
+    resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>,
+  ): Promise<void> {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      this.clearGlobalSearch();
+      return;
+    }
+    this.activeGlobalSearch?.abort();
+    const controller = new AbortController();
+    this.activeGlobalSearch = controller;
+    const requestId = this.appState.globalSearch.requestId + 1;
+    const providers = this.searchProviders(providerFilter);
+    this.appState.globalSearch = {
+      requestId, query: trimmed, providerFilter, resultTypeFilter,
+      providers: Object.fromEntries(providers.map((provider) => [provider.id, {
+        providerLabel: provider.label, status: "loading" as const, results: [],
+      }])),
+    };
+    this.appState.lastEvent = `searching for ${trimmed}`;
+    this.notifyStateChanged();
+    await Promise.all(providers.map((provider) => this.searchProvider(provider, requestId, controller.signal, resultTypeFilter)));
+    if (this.activeGlobalSearch === controller) this.activeGlobalSearch = null;
+  }
+
+  private async retryGlobalSearchProvider(providerId: string): Promise<void> {
+    const search = this.appState.globalSearch;
+    const provider = this.appState.providers[providerId];
+    if (!search.query || !provider?.search) return;
+    const controller = new AbortController();
+    const requestId = search.requestId;
+    this.appState.globalSearch = {
+      ...search,
+      providers: { ...search.providers, [providerId]: { providerLabel: provider.label, status: "loading", results: [] } },
+    };
+    this.notifyStateChanged();
+    await this.searchProvider(provider, requestId, controller.signal, search.resultTypeFilter);
+  }
+
+  private clearGlobalSearch(): void {
+    this.activeGlobalSearch?.abort();
+    this.activeGlobalSearch = null;
+    this.appState.globalSearch = {
+      requestId: this.appState.globalSearch.requestId + 1,
+      query: "", providerFilter: "all", resultTypeFilter: "all", providers: {},
+    };
+    this.notifyStateChanged();
+  }
+
+  private searchProviders(providerFilter: ProviderSearchFilter<string>): Provider[] {
+    return Object.values(this.appState.providers).filter((provider) => {
+      if (!provider.search || provider.capabilities.searchableResultTypes.length === 0) return false;
+      if (providerFilter !== "all" && provider.id !== providerFilter) return false;
+      if (!provider.getNavigationRoot().visible) return false;
+      if (provider.id === "local" && !this.appState.config.providers.local.enabled) return false;
+      if (provider.id === OFFLINE_YOUTUBE_CACHE_PROVIDER_ID && !this.appState.config.providers.offlineYouTubeCache.enabled) return false;
+      return true;
+    });
+  }
+
+  private async searchProvider(
+    provider: Provider,
+    requestId: number,
+    signal: AbortSignal,
+    resultTypeFilter: ProviderSearchFilter<ProviderSearchResultType>,
+  ): Promise<void> {
+    const resultTypes = resultTypeFilter === "all"
+      ? provider.capabilities.searchableResultTypes
+      : provider.capabilities.searchableResultTypes.filter((type) => type === resultTypeFilter);
+    try {
+      const results = resultTypes.length === 0 ? [] : await provider.search!({
+        query: this.appState.globalSearch.query, resultTypes, limit: 50, signal,
+      });
+      if (signal.aborted || this.appState.globalSearch.requestId !== requestId) return;
+      this.appState.globalSearch.providers[provider.id] = {
+        providerLabel: provider.label,
+        status: results.length === 0 ? "empty" : "success",
+        results: resultTypes.flatMap((type) => results.filter((result) => result.type === type).slice(0, 50)),
+      };
+    } catch (error) {
+      if (signal.aborted || this.appState.globalSearch.requestId !== requestId) return;
+      const message = error instanceof Error ? error.message : String(error);
+      const kind = typeof error === "object" && error !== null && "kind" in error ? String(error.kind) : "failure";
+      this.appState.globalSearch.providers[provider.id] = {
+        providerLabel: provider.label,
+        status: kind === "auth" ? "auth" : kind === "api" ? "offline" : "failure",
+        results: [], message,
+      };
+    }
+    this.appState.lastEvent = `Global Search updated: ${provider.label}`;
+    this.notifyStateChanged();
   }
 
   private async dispatchPlayerOperation(intent: Extract<AppIntent, { type: "playerOperation" }>): Promise<void> {

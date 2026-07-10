@@ -7,6 +7,8 @@ import {
   type Provider,
   type ProviderBrowserEntry,
   type ProviderCapabilities,
+  type ProviderSearchRequest,
+  type ProviderSearchResult,
   type Track,
   type TrackAvailability,
   type TrackIdentity,
@@ -140,6 +142,20 @@ class FileSystemOfflineYouTubeCacheProvider implements OfflineYouTubeCacheProvid
 
   listVisibleTracks(): readonly Track[] {
     return this.listCacheEntries().map((entry) => entry.track);
+  }
+
+  async search(request: ProviderSearchRequest): Promise<readonly ProviderSearchResult[]> {
+    if (!request.resultTypes.includes("track") || request.signal?.aborted) return [];
+    const query = request.query.trim().toLocaleLowerCase();
+    if (!query) return [];
+    return this.listVisibleTracks()
+      .filter((track) => [track.title, track.artist, track.album]
+        .some((value) => value?.toLocaleLowerCase().includes(query)))
+      .slice(0, request.limit)
+      .map((track) => ({
+        providerId: this.id, providerLabel: this.label, type: "track" as const,
+        id: identityKey(track.identity), label: track.title, detail: track.artist, target: track,
+      }));
   }
 
   listBrowserEntries(): readonly ProviderBrowserEntry[] {

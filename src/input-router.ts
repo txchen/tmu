@@ -17,6 +17,7 @@ import {
   type UiStateAction,
 } from "./ui-state";
 import { overlayContentRows, providerNavigationRows } from "./provider-navigation";
+import { globalSearchRows } from "./global-search";
 
 export type RootInputRouterOptions = {
   registry: ActionRegistry;
@@ -71,6 +72,22 @@ export class RootInputRouter {
     }
 
     const overlay = this.uiState.snapshot.overlays.at(-1);
+    if (overlay?.kind === "music-picker" && overlay.focus === "filter") {
+      if (key === "\x1b" || key === "\r" || key === "\t") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
+      } else if (key === "p") {
+        const providerIds = ["all", ...Object.values(this.appState().providers)
+          .filter((provider) => provider.search && provider.getNavigationRoot().visible)
+          .map((provider) => provider.id)];
+        const current = providerIds.indexOf(overlay.providerFilter ?? "all");
+        this.uiState.dispatch({ type: "setSearchProviderFilter", providerId: providerIds[(current + 1) % providerIds.length] ?? "all" });
+      } else if (key === "t") {
+        const types = ["all", "track", "artist", "album", "playlist"] as const;
+        const current = types.indexOf(overlay.resultTypeFilter ?? "all");
+        this.uiState.dispatch({ type: "setSearchResultTypeFilter", resultType: types[(current + 1) % types.length] ?? "all" });
+      }
+      return true;
+    }
     if (overlay && isTextEntryFocus(overlay.focus)) {
       if (key === "\x1b") {
         if (overlay.kind === "music-picker" && overlay.focus === "search") {
@@ -79,13 +96,30 @@ export class RootInputRouter {
           this.uiState.dispatch({ type: "dismissOverlay", queueIdentities: queueIdentities(this.appState()) });
         }
       } else if (key === "\r" && overlay.kind === "music-picker") {
-        this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
+        if (overlay.query.trim()) {
+          const submission = this.dispatchApp({
+            type: "globalSearch", operation: "submit", query: overlay.query,
+            providerFilter: overlay.providerFilter ?? "all",
+            resultTypeFilter: overlay.resultTypeFilter ?? "all",
+          });
+          this.uiState.dispatch({ type: "prepareSearchResults" });
+          await submission;
+        } else {
+          this.uiState.dispatch({ type: "setOverlayFocus", focus: "results" });
+        }
       } else if (key === "\x7f" || key === "\b") {
-        this.uiState.dispatch({ type: "setQuery", query: overlay.query.slice(0, -1) });
+        const query = overlay.query.slice(0, -1);
+        this.uiState.dispatch({ type: "setQuery", query });
+        if (!query && this.appState().globalSearch.query) await this.clearGlobalSearch();
       } else if (key === "\x17") {
-        this.uiState.dispatch({ type: "setQuery", query: deletePreviousWord(overlay.query) });
+        const query = deletePreviousWord(overlay.query);
+        this.uiState.dispatch({ type: "setQuery", query });
+        if (!query && this.appState().globalSearch.query) await this.clearGlobalSearch();
       } else if (key === "\x15") {
         this.uiState.dispatch({ type: "setQuery", query: "" });
+        if (this.appState().globalSearch.query) await this.clearGlobalSearch();
+      } else if (key === "\t" && overlay.kind === "music-picker") {
+        this.uiState.dispatch({ type: "setOverlayFocus", focus: "filter" });
       } else if (isPrintableKey(key)) {
         this.uiState.dispatch({ type: "setQuery", query: `${overlay.query}${key}` });
       }
@@ -200,6 +234,8 @@ export class RootInputRouter {
     key: string,
     overlay: UiState["overlays"][number],
   ): Promise<boolean> {
+    const searchRows = this.appState().globalSearch.query ? globalSearchRows(this.appState().globalSearch) : null;
+    if (searchRows) return this.routeGlobalSearchResults(key, overlay, searchRows);
     if (key === "r" || key === "f") {
       this.cancelOverlayChord();
       await this.dispatchBinding(key);
@@ -277,6 +313,39 @@ export class RootInputRouter {
       return true;
     }
     return false;
+  }
+
+  private async routeGlobalSearchResults(
+    key: string,
+    overlay: UiState["overlays"][number],
+    rows: ReturnType<typeof globalSearchRows>,
+  ): Promise<boolean> {
+    const terminal = this.uiState.snapshot.terminal;
+    const visibleRows = overlayContentRows(overlay.kind, terminal.tier, terminal.columns, terminal.rows);
+    const movement = listMovementForKey(key, visibleRows);
+    if (movement) {
+      this.uiState.dispatch(movement.kind === "boundary"
+        ? { type: "selectOverlayBoundary", boundary: movement.boundary, rowCount: rows.length, visibleRows }
+        : { type: "moveOverlaySelection", delta: movement.delta, rowCount: rows.length, visibleRows });
+      return true;
+    }
+    if (key === "r") {
+      const row = rows[overlay.selectedResultIndex ?? 0];
+      const providerId = row?.kind === "provider-heading" || row?.kind === "provider-status" ? row.providerId
+        : row?.kind === "result" ? row.result.providerId : undefined;
+      if (providerId) await this.dispatchApp({ type: "globalSearch", operation: "retry", providerId });
+      return true;
+    }
+    if (key === "/") {
+      this.uiState.dispatch({ type: "setOverlayFocus", focus: "search" });
+      return true;
+    }
+    return false;
+  }
+
+  private async clearGlobalSearch(): Promise<void> {
+    await this.dispatchApp({ type: "globalSearch", operation: "clear" });
+    this.uiState.dispatch({ type: "restoreProviderNavigation" });
   }
 
   private async dispatchIntent(intent: ActionIntent): Promise<void> {
@@ -370,7 +439,7 @@ function isTextEntryFocus(focus: UiState["overlays"][number]["focus"]): boolean 
 }
 
 function isPrintableKey(key: string): boolean {
-  return key.length === 1 && key >= " " && key !== "\x7f";
+  return key.length > 0 && [...key].every((character) => character >= " " && character !== "\x7f");
 }
 
 function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" }>, uiState: Readonly<UiState>) {
@@ -384,6 +453,8 @@ function overlayForIntent(intent: Extract<UiActionIntent, { type: "openOverlay" 
     ...(intent.kind === "music-picker" ? {
       providerLocation: memory.location,
       selectedResultIndex: memory.selectedIndex,
+      providerFilter: "all" as const,
+      resultTypeFilter: "all" as const,
     } : {}),
   } as const;
 }

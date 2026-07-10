@@ -12,6 +12,7 @@ import { RootInputRouter } from "../input-router";
 import { queueHomeVisibleRows, selectedUnavailableQueueEntry } from "../ui-state";
 import { dispatchTerminalResize } from "./resize";
 import { overlayContentRows, overlayGeometry } from "../provider-navigation";
+import { globalSearchRows, type GlobalSearchRow } from "../global-search";
 import {
   StatePublicationGate,
   type PublicationCause,
@@ -175,7 +176,7 @@ function renderTmu(snapshot: PublicationSnapshot, presentation: Presentation, re
       ? narrowContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, settings, start, exceptionalGuidance)
       : horizontalContent(entries, current, currentState, appState.queue.currentIndex, uiState, queueWidth, underlyingPresentation, tier, start),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => footer),
-    overlay ? overlayView(overlay, snapshot.providerNavigationRows, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
+    overlay ? overlayView(overlay, snapshot, tier, uiState.terminal.columns, uiState.terminal.rows) : null,
     uiState.pendingConfirmation ? confirmationView(uiState.pendingConfirmation.choice) : null,
   ]);
 }
@@ -371,11 +372,15 @@ function formatDuration(seconds: number | null | undefined): string {
 
 function overlayView(
   overlay: PickerOverlay,
-  rows: PublicationSnapshot["providerNavigationRows"],
+  snapshot: PublicationSnapshot,
   tier: ResponsiveTier,
   columns: number,
   terminalRows: number,
 ) {
+  const searchActive = overlay.kind === "music-picker" && Boolean(snapshot.appState.globalSearch.query);
+  const rows = searchActive
+    ? globalSearchRows(snapshot.appState.globalSearch)
+    : snapshot.providerNavigationRows;
   const geometry = overlayGeometry(overlay.kind, tier, columns, terminalRows);
   const contentRows = overlayContentRows(overlay.kind, tier, columns, terminalRows);
   const visibleRows = overlay.kind === "music-picker"
@@ -396,20 +401,41 @@ function overlayView(
   }, () => [
     h(Text, { bold: true }, () => `Picker Overlay · ${overlay.kind}`),
     overlay.kind === "music-picker" ? h(Text, () => `${overlay.focus === "search" ? ">" : " "} Search: ${overlay.query}`) : null,
+    overlay.kind === "music-picker" ? h(Text, { inverse: overlay.focus === "filter", dimColor: overlay.focus !== "filter" }, () =>
+      `Filters: Provider ${overlay.providerFilter ?? "all"} · Type ${overlay.resultTypeFilter ?? "all"}`) : null,
     overlay.kind === "music-picker" ? h(Text, { dimColor: true }, () => location) : null,
     ...visibleRows.map((row, visibleIndex) => {
       const index = overlay.scroll + visibleIndex;
       const selected = index === (overlay.selectedResultIndex ?? 0);
-      const suffix = row.detail ? ` · ${row.detail}` : "";
-      return h(Text, { inverse: selected, wrap: "truncate-end" }, () => `${selected ? "›" : " "} ${row.label}${suffix}`);
+      if (searchActive) return globalSearchRowView(row as GlobalSearchRow, selected);
+      const navigationRow = row as PublicationSnapshot["providerNavigationRows"][number];
+      const suffix = navigationRow.detail ? ` · ${navigationRow.detail}` : "";
+      return h(Text, { inverse: selected, wrap: "truncate-end" }, () => `${selected ? "›" : " "} ${navigationRow.label}${suffix}`);
     }),
     overlay.kind === "music-picker" && rows.length === 0
       ? h(Text, { dimColor: true }, () => "No Tracks or navigation entries")
       : null,
     h(Text, { dimColor: true }, () => overlay.focus === "results"
-      ? "j/k move · l/→ open · h/← back · / search · Esc dismiss"
-      : "Enter/Esc results · Ctrl-w word · Ctrl-u clear"),
+      ? searchActive ? "j/k move · Enter Play Next · r Retry · / edit · Esc dismiss" : "j/k move · l/→ open · h/← back · / search · Esc dismiss"
+      : overlay.focus === "filter" ? "p Provider · t Type · Enter/Tab search" : "Enter submit · Tab filters · Esc results · Ctrl-w word · Ctrl-u clear"),
   ]);
+}
+
+function globalSearchRowView(row: GlobalSearchRow, selected: boolean) {
+  if (row.kind === "type-heading") return h(Text, { bold: true }, () => row.label);
+  if (row.kind === "provider-heading") return h(Text, { bold: true, inverse: selected }, () => `${selected ? "› " : "  "}${row.label}`);
+  if (row.kind === "provider-status") {
+    const status = row.state.status === "loading" ? "Loading"
+      : row.state.status === "empty" ? "No results"
+      : row.state.status === "auth" ? "Authentication failed"
+      : row.state.status === "offline" ? "Offline"
+      : "Failed";
+    const retry = row.state.status === "loading" || row.state.status === "empty" ? "" : " · Retry";
+    return h(Text, { inverse: selected, wrap: "truncate-end" }, () =>
+      `${selected ? "› " : "  "}${row.label} · ${status}${row.state.message ? `: ${row.state.message}` : ""}${retry}`);
+  }
+  return h(Text, { inverse: selected, wrap: "truncate-end" }, () =>
+    `${selected ? "› " : "  "}${row.result.label} · ${row.result.providerLabel}${row.result.detail ? ` · ${row.result.detail}` : ""}`);
 }
 
 function confirmationView(choice: "cancel" | "confirm") {
@@ -441,7 +467,7 @@ function terminalKey(input: string, key: {
   if (key.pageUp) return "\x1b[5~";
   if (key.pageDown) return "\x1b[6~";
   if (key.tab) return "\t";
-  if (key.delete) return "\x1b[3~";
+  if (key.delete) return input === "\x7f" || input === "\b" ? input : "\x1b[3~";
   return input;
 }
 
