@@ -1,4 +1,4 @@
-import { Box, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
+import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
 import type { QueueEntry, UiState } from "../domain";
@@ -66,6 +66,7 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
+        if (ui.terminal.tier === "terminal-too-small" && !(key.ctrl && input === "c")) return;
         if (coordinator.appState.downloads.quitConfirmationRequired) {
           if (input === "y" || key.return) {
             await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
@@ -105,20 +106,20 @@ export function createTmuRoot(options: TmuRootOptions) {
           return;
         }
         if (ui.overlays.length > 0) {
-          if (key.escape || input === "q") coordinator.dispatchUi({ type: "dismissOverlay" });
+          if (key.escape || input === "?") coordinator.dispatchUi({ type: "dismissOverlay" });
           publication.notify("input");
           return;
         }
         const textInputFocused = ui.activeTab === "library"
           ? ui.library.inputFocused
           : ui.activeTab === "downloader" && ui.downloader.inputFocused;
-        if (!textInputFocused && input === "?") {
-          coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
+        if (input === "]" || input === "[") {
+          coordinator.dispatchUi({ type: "switchTab", tab: adjacentTab(ui.activeTab, input === "]" ? 1 : -1) });
           publication.notify("input");
           return;
         }
-        if (!textInputFocused && input === ":") {
-          coordinator.dispatchUi({ type: "openOverlay", kind: "command-palette" });
+        if (!textInputFocused && input === "?") {
+          coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
           publication.notify("input");
           return;
         }
@@ -127,10 +128,10 @@ export function createTmuRoot(options: TmuRootOptions) {
           if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
           return;
         }
-        if ((!textInputFocused || key.ctrl) && input === "1") coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
-        else if ((!textInputFocused || key.ctrl) && input === "2") coordinator.dispatchUi({ type: "switchTab", tab: "library" });
-        else if ((!textInputFocused || key.ctrl) && input === "3") coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
-        else if (!textInputFocused && key.tab) coordinator.dispatchUi({ type: "switchTab", tab: nextTab(ui.activeTab) });
+        if (key.tab) {
+          if (ui.activeTab === "library") coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: !ui.library.inputFocused });
+          else if (ui.activeTab === "downloader") coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: !ui.downloader.inputFocused });
+        }
         else if (input === " " && !textInputFocused) {
           const selected = coordinator.appState.queue.entries[ui.selectedQueueIndex];
           if (coordinator.appState.queue.currentIndex < 0 && selected) {
@@ -156,7 +157,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.stop();
       });
 
-      return () => render(snapshot.value, coordinator);
+      return () => render(snapshot.value, coordinator, options.noColor ?? process.env.NO_COLOR !== undefined);
     },
   });
 }
@@ -185,7 +186,11 @@ async function routePlayback(
   coordinator: AppCoordinator,
 ): Promise<void> {
   const identities = coordinator.queueTrackIdentities();
-  if (input === "j" || key.downArrow) {
+  const jump = listJump(input, key, chordPending(coordinator.uiState), identities.length, coordinator.uiState.selectedQueueIndex);
+  if (jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
+  if (jump.index !== undefined) {
+    coordinator.dispatchUi({ type: "selectQueue", index: jump.index, identities });
+  } else if (input === "j" || key.downArrow) {
     coordinator.dispatchUi({
       type: "selectQueue",
       index: coordinator.uiState.selectedQueueIndex + 1,
@@ -220,7 +225,11 @@ async function routeLibrary(
 ): Promise<void> {
   const provider = coordinator.appState.providers["youtube-cache"];
   const tracks = provider.searchTracks(coordinator.uiState.library.query);
-  if (key.escape) {
+  const jump = listJump(input, key, chordPending(coordinator.uiState), tracks.length, coordinator.uiState.library.selectedIndex);
+  if (!coordinator.uiState.library.inputFocused && jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
+  if (!coordinator.uiState.library.inputFocused && jump.index !== undefined) {
+    coordinator.dispatchUi({ type: "setLibrarySelection", index: jump.index, resultCount: tracks.length });
+  } else if (key.escape) {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
   } else if (!coordinator.uiState.library.inputFocused && input === "/") {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: true });
@@ -255,6 +264,9 @@ async function routeLibrary(
   } else if (!coordinator.uiState.library.inputFocused && input === "X" && isYouTubeCacheProvider(provider)) {
     const incomplete = provider.listIncompleteEntries()[coordinator.uiState.library.healthSelectedIndex];
     if (incomplete) await coordinator.dispatch({ type: "cacheOperation", operation: "request-cleanup", stem: incomplete.stem });
+  } else if (key.return && coordinator.uiState.library.inputFocused) {
+    coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
+    coordinator.dispatchUi({ type: "setLibrarySelection", index: 0, resultCount: tracks.length });
   } else if (key.return) {
     const track = tracks[coordinator.uiState.library.selectedIndex];
     if (track) await coordinator.dispatch({ type: "playNow", target: track });
@@ -276,24 +288,35 @@ async function routeDownloader(
   key: InputKey,
   coordinator: AppCoordinator,
 ): Promise<void> {
-  if (key.escape) {
+  const downloads = coordinator.appState.downloads;
+  const pipelineCount = downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0);
+  const jump = listJump(input, key, chordPending(coordinator.uiState), pipelineCount, coordinator.uiState.downloader.selectedBatchIndex);
+  if (!coordinator.uiState.downloader.inputFocused && jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
+  if (!coordinator.uiState.downloader.inputFocused && jump.index !== undefined) {
+    coordinator.dispatchUi({ type: "setDownloaderBatchSelection", index: jump.index, resultCount: pipelineCount });
+  } else if (key.escape) {
     coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: false });
   } else if (!coordinator.uiState.downloader.inputFocused && input === "u") {
     coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: true });
-  } else if (!coordinator.uiState.downloader.inputFocused && (input === "j" || input === "k")) {
+  } else if (!coordinator.uiState.downloader.inputFocused && (input === "j" || input === "k" || key.downArrow || key.upArrow)) {
     coordinator.dispatchUi({
       type: "setDownloaderBatchSelection",
-      index: coordinator.uiState.downloader.selectedBatchIndex + (input === "j" ? 1 : -1),
-      resultCount: coordinator.appState.downloads.pendingBatches.length,
+      index: coordinator.uiState.downloader.selectedBatchIndex + (input === "j" || key.downArrow ? 1 : -1),
+      resultCount: pipelineCount,
     });
   } else if (!coordinator.uiState.downloader.inputFocused && input === "x") {
-    const pending = coordinator.appState.downloads.pendingBatches[coordinator.uiState.downloader.selectedBatchIndex];
+    const selectedIndex = coordinator.uiState.downloader.selectedBatchIndex;
+    if (downloads.activeBatch && selectedIndex === 0) {
+      await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
+      return;
+    }
+    const pending = downloads.pendingBatches[selectedIndex - (downloads.activeBatch ? 1 : 0)];
     if (pending) {
       await coordinator.dispatch({ type: "downloadOperation", operation: "remove-pending", batchId: pending.id });
       coordinator.dispatchUi({
         type: "setDownloaderBatchSelection",
         index: coordinator.uiState.downloader.selectedBatchIndex,
-        resultCount: coordinator.appState.downloads.pendingBatches.length,
+        resultCount: coordinator.appState.downloads.pendingBatches.length + coordinator.appState.downloads.summaries.length + (coordinator.appState.downloads.activeBatch ? 1 : 0),
       });
     }
   } else if (!coordinator.uiState.downloader.inputFocused && input === "c") {
@@ -314,7 +337,7 @@ async function routeDownloader(
   }
 }
 
-function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
+function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noColor: boolean) {
   const { appState, uiState } = snapshot;
   if (uiState.terminal.tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
@@ -328,93 +351,135 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
     width: uiState.terminal.columns,
     height: uiState.terminal.rows,
   }, () => [
-    h(Text, { bold: true }, () => tabHeader(uiState.activeTab)),
+    tabHeader(uiState.activeTab, noColor),
     uiState.activeTab === "playback"
-      ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState)
+        ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState, noColor)
       : uiState.activeTab === "library"
-        ? libraryView(snapshot, coordinator)
-        : downloaderView(snapshot),
+        ? libraryView(snapshot, coordinator, noColor)
+        : downloaderView(snapshot, noColor),
     appState.appErrors.at(-1)
-      ? h(Text, { color: "yellow", wrap: "truncate-end" }, () => `! ${appState.appErrors.at(-1)}`)
+      ? h(Text, { color: noColor ? undefined : "yellow", wrap: "truncate-end" }, () => `! WARNING · ${appState.appErrors.at(-1)}`)
       : null,
-    uiState.overlays.at(-1) ? h(Text, { bold: true }, () =>
-      uiState.overlays.at(-1)?.kind === "shortcut-help"
-        ? `${tabLabel(uiState.activeTab)} Help · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · z Shuffle · r Repeat · 1/2/3 Tabs · Esc Close`
-        : "Command Palette · Playback · Library · YouTube Downloader · Esc Close") : null,
+    uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
+      h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
     appState.cacheConfirmation ? h(Text, { bold: true }, () =>
       `${appState.cacheConfirmation!.kind === "delete-track" ? "Permanently delete" : "Clean incomplete"} ${appState.cacheConfirmation!.title ?? appState.cacheConfirmation!.stem}?${appState.cacheConfirmation!.stopsPlayback ? " This will stop playback." : ""} y Confirm · n Cancel`) : null,
     uiState.pendingConfirmation ? h(Text, { bold: true }, () => "Clear Queue permanently? y Confirm · n Cancel") : null,
-    h(Text, { dimColor: true }, () => footer(uiState.activeTab)),
+    h(Text, { dimColor: true }, () => footer(uiState)),
   ]);
 }
 
-function tabHeader(active: UiState["activeTab"]): string {
-  const tab = (id: UiState["activeTab"], label: string) => active === id ? `[${label}]` : label;
-  return `${tab("playback", "1 Playback")}  ${tab("library", "2 Library")}  ${tab("downloader", "3 YouTube Downloader")}`;
+function tabHeader(active: UiState["activeTab"], noColor: boolean) {
+  const tab = (id: UiState["activeTab"], label: string) => h(Text, {
+    bold: active === id, inverse: active === id, dimColor: active !== id,
+    color: active === id && !noColor ? "cyan" : undefined,
+  }, () => active === id ? `▸ ${label} ◂` : label);
+  return h(Box, { borderStyle: "round", width: "100%", paddingX: 1 }, () => [
+    tab("playback", "Player"), h(Text, () => "  "), tab("library", "Library"), h(Text, () => "  "),
+    tab("downloader", "Downloads"), h(Spacer), h(Text, { dimColor: true }, () => "[ prev · next ]"),
+  ]);
 }
 
 function playbackView(
   entries: readonly QueueEntry[],
   currentIndex: number,
   uiState: PublicationSnapshot["uiState"],
+  noColor: boolean,
 ) {
   const lines = entries.length === 0
-    ? ["Queue is empty"]
+    ? ["Queue is empty — open Library to add Tracks."]
     : entries.map((entry, index) => {
-      const selected = index === uiState.selectedQueueIndex ? ">" : " ";
+      const selected = index === uiState.selectedQueueIndex ? "›" : " ";
       const current = index === currentIndex ? "*" : " ";
       const unavailable = entry.availability.status === "unavailable" ? "!" : " ";
       const reason = entry.availability.status === "unavailable" ? ` · unavailable: ${entry.availability.reason}` : "";
-      return `${selected}${current}${unavailable} ${entry.track.title} · ${entry.track.providerLabel}${reason}`;
+      return `${selected}${current}${unavailable} ${entry.track.title}${index === currentIndex ? " · CURRENT" : ""} · ${entry.track.providerLabel}${reason}`;
     });
-  return h(Box, { flexDirection: "column", flexGrow: 1 }, () =>
-    lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)));
+  const position = entries.length ? uiState.selectedQueueIndex + 1 : 0;
+  const queue = h(Box, { flexDirection: "column", flexGrow: 2, borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 1 }, () => [
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Queue · ${entries.length} tracks · ${position}/${entries.length}`),
+    ...lines.slice(uiState.queueScroll, uiState.queueScroll + 10).map((line, index) => h(Text, { wrap: "truncate-end", inverse: entries.length > 0 && index + uiState.queueScroll === uiState.selectedQueueIndex }, () => line)),
+  ]);
+  const selected = entries[uiState.selectedQueueIndex];
+  if (!selected) return queue;
+  const preview = h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderDimColor: true, paddingX: 1 }, () => [
+    h(Text, { bold: true }, () => "Selected Track"), h(Text, () => selected.track.title), h(Text, { dimColor: true }, () => selected.track.providerLabel),
+  ]);
+  return h(Box, { flexDirection: uiState.terminal.tier === "narrow" ? "column" : "row", gap: 1, flexGrow: 1 }, () => [queue, preview]);
 }
 
-function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator) {
+function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noColor: boolean) {
   const provider = coordinator.appState.providers["youtube-cache"];
   const tracks = provider.searchTracks(snapshot.uiState.library.query);
   const incomplete = isYouTubeCacheProvider(provider) ? provider.listIncompleteEntries() : [];
-  return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, () => `Cache Search: ${snapshot.uiState.library.query || "(type to search)"}${snapshot.uiState.library.inputFocused ? " [focused]" : ""}`),
-    ...tracks.map((track, index) =>
-      h(Text, { wrap: "truncate-end" }, () =>
-        `${index === snapshot.uiState.library.selectedIndex ? ">" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
-      )),
+  const search = h(Box, { borderStyle: "round", borderColor: snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.library.inputFocused, paddingX: 1 }, () =>
+    h(Text, { bold: snapshot.uiState.library.inputFocused }, () => `Search ${snapshot.uiState.library.inputFocused ? "│" : ""} ${snapshot.uiState.library.query || "(type to search)"}`));
+  const results = h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
+    h(Text, { bold: !snapshot.uiState.library.inputFocused }, () => `Library · ${tracks.length} results · ${tracks.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${tracks.length}`),
+    ...tracks.slice(snapshot.uiState.library.scroll, snapshot.uiState.library.scroll + 10).map((track, visibleIndex) => { const index = visibleIndex + snapshot.uiState.library.scroll; return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.library.inputFocused && index === snapshot.uiState.library.selectedIndex, dimColor: snapshot.uiState.library.inputFocused && index === snapshot.uiState.library.selectedIndex }, () =>
+        `${index === snapshot.uiState.library.selectedIndex ? "›" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
+      ); }),
     tracks.length === 0 ? h(Text, { dimColor: true }, () => "No cached Tracks") : null,
-    ...incomplete.map((entry, index) => h(Text, { color: "yellow", wrap: "truncate-end" }, () =>
+    ...incomplete.map((entry, index) => h(Text, { color: noColor ? undefined : "yellow", wrap: "truncate-end" }, () =>
       `${index === snapshot.uiState.library.healthSelectedIndex ? ">" : " "} Cache Health: ${entry.stem}${entry.title ? ` · ${entry.title}` : ""}${entry.uploader ? ` · ${entry.uploader}` : ""} · ${entry.reason}`)),
   ]);
+  const selected = tracks[snapshot.uiState.library.selectedIndex];
+  const inspector = selected ? h(Box, { borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1 }, () => [h(Text, { bold: true }, () => "Selected Track"), h(Text, () => selected.title), h(Text, { dimColor: true }, () => selected.artist ? `Channel: ${selected.artist}` : selected.identity.stableId)]) : null;
+  const body = snapshot.uiState.terminal.tier === "wide" && inspector
+    ? h(Box, { flexDirection: "row", gap: 1, flexGrow: 1 }, () => [results, inspector])
+    : h(Box, { flexDirection: "column", gap: 1, flexGrow: 1 }, () => [results, inspector]);
+  return h(Box, { flexDirection: "column", flexGrow: 1, gap: 1 }, () => [search, body]);
 }
 
-function downloaderView(snapshot: PublicationSnapshot) {
+function downloaderView(snapshot: PublicationSnapshot, noColor: boolean) {
   const downloads = snapshot.appState.downloads;
-  return h(Box, { flexDirection: "column", flexGrow: 1 }, () => [
-    h(Text, () => `YouTube URL: ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}${snapshot.uiState.downloader.inputFocused ? " [focused]" : ""}`),
+  const rows = [
+    ...(downloads.activeBatch ? [h(Text, { dimColor: snapshot.uiState.downloader.inputFocused && snapshot.uiState.downloader.selectedBatchIndex === 0, inverse: !snapshot.uiState.downloader.inputFocused && snapshot.uiState.downloader.selectedBatchIndex === 0 }, () =>
+      `${snapshot.uiState.downloader.selectedBatchIndex === 0 ? "› " : "  "}Active #${downloads.activeBatch!.id}${downloads.activeBatch!.activeTrack === undefined ? "" : ` Track ${downloads.activeBatch!.activeTrack.index + 1}${downloads.activeBatch!.activeTrack.title ? ` · ${downloads.activeBatch!.activeTrack.title}` : ""}`}: ${downloads.activeBatch!.sourceUrl}`)] : []),
+    ...downloads.pendingBatches.map((batch, index) => { const row = index + (downloads.activeBatch ? 1 : 0); return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex, dimColor: snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex }, () =>
+      `${row === snapshot.uiState.downloader.selectedBatchIndex ? "›" : " "} Pending #${batch.id}: ${batch.sourceUrl}`); }),
+    ...downloads.summaries.map((summary, index) => { const row = index + downloads.pendingBatches.length + (downloads.activeBatch ? 1 : 0); return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex, dimColor: snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex }, () =>
+      `${row === snapshot.uiState.downloader.selectedBatchIndex ? "› " : "  "}Summary #${summary.id}: ${summary.downloaded} downloaded · ${summary.alreadyCached} cached · ${summary.failed} failed · ${summary.cancelled} cancelled`); }),
+  ];
+  return h(Box, { flexDirection: "column", flexGrow: 1, gap: 1 }, () => [
+    h(Box, { borderStyle: "round", borderColor: snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.downloader.inputFocused, paddingX: 1 }, () => h(Text, { bold: snapshot.uiState.downloader.inputFocused }, () => `URL Input ${snapshot.uiState.downloader.inputFocused ? "│" : ""} ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`)),
+    h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
+    h(Text, { bold: !snapshot.uiState.downloader.inputFocused }, () => `Pipeline · ${downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0)} batches`),
     downloads.confirmation ? h(Text, { bold: true }, () =>
       `Confirm playlist ${downloads.confirmation!.title} (${downloads.confirmation!.itemCount} source items)? y All · n Cancel`) : null,
     downloads.quitConfirmationRequired ? h(Text, { bold: true }, () =>
       "Quit will cancel active and pending Download Batches. y Quit · n Stay") : null,
-    h(Text, { dimColor: !downloads.activeBatch }, () => downloads.activeBatch
-      ? `Active #${downloads.activeBatch.id}${downloads.activeBatch.activeTrack === undefined ? "" : ` Track ${downloads.activeBatch.activeTrack.index + 1}${downloads.activeBatch.activeTrack.title ? ` · ${downloads.activeBatch.activeTrack.title}` : ""}`}: ${downloads.activeBatch.sourceUrl}`
-      : downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "No active downloads"),
+    rows.length === 0 ? h(Text, { dimColor: true }, () => downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "Paste a YouTube URL above to begin.") : null,
     ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
-    ...downloads.pendingBatches.map((batch, index) => h(Text, { wrap: "truncate-end" }, () =>
-      `${index === snapshot.uiState.downloader.selectedBatchIndex ? ">" : " "} Pending #${batch.id}: ${batch.sourceUrl}`)),
-    ...downloads.summaries.map((summary) => h(Text, { wrap: "truncate-end" }, () =>
-      `Summary #${summary.id}: ${summary.downloaded} downloaded · ${summary.alreadyCached} cached · ${summary.failed} failed · ${summary.cancelled} cancelled`)),
+    ...rows.slice(snapshot.uiState.downloader.scroll, snapshot.uiState.downloader.scroll + 10),
     h(Text, { dimColor: true, wrap: "truncate-end" }, () => snapshot.appState.lastEvent),
+    ]),
   ]);
 }
 
-function footer(active: UiState["activeTab"]): string {
-  if (active === "playback") return "j/k Move  Space Play  Enter Play Next  x Remove  ? Help  1/2/3 Tabs  q Quit";
-  if (active === "library") return "j/k Tracks · J/K Health · Enter Play Now · N Next · a Add · d Delete · X Clean · ? Help";
-  return "Type URL · Enter Submit · Esc Actions · j/k Pending · x Remove · c Cancel active · 1/2/3 Tabs";
+function footer(ui: UiState): string {
+  if (ui.activeTab === "playback") return "────────  j/k Move · Space Play · Enter Play · x Remove · ? Help";
+  if (ui.activeTab === "library" && ui.library.inputFocused) return "────────  Type Search · Enter Results · Esc Results · Tab Focus · ? Help";
+  if (ui.activeTab === "library") return "────────  j/k Move · / Search · Enter Play · a Add · ? Help";
+  if (ui.downloader.inputFocused) return "────────  Type URL · Enter Submit · Esc Pipeline · Tab Focus · ? Help";
+  return "────────  j/k Move · x Cancel/Remove · gg/G Ends · Tab Focus · ? Help";
 }
 
-function nextTab(active: UiState["activeTab"]): UiState["activeTab"] {
-  return active === "playback" ? "library" : active === "library" ? "downloader" : "playback";
+function adjacentTab(active: UiState["activeTab"], delta: 1 | -1): UiState["activeTab"] {
+  const tabs: UiState["activeTab"][] = ["playback", "library", "downloader"];
+  return tabs[(tabs.indexOf(active) + delta + tabs.length) % tabs.length]!;
+}
+
+function listJump(input: string, key: InputKey, pendingG: boolean, count: number, index: number) {
+  if (input === "g") return pendingG ? { index: 0, pending: false } : { pending: true };
+  if (input === "G") return { index: count - 1, pending: false };
+  if (key.pageDown || (key.ctrl && input === "d")) return { index: index + 10, pending: false };
+  if (key.pageUp || (key.ctrl && input === "u")) return { index: index - 10, pending: false };
+  return {};
+}
+
+function chordPending(ui: UiState): boolean {
+  return ui.pendingVimChord !== null && ui.pendingVimChord.expiresAtMs >= Date.now();
 }
 
 function tabLabel(active: UiState["activeTab"]): string {
@@ -422,9 +487,9 @@ function tabLabel(active: UiState["activeTab"]): string {
 }
 
 function contextualHelp(active: UiState["activeTab"]): string {
-  if (active === "playback") return "j/k Move · x Remove · J/K Reorder · C Clear";
-  if (active === "library") return "/ Focus Cache Search · j/k Move · Enter Play Now · N Play Next · a Add to Queue";
-  return "u Focus URL · Enter Submit";
+  if (active === "playback") return "j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · Enter Play Selected · Space Play/Pause · N Play Next · J/K Reorder · x Remove · C Clear · Z Randomize";
+  if (active === "library") return "/ Search · Tab/Shift+Tab Focus · Enter Results/Play Now · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · N Play Next · a Add · d Delete/Clean";
+  return "Tab/Shift+Tab Focus · Enter Submit · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · x Cancel/Remove";
 }
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
@@ -443,4 +508,7 @@ type InputKey = {
   leftArrow?: boolean;
   rightArrow?: boolean;
   escape?: boolean;
+  shift?: boolean;
+  pageUp?: boolean;
+  pageDown?: boolean;
 };

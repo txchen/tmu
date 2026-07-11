@@ -13,32 +13,97 @@ import type { YouTubeCacheProvider } from "../src/youtube-cache";
 afterEach(() => cleanup());
 
 describe("TMU top-level surface smoke", () => {
+  test("renders the keyboard-first shell and routes global brackets through focused inputs", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    expect(terminal.lastFrame()).toContain("╭");
+    expect(terminal.lastFrame()).toContain("Player");
+    expect(terminal.lastFrame()).toContain("Library");
+    expect(terminal.lastFrame()).toContain("Downloads");
+    expect(terminal.lastFrame()).not.toContain("focused");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("library");
+    expect(coordinator.uiState.library.inputFocused).toBe(false);
+    await terminal.stdin.write("\t");
+    expect(coordinator.uiState.library.inputFocused).toBe(true);
+    await terminal.stdin.write("space?");
+    expect(coordinator.uiState.library.query).toBe("space?");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("downloader");
+    await terminal.stdin.write("[");
+    expect(coordinator.uiState.activeTab).toBe("library");
+    expect(coordinator.uiState.library.query).toBe("space?");
+    await terminal.stdin.write("\x1b");
+    expect(coordinator.uiState.library.inputFocused).toBe(false);
+  });
+
+  test("removes numeric tabs and command palette while help suspends actions", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    await terminal.stdin.write("2");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.stdin.write(":");
+    expect(terminal.lastFrame()).not.toContain("Command Palette");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+  });
+
+  test("keeps responsive state and suspends hidden actions while terminal is too small", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    await terminal.terminal.resize(59, 15);
+    expect(terminal.lastFrame()).toContain("Terminal too small");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.terminal.resize(120, 24);
+    expect(coordinator.uiState.terminal.tier).toBe("wide");
+    expect(terminal.lastFrame()).toContain("Player");
+  });
+
+  test("moves and keeps long Queue selections visible with shared Vim navigation", async () => {
+    const { coordinator } = createTmuApp();
+    for (let index = 0; index < 12; index++) await coordinator.dispatch({ type: "addToQueue", target: cachedTrack(`track-${index}`, `Track ${index}`) });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    await terminal.stdin.write("G");
+    expect(coordinator.uiState.selectedQueueIndex).toBe(11);
+    expect(terminal.lastFrame()).toContain("› ! Track 11");
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.selectedQueueIndex).toBe(0);
+    await terminal.stdin.write("\x1b[6~");
+    expect(coordinator.uiState.selectedQueueIndex).toBeGreaterThan(0);
+  });
   test("opens on Playback and reaches Library and YouTube Downloader while retaining tab-local input", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
 
-    expect(terminal.lastFrame()).toContain("[1 Playback]");
-    expect(terminal.lastFrame()).toContain("2 Library");
-    expect(terminal.lastFrame()).toContain("3 YouTube Downloader");
+    expect(terminal.lastFrame()).toContain("▸ Player ◂");
+    expect(terminal.lastFrame()).toContain("Library");
+    expect(terminal.lastFrame()).toContain("Downloads");
 
-    await terminal.stdin.write("2");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("\t");
     await terminal.stdin.write("cached");
-    expect(terminal.lastFrame()).toContain("[2 Library]");
-    expect(terminal.lastFrame()).toContain("Cache Search: cached");
+    expect(terminal.lastFrame()).toContain("▸ Library ◂");
+    expect(terminal.lastFrame()).toContain("cached");
 
     await terminal.stdin.write("\x1b");
-    await terminal.stdin.write("3");
+    await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/abc123");
-    expect(terminal.lastFrame()).toContain("[3 YouTube Downloader]");
+    expect(terminal.lastFrame()).toContain("▸ Downloads ◂");
     expect(terminal.lastFrame()).toContain("https://youtu.be/abc123");
 
     await terminal.stdin.write("\x1b");
-    await terminal.stdin.write("2");
-    expect(terminal.lastFrame()).toContain("Cache Search: cached");
+    await terminal.stdin.write("[");
+    expect(terminal.lastFrame()).toContain("cached");
 
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("Library Help");
+    expect(terminal.lastFrame()).toContain("Library Shortcuts");
   });
 
   test("keeps core Playback queue actions available after provider narrowing", async () => {
@@ -66,21 +131,21 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
 
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("Playback Help");
+    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
     await terminal.stdin.write("\x1b");
 
-    await terminal.stdin.write("2");
+    await terminal.stdin.write("]");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("s");
     expect(coordinator.appState.playback.status).toBe("stopped");
-    await terminal.stdin.write("1");
+    await terminal.stdin.write("[");
 
     await terminal.stdin.write("C");
     expect(terminal.lastFrame()).toContain("Clear Queue permanently?");
     await terminal.stdin.write("y");
     expect(coordinator.appState.queue.entries).toEqual([]);
 
-    await terminal.stdin.write("2");
+    await terminal.stdin.write("]");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
@@ -127,7 +192,7 @@ describe("TMU top-level surface smoke", () => {
     });
     await coordinator.dispatch({ type: "playNow", target: track });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    await terminal.stdin.write("2");
+    await terminal.stdin.write("]");
     expect(terminal.lastFrame()).toContain("Cache Health: broken00001");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("d");
@@ -166,7 +231,8 @@ describe("TMU top-level surface smoke", () => {
       },
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    await terminal.stdin.write("3");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/one");
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.activeBatch !== undefined);
@@ -187,7 +253,7 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.downloads.pendingBatches).toHaveLength(2);
     await terminal.stdin.write("j");
     await terminal.stdin.write("x");
-    expect(coordinator.appState.downloads.pendingBatches.map((batch) => batch.id)).toEqual([2]);
+    expect(coordinator.appState.downloads.pendingBatches.map((batch) => batch.id)).toEqual([3]);
     await terminal.stdin.write("x");
     expect(coordinator.appState.downloads.pendingBatches).toEqual([]);
 
@@ -216,7 +282,8 @@ describe("TMU top-level surface smoke", () => {
       }),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    await terminal.stdin.write("3");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
     await terminal.stdin.write(url);
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
@@ -246,7 +313,7 @@ describe("TMU top-level surface smoke", () => {
       queue, player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    expect(terminal.lastFrame()).toContain("Broken Track · YouTube Cache · unavailable: mpv playback failed: corrupt stream");
+    expect(terminal.lastFrame()).toContain("Broken Track · YouTube Cache · unavailable: mpv playback failed: corrupt");
   });
 
   test("Library Cache Search finds a cached Track and places it in Queue", async () => {
@@ -262,10 +329,11 @@ describe("TMU top-level surface smoke", () => {
       queue: new MemoryQueue(), player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    await terminal.stdin.write("2");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("\t");
     await terminal.stdin.write("second");
-    expect(terminal.lastFrame()).toContain("> Second Track");
-    expect(terminal.lastFrame()).not.toContain("> First Track");
+    expect(terminal.lastFrame()).toContain("› Second Track");
+    expect(terminal.lastFrame()).not.toContain("› First Track");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);

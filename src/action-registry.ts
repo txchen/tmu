@@ -11,10 +11,8 @@ export type ResolvedAction = ActionDefinition;
 
 export function createActionRegistry(): ActionRegistry {
   return [
-    { id: "tab.playback", label: "Playback", shortcut: "1" },
-    { id: "tab.library", label: "Library", shortcut: "2" },
-    { id: "tab.downloader", label: "YouTube Downloader", shortcut: "3" },
     { id: "playback.toggle", label: "Play/Pause", shortcut: "Space" },
+    { id: "help", label: "Help", shortcut: "?" },
   ];
 }
 
@@ -22,14 +20,6 @@ export function footerActions(
   registry: ActionRegistry,
   context: { uiState: Pick<UiState, "activeTab"> },
 ): ActionRegistry {
-  return registry.filter((action) =>
-    action.id === "playback.toggle" || action.id === `tab.${context.uiState.activeTab}`
-  );
-}
-
-export function searchCommandActions(registry: ActionRegistry, query: string): ActionRegistry {
-  const normalized = query.trim().toLocaleLowerCase();
-  return normalized
-    ? registry.filter((action) => action.label.toLocaleLowerCase().includes(normalized))
-    : registry;
+  void context;
+  return registry.slice(0, 5);
 }

@@ -7,7 +7,7 @@ export type ProviderId = typeof YOUTUBE_CACHE_PROVIDER_ID;
 export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
 
 export type PickerOverlay = {
-  kind: "shortcut-help" | "command-palette";
+  kind: "shortcut-help";
   focus: "search" | "results";
   query: string;
   scroll: number;

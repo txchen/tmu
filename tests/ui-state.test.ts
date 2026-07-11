@@ -27,9 +27,16 @@ describe("top-level tab UI state", () => {
     const nextSession = createInitialUiState();
     expect(nextSession).toMatchObject({
       activeTab: "playback",
-      library: { query: "", inputFocused: true },
+      library: { query: "", inputFocused: false },
       downloader: { urlInput: "", inputFocused: true },
     });
+  });
+
+  test("tracks pending gg chords and clears them after a jump", () => {
+    let state = reduceUiState(createInitialUiState(), { type: "setPendingVimChord", pending: true });
+    expect(state.pendingVimChord?.key).toBe("g");
+    state = reduceUiState(state, { type: "setPendingVimChord", pending: false });
+    expect(state.pendingVimChord).toBeNull();
   });
 
   test("moves Library selection only within the local result list", () => {

@@ -22,8 +22,9 @@ export type UiStateAction =
   | { type: "setDownloaderInput"; value: string }
   | { type: "setDownloaderInputFocus"; focused: boolean }
   | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
+  | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
-  | { type: "openOverlay"; kind: "shortcut-help" | "command-palette" }
+  | { type: "openOverlay"; kind: "shortcut-help" }
   | { type: "dismissOverlay" }
   | { type: "requestConfirmation"; kind: import("./domain").ConfirmationKind }
   | { type: "cancelConfirmation" };
@@ -37,7 +38,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     queueScroll: 0,
     overlays: [],
     selectedQueueIdentity: null,
-    library: { query: "", inputFocused: true, selectedIndex: 0, healthSelectedIndex: 0, scroll: 0 },
+    library: { query: "", inputFocused: false, selectedIndex: 0, healthSelectedIndex: 0, scroll: 0 },
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
@@ -77,10 +78,11 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "setLibraryInputFocus":
       return { ...state, library: { ...state.library, inputFocused: action.focused } };
     case "setLibrarySelection":
+      { const selectedIndex = clampIndex(action.index, action.resultCount);
       return {
         ...state,
-        library: { ...state.library, selectedIndex: clampIndex(action.index, action.resultCount) },
-      };
+        library: { ...state.library, selectedIndex, scroll: visibleScroll(state.library.scroll, selectedIndex) },
+      }; }
     case "setCacheHealthSelection":
       return {
         ...state,
@@ -91,15 +93,19 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "setDownloaderInputFocus":
       return { ...state, downloader: { ...state.downloader, inputFocused: action.focused } };
     case "setDownloaderBatchSelection":
+      { const selectedBatchIndex = clampIndex(action.index, action.resultCount);
       return {
         ...state,
-        downloader: { ...state.downloader, selectedBatchIndex: clampIndex(action.index, action.resultCount) },
-      };
+        downloader: { ...state.downloader, selectedBatchIndex, scroll: visibleScroll(state.downloader.scroll, selectedBatchIndex) },
+      }; }
+    case "setPendingVimChord":
+      return { ...state, pendingVimChord: action.pending ? { key: "g", expiresAtMs: Date.now() + 1_000 } : null };
     case "selectQueue": {
       const index = clampIndex(action.index, action.identities.length);
       return {
         ...state,
         selectedQueueIndex: index,
+        queueScroll: visibleScroll(state.queueScroll, index),
         selectedQueueIdentity: action.identities[index] ?? null,
       };
     }
@@ -112,6 +118,12 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "cancelConfirmation":
       return { ...state, pendingConfirmation: null };
   }
+}
+
+function visibleScroll(scroll: number, index: number, pageSize = 10): number {
+  if (index < scroll) return index;
+  if (index >= scroll + pageSize) return index - pageSize + 1;
+  return scroll;
 }
 
 export class UiStateStore {
