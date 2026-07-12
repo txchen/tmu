@@ -260,6 +260,18 @@ export class MpvPlayer implements Player {
   }
 
   async seekBy(seconds: number): Promise<PlayerPlaybackState> {
+    const positionBefore = this.state.positionSeconds;
+    if (typeof positionBefore === "number") {
+      const duration = this.state.durationSeconds;
+      const upperBound = typeof duration === "number" && Number.isFinite(duration)
+        ? Math.max(0, duration)
+        : Number.POSITIVE_INFINITY;
+      const target = Math.max(0, Math.min(upperBound, positionBefore + seconds));
+      await this.command(["seek", target, "absolute+exact"]);
+      this.updateState({ positionSeconds: target });
+      return this.state;
+    }
+
     await this.command(["seek", seconds, "relative"]);
     return this.state;
   }
@@ -578,7 +590,6 @@ export class MpvPlayer implements Player {
   private recordCommandError(command: unknown[] | string, error: Error): void {
     const commandText = Array.isArray(command) ? command.map(formatCommandPart).join(" ") : command;
     this.updateState({
-      status: "error",
       commandError: {
         command: commandText,
         message: error.message,

@@ -74,6 +74,7 @@ describe("TMU top-level surface smoke", () => {
       expect(frame).toContain("▶ PLAYING");
       expect(frame).toContain("A Very Long Current Track");
       expect(frame).toContain("1:05/4:05");
+      expect(frame).toContain("[██▋░░░░░░░]");
       expect(frame).toContain("Vol 73%");
       expect(frame).toContain("↻ ALL");
       expect(frame.indexOf("NOW PLAYING")).toBeLessThan(frame.indexOf("? Help"));
@@ -174,9 +175,11 @@ describe("TMU top-level surface smoke", () => {
     now = 5_000;
     scheduled?.();
     await waitFor(() => terminal.lastFrame()!.includes("0:02/1:40"));
+    expect(terminal.lastFrame()).toContain("[▎░░░░░░░░░]");
 
     await terminal.stdin.write("l");
     expect(terminal.lastFrame()).toContain("0:07/1:40");
+    expect(terminal.lastFrame()).toContain("[▊░░░░░░░░░]");
   });
 
   test("removes numeric tabs and command palette while help suspends actions", async () => {

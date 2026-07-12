@@ -47,6 +47,18 @@ class CommandFailingPlayer extends RecordingPlayer {
   }
 }
 
+class ResumeSeekFailingPlayer extends RecordingPlayer {
+  override async seekBy(): Promise<never> {
+    const message = "mpv error: property unavailable";
+    this.updateState({
+      ...this.playback,
+      commandError: { command: "seek 42 relative", message, recoverable: true },
+      message,
+    });
+    throw new Error(message);
+  }
+}
+
 function harness() {
   const provider: Provider = {
     id: "youtube-cache",
@@ -596,6 +608,33 @@ describe("AppCoordinator with the narrow Provider", () => {
     });
     expect(coordinator.appState.queue.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
+  });
+
+  test("keeps restored playback visibly playing when the best-effort resume seek is not ready", async () => {
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+    };
+    const player = new ResumeSeekFailingPlayer();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+      snapshotPersistence: {
+        load: async () => ({
+          version: 1, entries: [{ track: cachedTrack }], currentIndex: 0, repeatAll: false,
+          volume: { percent: 100, ready: false }, positionSeconds: 42,
+        }),
+        save: async () => undefined,
+      },
+    });
+    await coordinator.start();
+
+    await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
+
+    expect(player.loaded).toEqual([{ kind: "file", path: "/cache/cached-track.opus" }]);
+    expect(coordinator.appState.playback).toMatchObject({
+      status: "playing", currentTrackIdentity: cachedTrack.identity,
+    });
   });
 });
 

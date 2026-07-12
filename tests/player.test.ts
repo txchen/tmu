@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import {
   NodeMpvProcessAdapter,
   MpvPlayer,
+  type PlayerPlaybackState,
   type MpvIpcClient,
   type MpvProcessAdapter,
   type MpvProcessHandle,
@@ -236,6 +237,27 @@ describe("MpvPlayer", () => {
       positionSeconds: 12.5,
       paused: true,
       idle: false,
+    });
+  });
+
+  test("publishes an exact target immediately after a known-position seek", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv", ipcPath: "/tmp/tmu-test.sock", workDir: "/tmp", adapter,
+      positionPollMs: 100000,
+    });
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+    adapter.ipc.emit({ event: "property-change", name: "duration", data: 100 });
+    adapter.ipc.emit({ event: "property-change", name: "time-pos", data: 40 });
+    const published: PlayerPlaybackState[] = [];
+    player.onPlaybackStateChange((state) => published.push({ ...state }));
+
+    await player.seekBy(5);
+
+    expect(player.playback.positionSeconds).toBe(45);
+    expect(published.at(-1)?.positionSeconds).toBe(45);
+    expect(adapter.ipc.sent.at(-1)).toEqual({
+      command: ["seek", 45, "absolute+exact"], request_id: 7,
     });
   });
 
@@ -479,6 +501,22 @@ describe("MpvPlayer", () => {
     expect(adapter.ipc.closed).toBe(true);
     expect(adapter.process.killCalls).toBe(1);
     expect(adapter.cleanedUpIpc).toEqual(["/tmp/tmu-test.sock"]);
+  });
+
+  test("preserves active playback status when a recoverable command fails", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv", ipcPath: "/tmp/tmu-test.sock", workDir: "/tmp", adapter,
+    });
+    await player.load({ kind: "file", path: "/music/amber.flac" });
+    adapter.ipc.nextError = "property unavailable";
+
+    await expect(player.seekBy(42)).rejects.toThrow("mpv error: property unavailable");
+
+    expect(player.playback).toMatchObject({
+      status: "playing",
+      commandError: { command: "seek 42 relative", recoverable: true },
+    });
   });
 
   test("does not kill mpv when quit cleanly reaps the process", async () => {
