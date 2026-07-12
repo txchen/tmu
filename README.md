@@ -21,13 +21,13 @@ The cache lives at `$XDG_CACHE_HOME/tmu/youtube-cache`, or `~/.cache/tmu/youtube
 Node.js and npm are TMU's runtime and installation requirements. TMU requires Node.js 24 or newer. Run it directly from the npm package:
 
 ```sh
-npx tmu
+npx @txchen/tmu
 ```
 
 Or install it globally and use the sole production launch form:
 
 ```sh
-npm install --global tmu
+npm install --global @txchen/tmu
 tmu
 ```
 
@@ -37,7 +37,7 @@ The npm package contains a prebuilt JavaScript executable, so no TypeScript load
 
 ## Quick tutorial
 
-1. Start TMU with `npx tmu`. It opens on the Playback Tab, labeled `Player`. TMU requires a terminal at least 60 columns by 16 rows.
+1. Start TMU with `npx @txchen/tmu`. It opens on the Playback Tab, labeled `Player`. TMU requires a terminal at least 60 columns by 16 rows.
 2. Press `]` twice to open Downloads. Paste a YouTube, YouTube Music, or `youtu.be` video URL and press `Enter`. Explicit playlist URLs are also supported and require confirmation before the batch starts.
 3. Wait for the batch summary, then press `[` to open Library. Downloading caches Tracks but does not add them to the Queue automatically.
 4. Select a Track with `j`/`k` or the arrow keys. Press `Enter` to Play Now, `a` to add it to the end of the Queue without playing, or `N` to make it Play Next.

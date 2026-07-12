@@ -24,8 +24,8 @@ describe("supported Node and npm workflow", () => {
     const readme = await readFile("README.md", "utf8");
 
     expect(readme).toContain("Node.js 24 or newer");
-    expect(readme).toContain("npx tmu");
-    expect(readme).toContain("npm install --global tmu");
+    expect(readme).toContain("npx @txchen/tmu");
+    expect(readme).toContain("npm install --global @txchen/tmu");
     expect(readme).toMatch(/Linux.*macOS.*WSL/s);
     expect(readme).toMatch(/native Windows.*not supported/i);
     expect(readme).toMatch(/Node\.js and npm.*runtime/i);
