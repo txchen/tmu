@@ -16,7 +16,7 @@ const YOUTUBE_CACHE_PROVIDER_LABEL = "YouTube Cache";
 const REQUIRED_METADATA_KEYS = [
   "videoId", "title", "uploader", "cachedAt", "mediaFileName", "container",
 ] as const;
-const OPTIONAL_METADATA_KEYS = ["durationSeconds", "thumbnailUrl", "customTitle"] as const;
+const OPTIONAL_METADATA_KEYS = ["durationSeconds", "thumbnailUrl", "trackTitleOverride"] as const;
 const METADATA_KEYS = new Set<string>([...REQUIRED_METADATA_KEYS, ...OPTIONAL_METADATA_KEYS]);
 const MEDIA_EXTENSIONS = new Set([
   ".aac", ".flac", ".m4a", ".mka", ".mkv", ".mp3", ".mp4", ".ogg", ".opus", ".wav", ".webm",
@@ -39,7 +39,7 @@ export type YouTubeCacheMetadata = {
   mediaFileName: string;
   container: string;
   thumbnailUrl?: string;
-  customTitle?: string;
+  trackTitleOverride?: string;
 };
 
 export type YouTubeCacheEntry = {
@@ -199,9 +199,9 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
   async renameTrack(identity: TrackIdentity, title: string): Promise<Track> {
     const entry = this.findByIdentity(identity);
     if (!entry) throw new Error(`YouTube Cache entry is missing: ${identity.stableId}`);
-    const customTitle = normalizeDisplayValue(title);
-    if (!customTitle) throw new Error("Track Title must not be empty");
-    await writeYouTubeCacheMetadata(this.options, { ...entry.metadata, customTitle });
+    const trackTitleOverride = normalizeDisplayValue(title);
+    if (!trackTitleOverride) throw new Error("Track Title must not be empty");
+    await writeYouTubeCacheMetadata(this.options, { ...entry.metadata, trackTitleOverride });
     this.refresh();
     return this.findByIdentity(identity)!.track;
   }
@@ -352,21 +352,21 @@ function normalizeMetadata(value: unknown): YouTubeCacheMetadata | null {
   if ("durationSeconds" in value && durationSeconds === undefined) return null;
   const thumbnailUrl = normalizeDisplayValue(value.thumbnailUrl);
   if ("thumbnailUrl" in value && !thumbnailUrl) return null;
-  const customTitle = normalizeDisplayValue(value.customTitle);
-  if ("customTitle" in value && !customTitle) return null;
+  const trackTitleOverride = normalizeDisplayValue(value.trackTitleOverride);
+  if ("trackTitleOverride" in value && !trackTitleOverride) return null;
   return {
     videoId, title, uploader,
     ...(durationSeconds !== undefined ? { durationSeconds } : {}),
     cachedAt, mediaFileName, container,
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
-    ...(customTitle ? { customTitle } : {}),
+    ...(trackTitleOverride ? { trackTitleOverride } : {}),
   };
 }
 
 function trackFromMetadata(metadata: YouTubeCacheMetadata): Track {
   return {
     identity: { providerId: YOUTUBE_CACHE_PROVIDER_ID, stableId: metadata.videoId },
-    title: metadata.customTitle ?? metadata.title,
+    title: metadata.trackTitleOverride ?? metadata.title,
     artist: metadata.uploader,
     ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
     providerLabel: YOUTUBE_CACHE_PROVIDER_LABEL,

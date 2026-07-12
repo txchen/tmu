@@ -150,19 +150,16 @@ export function createTmuRoot(options: TmuRootOptions) {
           } else if (key.escape) {
             coordinator.dispatchUi({ type: "dismissRenameDialog" });
           } else if (key.return) {
-            const title = ui.renameDialog.value.trim();
-            if (!title) {
-              coordinator.dispatchUi({ type: "setRenameDialogError", error: "Track Title must not be empty" });
-            } else {
-              try {
-                await coordinator.dispatch({ type: "renameTrack", identity: ui.renameDialog.identity, title });
-                coordinator.dispatchUi({ type: "dismissRenameDialog" });
-              } catch (error) {
-                coordinator.dispatchUi({
-                  type: "setRenameDialogError",
-                  error: error instanceof Error ? error.message : String(error),
-                });
-              }
+            try {
+              await coordinator.dispatch({
+                type: "renameTrack", identity: ui.renameDialog.identity, title: ui.renameDialog.value,
+              });
+              coordinator.dispatchUi({ type: "dismissRenameDialog" });
+            } catch (error) {
+              coordinator.dispatchUi({
+                type: "setRenameDialogError",
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
           } else {
             editRenameDialog(input, key, coordinator);
@@ -742,8 +739,9 @@ function confirmationModal(confirmation: ConfirmationDescriptor, ui: UiState, no
 
 function renameTrackModal(dialog: NonNullable<UiState["renameDialog"]>, noColor: boolean) {
   const beforeCursor = dialog.value.slice(0, dialog.cursor);
-  const atCursor = dialog.value[dialog.cursor] ?? " ";
-  const afterCursor = dialog.value.slice(dialog.cursor + (dialog.cursor < dialog.value.length ? 1 : 0));
+  const nextCursor = nextGraphemeBoundary(dialog.value, dialog.cursor);
+  const atCursor = dialog.value.slice(dialog.cursor, nextCursor) || " ";
+  const afterCursor = dialog.value.slice(nextCursor);
   return h(Box, {
     flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
     paddingX: 2, alignSelf: "center", width: "70%",
@@ -1049,20 +1047,39 @@ function editRenameDialog(input: string, key: InputKey, coordinator: AppCoordina
   const dialog = coordinator.uiState.renameDialog;
   if (!dialog) return;
   let { value, cursor } = dialog;
-  if (key.leftArrow) cursor = Math.max(0, cursor - 1);
-  else if (key.rightArrow) cursor = Math.min(value.length, cursor + 1);
+  if (key.leftArrow) cursor = previousGraphemeBoundary(value, cursor);
+  else if (key.rightArrow) cursor = nextGraphemeBoundary(value, cursor);
   else if (key.home) cursor = 0;
   else if (key.end) cursor = value.length;
   else if (key.backspace && cursor > 0) {
-    value = value.slice(0, cursor - 1) + value.slice(cursor);
-    cursor -= 1;
+    const previousCursor = previousGraphemeBoundary(value, cursor);
+    value = value.slice(0, previousCursor) + value.slice(cursor);
+    cursor = previousCursor;
   } else if (key.delete && cursor < value.length) {
-    value = value.slice(0, cursor) + value.slice(cursor + 1);
+    value = value.slice(0, cursor) + value.slice(nextGraphemeBoundary(value, cursor));
   } else if (input.length > 0 && !key.ctrl && !key.meta) {
     value = value.slice(0, cursor) + input + value.slice(cursor);
     cursor += input.length;
   } else return;
   coordinator.dispatchUi({ type: "editRenameDialog", value, cursor });
+}
+
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+function previousGraphemeBoundary(value: string, cursor: number): number {
+  let previous = 0;
+  for (const segment of graphemeSegmenter.segment(value)) {
+    if (segment.index >= cursor) break;
+    previous = segment.index;
+  }
+  return previous;
+}
+
+function nextGraphemeBoundary(value: string, cursor: number): number {
+  for (const segment of graphemeSegmenter.segment(value)) {
+    if (segment.index > cursor) return segment.index;
+  }
+  return value.length;
 }
 
 function isCtrlC(input: string, key: InputKey): boolean {

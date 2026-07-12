@@ -1081,8 +1081,10 @@ describe("TMU top-level surface smoke", () => {
       }],
       listIncompleteEntries: () => [], findByIdentity: () => undefined,
       renameTrack: async (_identity, title) => {
-        if (title === "Cannot Save") throw new Error("cache is read-only");
-        return (track = { ...track, title });
+        const normalizedTitle = title.trim();
+        if (!normalizedTitle) throw new Error("Track Title must not be empty");
+        if (normalizedTitle === "Cannot Save") throw new Error("cache is read-only");
+        return (track = { ...track, title: normalizedTitle });
       },
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
@@ -1112,6 +1114,16 @@ describe("TMU top-level surface smoke", () => {
 
     await terminal.stdin.write("e");
     await terminal.stdin.write("\x7f".repeat("Clear Name".length));
+    await terminal.stdin.write("A🎵B");
+    await terminal.stdin.write("\x1b[H");
+    await terminal.stdin.write("\x1b[C");
+    await terminal.stdin.write("\x1b[C");
+    await terminal.stdin.write("\x7f");
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.queue.entries[0]?.track.title === "AB");
+
+    await terminal.stdin.write("e");
+    await terminal.stdin.write("\x7f".repeat("AB".length));
     await terminal.stdin.write("   ");
     await terminal.stdin.write("\r");
     expect(terminal.lastFrame()).toContain("Error: Track Title must not be empty");
@@ -1120,7 +1132,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\r");
     await waitFor(() => terminal.lastFrame()!.includes("Error: cache is read-only"));
     expect(coordinator.uiState.renameDialog?.value).toBe("Cannot Save");
-    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Name");
+    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("AB");
     await terminal.stdin.write("\x1b");
     expect(coordinator.uiState.renameDialog).toBeNull();
   });

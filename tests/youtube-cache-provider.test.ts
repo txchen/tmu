@@ -87,7 +87,7 @@ describe("YouTubeCacheProvider", () => {
       expect(provider.searchTracks("bad download")).toEqual([]);
       expect(JSON.parse(await readFile(join(dir, "rename00001.json"), "utf8"))).toMatchObject({
         title: "Bad Download Name",
-        customTitle: "Clear Track Name",
+        trackTitleOverride: "Clear Track Name",
         mediaFileName: "rename00001.opus",
       });
 
