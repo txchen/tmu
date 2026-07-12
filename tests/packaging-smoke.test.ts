@@ -110,24 +110,42 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
   let output = "";
   const terminal = spawn(command, args, { cols: 100, rows: 24, cwd: root, env });
   terminal.onData((data) => { output += data; });
+  let exited = false;
+  const exitPromise = new Promise<{ exitCode: number; signal?: number }>((resolve) => terminal.onExit((event) => {
+    exited = true;
+    resolve(event);
+  }));
 
   try {
-    await waitFor(() => output.includes("[1 Playback]"));
-    expect(output).toContain("2 Library");
-    expect(output).toContain("3 YouTube Downloader");
-    terminal.write("2");
-    await waitFor(() => output.includes("[2 Library]"));
-    terminal.write("\u001b");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    terminal.write("3");
-    await waitFor(() => output.includes("[3 YouTube Downloader]"));
-    terminal.write("\u001b");
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitFor(() => output.includes("Player") && output.includes("Library") && output.includes("Downloads"));
+    expect(output).toContain("prev · next");
+    output = "";
+    terminal.write("]");
+    await waitFor(() => output.includes("▸ Library ◂"));
+    output = "";
+    terminal.write("]");
+    await waitFor(() => output.includes("▸ Downloads ◂"));
+    output = "";
+    terminal.write("[");
+    await waitFor(() => output.includes("▸ Library ◂"));
     terminal.write("q");
-    const exit = await new Promise<{ exitCode: number; signal?: number }>((resolve) => terminal.onExit(resolve));
+    const exit = await withTimeout(exitPromise, 10_000, "Timed out waiting for packed terminal exit");
     expect(exit.exitCode).toBe(0);
   } finally {
-    terminal.kill();
+    if (!exited) terminal.kill();
+    await withTimeout(exitPromise, 2_000, "Timed out cleaning up packed terminal process");
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
