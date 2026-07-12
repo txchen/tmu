@@ -240,7 +240,7 @@ describe("TMU top-level surface smoke", () => {
     }
   });
 
-  test("keeps question marks in focused inputs and scopes Shortcut Help to Library and Downloads", async () => {
+  test("keeps question marks in focused Library input and scopes Library Shortcut Help", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
 
@@ -261,17 +261,66 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("[/], Ctrl-C");
     expect(terminal.lastFrame()).toContain("Remain global during input");
     await terminal.stdin.write("q");
+  });
+
+  test.each([
+    { columns: 120, rows: 30 },
+    { columns: 60, rows: 16 },
+  ])("documents complete Downloads shortcuts and preserves Downloads state at $columns×$rows", async ({ columns, rows }) => {
+    const { coordinator } = createTmuApp();
+    const { appState } = coordinator;
+    appState.downloads.activeBatch = { id: 4, sourceUrl: "https://youtu.be/active", kind: "single", itemCount: 1 };
+    appState.downloads.pendingBatches = Array.from({ length: 12 }, (_, index) => ({
+      id: index + 5,
+      sourceUrl: `https://youtu.be/pending-${index}`,
+      kind: "single" as const,
+      itemCount: 1,
+    }));
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
 
     await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/watch?v=one?list=two");
-    expect(coordinator.uiState.downloader.urlInput).toContain("?list=two");
     expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
+    expect(terminal.lastFrame()).not.toContain("? Help ·");
     await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("G");
+    const before = { ...coordinator.uiState.downloader };
+
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("YouTube Downloader Shortcuts");
-    expect(terminal.lastFrame()).toContain("URL INPUT");
-    expect(terminal.lastFrame()).toContain("DOWNLOAD PIPELINE");
-    expect(terminal.lastFrame()).not.toContain("LIBRARY RESULTS");
+    const top = terminal.lastFrame()!;
+    expect(top).toContain("YouTube Downloader Shortcuts");
+    expect(top).toContain("URL INPUT");
+    expect(top).toContain("Type");
+    expect(top).toContain("Backspace/Delete");
+    expect(top).toContain("Submit URL");
+    if (rows >= 30) {
+      expect(top).toContain("DOWNLOAD PIPELINE");
+      expect(top).toContain("Cancel active batch");
+      expect(top).toContain("Remove pending batch");
+    }
+    expect(top).not.toContain("Play Selected");
+    expect(top).not.toContain("Play Now");
+
+    if (rows < 30) {
+      await terminal.stdin.write("\x1b[6~");
+      const pipeline = terminal.lastFrame()!;
+      expect(pipeline).toContain("DOWNLOAD PIPELINE");
+      expect(pipeline).toContain("Cancel active batch");
+      expect(pipeline).toContain("Remove pending batch");
+    }
+    await terminal.stdin.write("G");
+    await terminal.stdin.write("q");
+    expect(coordinator.uiState.downloader).toEqual(before);
+
+    await terminal.stdin.write("\t");
+    expect(coordinator.uiState.downloader.inputFocused).toBe(true);
+    await terminal.stdin.write("?");
+    expect(coordinator.uiState.downloader.urlInput.endsWith("?")).toBe(true);
+    expect(terminal.lastFrame()).not.toContain("YouTube Downloader Shortcuts");
+    await terminal.stdin.write("\t");
+    await terminal.stdin.write("?");
+    expect(coordinator.uiState.overlays.at(-1)?.scroll).toBe(0);
   });
 
   test("scrolls Shortcut Help locally, resets it on reopen, and reflows after resize", async () => {
@@ -357,7 +406,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
   });
 
-  test("keeps the normal Ctrl-C download quit confirmation above Shortcut Help", async () => {
+  test("keeps the normal Ctrl-C download quit confirmation above Downloads Shortcut Help", async () => {
     const appState = createInitialAppState({});
     const coordinator = new AppCoordinator({
       appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
@@ -371,16 +420,18 @@ describe("TMU top-level surface smoke", () => {
     void coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtube.com/playlist?list=help" });
     await waitFor(() => appState.downloads.confirmation !== undefined);
     delete appState.downloads.confirmation;
+    coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
 
+    await terminal.stdin.write("\x1b");
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
+    expect(terminal.lastFrame()).toContain("YouTube Downloader Shortcuts");
     await terminal.stdin.write("\x03");
     await waitFor(() => coordinator.appState.downloads.quitConfirmationRequired);
     expect(terminal.lastFrame()).toContain("Quit TMU?");
     expect(terminal.lastFrame()).toContain("Active and pending download work will be");
     expect(terminal.lastFrame()).toContain("cancelled.");
-    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+    expect(terminal.lastFrame()).not.toContain("YouTube Downloader Shortcuts");
     await terminal.stdin.write("y");
   });
 

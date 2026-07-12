@@ -788,7 +788,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
     {
       title: "URL INPUT",
       rows: [
-        ["Type (including ?)", "Edit YouTube URL"], ["Backspace/Delete", "Delete character"],
+        ["Type", "Edit YouTube URL"], ["Backspace/Delete", "Delete character"],
         ["Enter", "Submit URL"], ["Esc", "Leave input"], ["Tab/Shift+Tab", "Change focus"],
       ],
     },
@@ -796,7 +796,8 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
       title: "DOWNLOAD PIPELINE",
       rows: [
         ["u", "Focus URL Input"], ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"],
-        ["gg/G", "First/last batch"], ["x", "Cancel active/remove pending"], ["Tab/Shift+Tab", "Change focus"],
+        ["gg/G", "First/last batch"], ["x (active)", "Cancel active batch"],
+        ["x (pending)", "Remove pending batch"], ["Tab/Shift+Tab", "Change focus"],
       ],
     },
   ];
