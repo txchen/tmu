@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { AppCoordinator } from "../src/coordinator";
-import { PlaybackFailure, type PlaybackLocator, type Provider, type Track } from "../src/domain";
+import { PlaybackFailure, type PlaybackLocator, type PlayerLoadOptions, type Provider, type Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
@@ -16,11 +16,13 @@ const cachedTrack: Track = {
 
 class RecordingPlayer extends NoopPlayer {
   readonly loaded: PlaybackLocator[] = [];
+  readonly loadOptions: PlayerLoadOptions[] = [];
   teardownCount = 0;
 
-  override async load(locator: PlaybackLocator): Promise<void> {
+  override async load(locator: PlaybackLocator, options: PlayerLoadOptions = {}): Promise<void> {
     this.loaded.push(locator);
-    await super.load(locator);
+    this.loadOptions.push(options);
+    await super.load(locator, options);
   }
 
   override async teardown(): Promise<void> {
@@ -47,7 +49,7 @@ class CommandFailingPlayer extends RecordingPlayer {
   }
 }
 
-class ResumeSeekFailingPlayer extends RecordingPlayer {
+class SeekFailingPlayer extends RecordingPlayer {
   override async seekBy(): Promise<never> {
     const message = "mpv error: property unavailable";
     this.updateState({
@@ -610,12 +612,12 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
   });
 
-  test("keeps restored playback visibly playing when the best-effort resume seek is not ready", async () => {
+  test("resumes a restored Track atomically without a separate seek", async () => {
     const provider: Provider = {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
     };
-    const player = new ResumeSeekFailingPlayer();
+    const player = new SeekFailingPlayer();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
       queue: new MemoryQueue(), player,
@@ -632,9 +634,11 @@ describe("AppCoordinator with the narrow Provider", () => {
     await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
 
     expect(player.loaded).toEqual([{ kind: "file", path: "/cache/cached-track.opus" }]);
+    expect(player.loadOptions).toEqual([{ startSeconds: 42 }]);
     expect(coordinator.appState.playback).toMatchObject({
       status: "playing", currentTrackIdentity: cachedTrack.identity,
     });
+    expect(player.playback.positionSeconds).toBe(42);
   });
 });
 

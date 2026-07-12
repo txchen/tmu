@@ -261,6 +261,25 @@ describe("MpvPlayer", () => {
     });
   });
 
+  test("passes a resume position atomically with the load command", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv", ipcPath: "/tmp/tmu-test.sock", workDir: "/tmp", adapter,
+      positionPollMs: 100000,
+    });
+
+    await player.load({ kind: "file", path: "/music/amber.flac" }, { startSeconds: 42 });
+
+    expect(adapter.ipc.sent.at(-1)).toEqual({
+      command: ["loadfile", "/music/amber.flac", "replace", -1, {
+        ...localFilePlaybackOptions,
+        start: 42,
+      }],
+      request_id: 6,
+    });
+    expect(player.playback.positionSeconds).toBe(42);
+  });
+
   test("does not report playing when pause changes while mpv is idle", async () => {
     const adapter = new FakeProcessAdapter();
     const player = new MpvPlayer({

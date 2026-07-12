@@ -784,7 +784,7 @@ export class AppCoordinator {
     }
   }
 
-  private async playQueueEntry(entry: QueueEntry): Promise<boolean> {
+  private async playQueueEntry(entry: QueueEntry, startSeconds = 0): Promise<boolean> {
     await this.refreshHelperDependency("mpv");
     if (this.blockPlaybackActionIfUnavailable()) return false;
 
@@ -804,7 +804,7 @@ export class AppCoordinator {
     }
 
     try {
-      await this.player.load(locator);
+      await this.player.load(locator, startSeconds > 0 ? { startSeconds } : undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (error instanceof PlaybackFailure) this.markUnavailable(entry, message);
@@ -816,7 +816,7 @@ export class AppCoordinator {
     this.appState.playback = {
       ...this.player.playback,
       status: "playing",
-      positionSeconds: 0,
+      positionSeconds: startSeconds,
       currentTrackIdentity: entry.track.identity,
     };
     this.appState.lastEvent = `started ${entry.track.title}`;
@@ -1079,10 +1079,9 @@ export class AppCoordinator {
         ? 0
         : this.appState.playback.positionSeconds;
       this.queue.startAt(this.queue.entries.indexOf(current));
-      const started = await this.playQueueEntry(current);
-      if (!started || typeof resumePosition !== "number" || resumePosition <= 0) return;
-      const resumed = await this.runPlayerCommand(() => this.player.seekBy(resumePosition));
-      if (resumed) this.appState.lastEvent = `resumed ${current.track.title}`;
+      const startSeconds = typeof resumePosition === "number" && resumePosition > 0 ? resumePosition : 0;
+      const started = await this.playQueueEntry(current, startSeconds);
+      if (started && startSeconds > 0) this.appState.lastEvent = `resumed ${current.track.title}`;
       return;
     }
 

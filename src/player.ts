@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { rm } from "node:fs/promises";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import type { PlaybackLocator, Player, PlayerPlaybackState } from "./domain";
+import type { PlaybackLocator, Player, PlayerLoadOptions, PlayerPlaybackState } from "./domain";
 
 const OBSERVED_MPV_PROPERTIES = ["duration", "pause", "idle-active", "eof-reached"] as const;
 const DEFAULT_POSITION_POLL_MS = 1000;
@@ -67,9 +67,10 @@ export class NoopPlayer implements Player {
     return this.state;
   }
 
-  async load(_locator: PlaybackLocator): Promise<void> {
+  async load(_locator: PlaybackLocator, options: PlayerLoadOptions = {}): Promise<void> {
     this.updateState({
       status: "playing",
+      positionSeconds: options.startSeconds ?? 0,
     });
   }
 
@@ -190,7 +191,7 @@ export class MpvPlayer implements Player {
     return this.state;
   }
 
-  async load(locator: PlaybackLocator): Promise<void> {
+  async load(locator: PlaybackLocator, options: PlayerLoadOptions = {}): Promise<void> {
     const wasPaused = this.state.paused === true || this.state.status === "paused";
     if (!this.process || !this.ipc) {
       const volume = this.state.volumePercent;
@@ -205,11 +206,11 @@ export class MpvPlayer implements Player {
         this.updateState({ volumePercent: volume });
       }
     }
-    await this.command(this.loadCommand(locator));
+    await this.command(this.loadCommand(locator, options));
     if (wasPaused) await this.command(["set_property", "pause", false]);
     this.updateState({
       status: "playing",
-      positionSeconds: null,
+      positionSeconds: options.startSeconds ?? null,
       durationSeconds: null,
       paused: false,
       idle: false,
@@ -342,8 +343,13 @@ export class MpvPlayer implements Player {
     ];
   }
 
-  private loadCommand(locator: PlaybackLocator): unknown[] {
-    return ["loadfile", locator.path, "replace", -1, LOCAL_FILE_PLAYBACK_OPTIONS];
+  private loadCommand(locator: PlaybackLocator, options: PlayerLoadOptions): unknown[] {
+    return ["loadfile", locator.path, "replace", -1, {
+      ...LOCAL_FILE_PLAYBACK_OPTIONS,
+      ...(typeof options.startSeconds === "number" && options.startSeconds > 0
+        ? { start: options.startSeconds }
+        : {}),
+    }];
   }
 
   private async command(command: unknown[], timeoutMs = this.commandTimeoutMs): Promise<unknown> {

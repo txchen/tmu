@@ -82,6 +82,10 @@ export type PlayerPlaybackState = {
   failureKind?: "playback";
 };
 
+export type PlayerLoadOptions = {
+  startSeconds?: number;
+};
+
 export type SnapshotTrack = {
   identity: TrackIdentity;
   title: string;
@@ -121,7 +125,7 @@ export type Provider = {
 export type Player = {
   readonly playback: PlayerPlaybackState;
   start(): Promise<PlayerPlaybackState>;
-  load(locator: PlaybackLocator): Promise<void>;
+  load(locator: PlaybackLocator, options?: PlayerLoadOptions): Promise<void>;
   togglePause(): Promise<PlayerPlaybackState>;
   setPaused(paused: boolean): Promise<PlayerPlaybackState>;
   stop(): Promise<PlayerPlaybackState>;
