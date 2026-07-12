@@ -80,6 +80,34 @@ function harness() {
 }
 
 describe("AppCoordinator with the narrow Provider", () => {
+  test("Rename Track updates every queued copy without interrupting playback", async () => {
+    let track = cachedTrack;
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache",
+      listTracks: () => [track], searchTracks: () => [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+      refresh: () => undefined, listCacheEntries: () => [], listIncompleteEntries: () => [],
+      findByIdentity: () => undefined,
+      renameTrack: async (_identity, title) => (track = { ...track, title }),
+      deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
+    };
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    const player = new RecordingPlayer();
+    const appState = createInitialAppState({ "youtube-cache": provider });
+    appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 42 };
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player });
+    const playbackBefore = structuredClone(coordinator.appState.playback);
+
+    await coordinator.dispatch({ type: "renameTrack", identity: track.identity, title: "Clear Track Name" });
+
+    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Track Name");
+    expect(coordinator.appState.playback).toEqual(playbackBefore);
+    expect(player.loaded).toEqual([]);
+    expect(coordinator.appState.lastEvent).toBe("Renamed to “Clear Track Name”");
+  });
+
   test("Randomize Queue reorders every Track while preserving Current identity", async () => {
     const queue = new MemoryQueue({ random: () => 0 });
     const coordinator = new AppCoordinator({ appState: createInitialAppState({}), uiState: createInitialUiState(),
@@ -451,6 +479,7 @@ describe("AppCoordinator with the narrow Provider", () => {
           cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached-track.opus", container: "opus",
         }, metadataPath: "/cache/cached-track.json", mediaPath: "/cache/cached-track.opus",
       }),
+      renameTrack: async (_identity, title) => ({ ...cachedTrack, title }),
       deleteCacheEntry: async () => { deleted = true; return true; },
       cleanupIncompleteEntry: async () => false,
     };
@@ -588,6 +617,7 @@ describe("AppCoordinator with the narrow Provider", () => {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
       resolvePlaybackLocator: async () => { throw new Error("missing"); }, refresh: () => undefined,
       listCacheEntries: () => [], listIncompleteEntries: () => [], findByIdentity: () => undefined,
+      renameTrack: async () => { throw new Error("missing"); },
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
     const coordinator = new AppCoordinator({

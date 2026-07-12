@@ -13,12 +13,20 @@ A narrow boundary that lists and searches Tracks and resolves them for playback.
 _Avoid_: backend, source
 
 **Cache Search**:
-The typed-query state of the Library tab, matching healthy cached Tracks and incomplete Cache Entries by any available title, channel or uploader, YouTube video ID, or cache-file stem, without Provider headings, filters, or network calls. With no query, the YouTube Cache is ordered by newest Cache Entry first.
+The typed-query state of the Library tab, matching healthy cached Tracks and incomplete Cache Entries by their user-facing Track Title or available incomplete-entry title, channel or uploader, YouTube video ID, or cache-file stem, without Provider headings, filters, hidden Source Titles, or network calls. With no query, the YouTube Cache is ordered by newest Cache Entry first.
 _Avoid_: Global Search, Provider Search, YouTube search
 
 **Track**:
 The canonical playable music item that Providers add to TMU's shared queue. Current Tracks come from the YouTube Cache.
 _Avoid_: song, media item, provider item
+
+**Track Title**:
+The user-facing name of a Track throughout TMU. A user-defined title overrides the downloaded Source Title without changing Track Identity; when no override exists, the Source Title is the Track Title.
+_Avoid_: display label, renamed filename
+
+**Source Title**:
+The original title obtained from YouTube when a Track is downloaded, retained as internal cache metadata even after the Track Title is changed and not separately exposed in the TUI.
+_Avoid_: old name, original filename
 
 **Track Identity**:
 The durable `(providerId, stableId)` identity used for queue deduplication, restore, and Provider refresh. YouTube Cache Tracks use Provider ID `youtube-cache` and the YouTube video ID, never a title or URL.
@@ -67,6 +75,10 @@ _Avoid_: Track Availability, local-file import, automatic cleanup
 **Cache Deletion**:
 The explicitly confirmed, permanent removal of a Track's media and metadata from the YouTube Cache, recoverable only by downloading again. Any matching Queue entry remains visibly unavailable; deleting the playing Current Track first stops playback, retains it as Current, and resets its position.
 _Avoid_: remove from Queue, automatic cleanup, filesystem delete
+
+**Rename Track**:
+The Library action that assigns a non-empty Track Title to a healthy cached Track without changing its Track Identity, Source Title, media filename, Playback Locator, or playback state. The title change is persistent and immediately applies to every visible copy of the Track; incomplete Cache Entries cannot be renamed.
+_Avoid_: rename file, edit Source Title, temporary label
 
 **YouTube URL Download Flow**:
 The only workflow for adding media to the YouTube Cache. Each submission accepts one `youtube.com`, `music.youtube.com`, or `youtu.be` URL, including Shorts URLs that resolve to a normal YouTube video ID, and rejects bare IDs or obvious non-YouTube URLs before extraction. A normal video/watch URL creates a single-video Download Batch even if it also contains a playlist parameter, while an explicit playlist URL first requires all-or-cancel confirmation of its title and best-known source item count. Downloaded Tracks are stored independently without retaining playlist information or changing playback.
@@ -129,7 +141,7 @@ The top-level tab for submitting YouTube or YouTube Music video and playlist URL
 _Avoid_: Library, Queue Home status, playback queue
 
 **Top-Level Tabs**:
-The primary TUI structure containing Playback, Library, and YouTube Downloader, labeled `Player`, `Library`, and `Downloads` in the compact top bar. `[` and `]` always switch cyclically to the previous and next tab, including while a text input is focused; literal brackets therefore cannot be entered in TUI inputs, and there are no numeric tab shortcuts. Tab and Shift+Tab move focus only among panes within the active tab. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, and YouTube Downloader is for download submission and status. Global playback shortcuts continue to work across tabs except where a focused text input intentionally captures keys.
+The primary TUI structure containing Playback, Library, and YouTube Downloader, labeled `Player`, `Library`, and `Downloads` in the compact top bar. `[` and `]` switch cyclically to the previous and next tab, including while ordinary tab text inputs are focused; literal brackets are therefore unavailable in those inputs, and there are no numeric tab shortcuts. A modal text editor such as Rename Track suspends tab switching and accepts brackets as content. Tab and Shift+Tab move focus only among panes within the active tab. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, and YouTube Downloader is for download submission and status. Global playback shortcuts continue to work across tabs except where a focused text input or modal intentionally captures keys.
 _Avoid_: overlay-first UI, provider tabs, hidden download status
 
 **Vim Navigation**:

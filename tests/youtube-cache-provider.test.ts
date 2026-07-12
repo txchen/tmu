@@ -71,6 +71,33 @@ describe("YouTubeCacheProvider", () => {
     }
   });
 
+  test("renames a healthy Track persistently while retaining its Source Title", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-rename-"));
+    try {
+      await writeEntry(dir, entry("rename00001", "Bad Download Name", "Studio Channel"));
+      const provider = createYouTubeCacheProvider({ cacheDir: dir });
+
+      await expect(provider.renameTrack(
+        { providerId: "youtube-cache", stableId: "rename00001" },
+        "  Clear Track Name  ",
+      )).resolves.toMatchObject({ title: "Clear Track Name" });
+
+      expect(provider.listTracks()[0]?.title).toBe("Clear Track Name");
+      expect(provider.searchTracks("clear").map(id)).toEqual(["rename00001"]);
+      expect(provider.searchTracks("bad download")).toEqual([]);
+      expect(JSON.parse(await readFile(join(dir, "rename00001.json"), "utf8"))).toMatchObject({
+        title: "Bad Download Name",
+        customTitle: "Clear Track Name",
+        mediaFileName: "rename00001.opus",
+      });
+
+      const reloaded = createYouTubeCacheProvider({ cacheDir: dir });
+      expect(reloaded.listTracks()[0]?.title).toBe("Clear Track Name");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("detects incomplete TMU-shaped entries but excludes them and ignores unrelated files", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-youtube-cache-"));
     try {

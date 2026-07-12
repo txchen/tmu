@@ -168,6 +168,9 @@ export class AppCoordinator {
         case "moveQueueTrack":
           this.moveQueueTrack(intent.identity, intent.delta);
           return;
+        case "renameTrack":
+          await this.renameTrack(intent.identity, intent.title);
+          return;
         case "downloadOperation":
           if (intent.operation === "start") this.startYouTubeUrlDownload(intent.url);
           else if (intent.operation === "cancel" || intent.operation === "cancel-active") this.cancelYouTubeDownload();
@@ -387,6 +390,15 @@ export class AppCoordinator {
     this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
     this.appState.lastEvent = `moved ${moved.track.title}`;
     this.syncQueueState();
+  }
+
+  private async renameTrack(identity: Track["identity"], title: string): Promise<void> {
+    const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
+    if (!isYouTubeCacheProvider(provider)) throw new Error("YouTube Cache is unavailable");
+    const renamed = await provider.renameTrack(identity, title);
+    this.queue.updateTrack(renamed);
+    this.syncQueueState();
+    this.recordOperationFeedback("success", `Renamed to “${renamed.title}”`);
   }
 
   private async dispatchPlayerOperation(intent: Extract<AppIntent, { type: "playerOperation" }>): Promise<void> {

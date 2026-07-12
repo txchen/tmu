@@ -237,6 +237,13 @@ export type UiState = {
     batchId?: number;
     target?: string;
   };
+  renameDialog: null | {
+    identity: TrackIdentity;
+    currentTitle: string;
+    value: string;
+    cursor: number;
+    error: string | null;
+  };
   notification: null | {
     level: "success" | "warning" | "error";
     message: string;
@@ -255,6 +262,7 @@ export type AppIntent =
   | { type: "addToQueue"; target: Track }
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
+  | { type: "renameTrack"; identity: TrackIdentity; title: string }
   | { type: "clearQueue" }
   | { type: "cacheOperation"; operation: "request-delete"; identity: TrackIdentity }
   | { type: "cacheOperation"; operation: "request-cleanup"; stem: string }

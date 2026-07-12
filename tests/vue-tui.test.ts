@@ -621,6 +621,9 @@ describe("TMU top-level surface smoke", () => {
           mediaSizeBytes: identity.stableId === "second" ? 1_572_864 : 1024,
         } : undefined;
       },
+      renameTrack: async (identity, title) => ({
+        ...(identity.stableId === "first" ? first : second), title,
+      }),
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
     const coordinator = new AppCoordinator({
@@ -778,6 +781,7 @@ describe("TMU top-level surface smoke", () => {
           cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached00001.opus", container: "opus",
         }, metadataPath: "/cache/cached00001.json", mediaPath: "/cache/cached00001.opus",
       }),
+      renameTrack: async (_identity, title) => ({ ...track, title }),
       deleteCacheEntry: async () => { deleted = true; return true; },
       cleanupIncompleteEntry: async (stem) => { cleanedStem = stem; return true; },
     };
@@ -1061,6 +1065,64 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);
+  });
+
+  test("renames the selected Library Track in a modal and updates Queue and Now Playing", async () => {
+    let track = cachedTrack("rename00001", "Bad Name");
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [track], searchTracks: () => [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/rename00001.opus" }),
+      refresh: () => undefined,
+      listCacheEntries: () => [{
+        track, availability: { status: "available" },
+        metadata: { videoId: "rename00001", title: "Bad Name", uploader: "Channel",
+          cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "rename00001.opus", container: "opus" },
+        metadataPath: "/cache/rename00001.json", mediaPath: "/cache/rename00001.opus",
+      }],
+      listIncompleteEntries: () => [], findByIdentity: () => undefined,
+      renameTrack: async (_identity, title) => {
+        if (title === "Cannot Save") throw new Error("cache is read-only");
+        return (track = { ...track, title });
+      },
+      deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
+    };
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    const appState = createInitialAppState({ "youtube-cache": provider });
+    appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 12 };
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("]");
+    expect(terminal.lastFrame()).toContain("e Rename");
+    await terminal.stdin.write("e");
+    expect(terminal.lastFrame()).toContain("Rename Track");
+    expect(terminal.lastFrame()).toContain("Current name: Bad Name");
+    expect(terminal.lastFrame()).toContain("New name: Bad Name");
+    await terminal.stdin.write("\x7f".repeat("Bad Name".length));
+    await terminal.stdin.write("Clear Name");
+    await terminal.stdin.write("\r");
+    await waitFor(() => terminal.lastFrame()!.includes("Renamed to “Clear Name”"));
+
+    expect(coordinator.uiState.renameDialog).toBeNull();
+    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Name");
+    expect(terminal.lastFrame()).toContain("✓ Clear Name");
+    expect(terminal.lastFrame()).toContain("▶ PLAYING · Clear Name");
+
+    await terminal.stdin.write("e");
+    await terminal.stdin.write("\x7f".repeat("Clear Name".length));
+    await terminal.stdin.write("   ");
+    await terminal.stdin.write("\r");
+    expect(terminal.lastFrame()).toContain("Error: Track Title must not be empty");
+    await terminal.stdin.write("\x7f".repeat(3));
+    await terminal.stdin.write("Cannot Save");
+    await terminal.stdin.write("\r");
+    await waitFor(() => terminal.lastFrame()!.includes("Error: cache is read-only"));
+    expect(coordinator.uiState.renameDialog?.value).toBe("Cannot Save");
+    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Name");
+    await terminal.stdin.write("\x1b");
+    expect(coordinator.uiState.renameDialog).toBeNull();
   });
 });
 

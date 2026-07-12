@@ -31,6 +31,10 @@ export type UiStateAction =
   | { type: "requestConfirmation"; kind: import("./domain").ConfirmationKind; batchId?: number; target?: string }
   | { type: "setConfirmationChoice"; choice: "cancel" | "confirm" }
   | { type: "cancelConfirmation" }
+  | { type: "openRenameDialog"; identity: TrackIdentity; currentTitle: string }
+  | { type: "editRenameDialog"; value: string; cursor: number }
+  | { type: "setRenameDialogError"; error: string | null }
+  | { type: "dismissRenameDialog" }
   | { type: "setNotification"; notification: NonNullable<UiState["notification"]> }
   | { type: "dismissNotification" };
 
@@ -47,6 +51,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
+    renameDialog: null,
     notification: null,
     pendingVimChord: null,
   };
@@ -147,6 +152,24 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         : state;
     case "cancelConfirmation":
       return { ...state, pendingConfirmation: null };
+    case "openRenameDialog":
+      return { ...state, renameDialog: {
+        identity: action.identity,
+        currentTitle: action.currentTitle,
+        value: action.currentTitle,
+        cursor: action.currentTitle.length,
+        error: null,
+      } };
+    case "editRenameDialog":
+      return state.renameDialog
+        ? { ...state, renameDialog: { ...state.renameDialog, value: action.value, cursor: action.cursor, error: null } }
+        : state;
+    case "setRenameDialogError":
+      return state.renameDialog
+        ? { ...state, renameDialog: { ...state.renameDialog, error: action.error } }
+        : state;
+    case "dismissRenameDialog":
+      return { ...state, renameDialog: null };
     case "setNotification":
       return { ...state, notification: action.notification };
     case "dismissNotification":

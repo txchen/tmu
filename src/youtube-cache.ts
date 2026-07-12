@@ -16,7 +16,7 @@ const YOUTUBE_CACHE_PROVIDER_LABEL = "YouTube Cache";
 const REQUIRED_METADATA_KEYS = [
   "videoId", "title", "uploader", "cachedAt", "mediaFileName", "container",
 ] as const;
-const OPTIONAL_METADATA_KEYS = ["durationSeconds", "thumbnailUrl"] as const;
+const OPTIONAL_METADATA_KEYS = ["durationSeconds", "thumbnailUrl", "customTitle"] as const;
 const METADATA_KEYS = new Set<string>([...REQUIRED_METADATA_KEYS, ...OPTIONAL_METADATA_KEYS]);
 const MEDIA_EXTENSIONS = new Set([
   ".aac", ".flac", ".m4a", ".mka", ".mkv", ".mp3", ".mp4", ".ogg", ".opus", ".wav", ".webm",
@@ -39,6 +39,7 @@ export type YouTubeCacheMetadata = {
   mediaFileName: string;
   container: string;
   thumbnailUrl?: string;
+  customTitle?: string;
 };
 
 export type YouTubeCacheEntry = {
@@ -69,6 +70,7 @@ export type YouTubeCacheProvider = Provider & {
   listCacheEntries(): readonly YouTubeCacheEntry[];
   listIncompleteEntries(): readonly IncompleteYouTubeCacheEntry[];
   findByIdentity(identity: TrackIdentity): YouTubeCacheEntry | undefined;
+  renameTrack(identity: TrackIdentity, title: string): Promise<Track>;
   deleteCacheEntry(identity: TrackIdentity): Promise<boolean>;
   cleanupIncompleteEntry(stem: string): Promise<boolean>;
 };
@@ -86,6 +88,7 @@ export function isYouTubeCacheProvider(
     && typeof (provider as Partial<YouTubeCacheProvider>).listCacheEntries === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).listIncompleteEntries === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).findByIdentity === "function"
+    && typeof (provider as Partial<YouTubeCacheProvider>).renameTrack === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).deleteCacheEntry === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).cleanupIncompleteEntry === "function"
     && typeof (provider as Partial<YouTubeCacheProvider>).refresh === "function";
@@ -191,6 +194,16 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
     await Promise.all([rm(entry.mediaPath, { force: true }), rm(entry.metadataPath, { force: true })]);
     this.refresh();
     return true;
+  }
+
+  async renameTrack(identity: TrackIdentity, title: string): Promise<Track> {
+    const entry = this.findByIdentity(identity);
+    if (!entry) throw new Error(`YouTube Cache entry is missing: ${identity.stableId}`);
+    const customTitle = normalizeDisplayValue(title);
+    if (!customTitle) throw new Error("Track Title must not be empty");
+    await writeYouTubeCacheMetadata(this.options, { ...entry.metadata, customTitle });
+    this.refresh();
+    return this.findByIdentity(identity)!.track;
   }
 
   async cleanupIncompleteEntry(stem: string): Promise<boolean> {
@@ -339,18 +352,21 @@ function normalizeMetadata(value: unknown): YouTubeCacheMetadata | null {
   if ("durationSeconds" in value && durationSeconds === undefined) return null;
   const thumbnailUrl = normalizeDisplayValue(value.thumbnailUrl);
   if ("thumbnailUrl" in value && !thumbnailUrl) return null;
+  const customTitle = normalizeDisplayValue(value.customTitle);
+  if ("customTitle" in value && !customTitle) return null;
   return {
     videoId, title, uploader,
     ...(durationSeconds !== undefined ? { durationSeconds } : {}),
     cachedAt, mediaFileName, container,
     ...(thumbnailUrl ? { thumbnailUrl } : {}),
+    ...(customTitle ? { customTitle } : {}),
   };
 }
 
 function trackFromMetadata(metadata: YouTubeCacheMetadata): Track {
   return {
     identity: { providerId: YOUTUBE_CACHE_PROVIDER_ID, stableId: metadata.videoId },
-    title: metadata.title,
+    title: metadata.customTitle ?? metadata.title,
     artist: metadata.uploader,
     ...(metadata.durationSeconds !== undefined ? { durationSeconds: metadata.durationSeconds } : {}),
     providerLabel: YOUTUBE_CACHE_PROVIDER_LABEL,

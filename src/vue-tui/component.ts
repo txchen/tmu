@@ -143,6 +143,33 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
+        if (ui.renameDialog) {
+          if (isCtrlC(input, key)) {
+            await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+            if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
+          } else if (key.escape) {
+            coordinator.dispatchUi({ type: "dismissRenameDialog" });
+          } else if (key.return) {
+            const title = ui.renameDialog.value.trim();
+            if (!title) {
+              coordinator.dispatchUi({ type: "setRenameDialogError", error: "Track Title must not be empty" });
+            } else {
+              try {
+                await coordinator.dispatch({ type: "renameTrack", identity: ui.renameDialog.identity, title });
+                coordinator.dispatchUi({ type: "dismissRenameDialog" });
+              } catch (error) {
+                coordinator.dispatchUi({
+                  type: "setRenameDialogError",
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          } else {
+            editRenameDialog(input, key, coordinator);
+          }
+          publication.notify("input");
+          return;
+        }
         if (ui.overlays.length > 0) {
           if (isCtrlC(input, key)) {
             await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
@@ -306,6 +333,13 @@ async function routeLibrary(
     const result = results[coordinator.uiState.library.selectedIndex];
     if (result?.kind === "track") await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: result.track.identity });
     else if (result) await coordinator.dispatch({ type: "cacheOperation", operation: "request-cleanup", stem: result.entry.stem });
+  } else if (!coordinator.uiState.library.inputFocused && input === "e") {
+    const result = results[coordinator.uiState.library.selectedIndex];
+    if (result?.kind === "track") coordinator.dispatchUi({
+      type: "openRenameDialog",
+      identity: result.track.identity,
+      currentTitle: result.track.title,
+    });
   } else if (key.return && coordinator.uiState.library.inputFocused) {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
     coordinator.dispatchUi({ type: "setLibrarySelection", index: 0, resultCount: results.length });
@@ -396,6 +430,17 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
       h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () =>
         confirmationModal(confirmation, uiState, noColor)),
       h(Text, { dimColor: true }, () => "Modal open · unrelated actions suspended"),
+    ]);
+  }
+
+  if (uiState.renameDialog) {
+    return h(Box, {
+      flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows,
+    }, () => [
+      tabHeader(uiState.activeTab, noColor),
+      h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () =>
+        renameTrackModal(uiState.renameDialog!, noColor)),
+      h(Text, { dimColor: true }, () => "Modal open · Enter Save · Esc Cancel · unrelated actions suspended"),
     ]);
   }
 
@@ -695,6 +740,27 @@ function confirmationModal(confirmation: ConfirmationDescriptor, ui: UiState, no
   ]);
 }
 
+function renameTrackModal(dialog: NonNullable<UiState["renameDialog"]>, noColor: boolean) {
+  const beforeCursor = dialog.value.slice(0, dialog.cursor);
+  const atCursor = dialog.value[dialog.cursor] ?? " ";
+  const afterCursor = dialog.value.slice(dialog.cursor + (dialog.cursor < dialog.value.length ? 1 : 0));
+  return h(Box, {
+    flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
+    paddingX: 2, alignSelf: "center", width: "70%",
+  }, () => [
+    h(Text, { bold: true }, () => "Rename Track"),
+    h(Text, { wrap: "truncate-end" }, () => `Current name: ${dialog.currentTitle}`),
+    h(Box, { flexDirection: "row" }, () => [
+      h(Text, () => "New name: "),
+      h(Text, () => beforeCursor),
+      h(Text, { inverse: true }, () => atCursor),
+      h(Text, () => afterCursor),
+    ]),
+    dialog.error ? h(Text, { color: noColor ? undefined : "red" }, () => `Error: ${dialog.error}`) : null,
+    h(Text, { dimColor: true }, () => "←/→ Move · Home/End Jump · Enter Save · Esc Cancel"),
+  ]);
+}
+
 function statusBanner(notification: NonNullable<UiState["notification"]>, noColor: boolean) {
   const semantics = notification.level === "success"
     ? { symbol: "✓", label: "SUCCESS", color: "green" }
@@ -784,7 +850,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
         ["gg/G", "First/last result"],
         ...(incompleteSelected
           ? [["d", "Clean incomplete Cache Entry"]] as Array<readonly [string, string]>
-          : [["Enter", "Play Now"], ["N", "Play Next"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
+          : [["Enter", "Play Now"], ["N", "Play Next"], ["e", "Rename Track"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
         ["Tab/Shift+Tab", "Change focus"],
       ],
     },
@@ -921,7 +987,7 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
       : ui.activeTab === "library" && incompleteSelected
         ? [["j/k", "Move"], ["d", "Clean"], ["/", "Search"], ["?", "Help"]]
         : ui.activeTab === "library"
-          ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
+          ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["e", "Rename"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
@@ -975,7 +1041,29 @@ type InputKey = {
   shift?: boolean;
   pageUp?: boolean;
   pageDown?: boolean;
+  home?: boolean;
+  end?: boolean;
 };
+
+function editRenameDialog(input: string, key: InputKey, coordinator: AppCoordinator): void {
+  const dialog = coordinator.uiState.renameDialog;
+  if (!dialog) return;
+  let { value, cursor } = dialog;
+  if (key.leftArrow) cursor = Math.max(0, cursor - 1);
+  else if (key.rightArrow) cursor = Math.min(value.length, cursor + 1);
+  else if (key.home) cursor = 0;
+  else if (key.end) cursor = value.length;
+  else if (key.backspace && cursor > 0) {
+    value = value.slice(0, cursor - 1) + value.slice(cursor);
+    cursor -= 1;
+  } else if (key.delete && cursor < value.length) {
+    value = value.slice(0, cursor) + value.slice(cursor + 1);
+  } else if (input.length > 0 && !key.ctrl && !key.meta) {
+    value = value.slice(0, cursor) + input + value.slice(cursor);
+    cursor += input.length;
+  } else return;
+  coordinator.dispatchUi({ type: "editRenameDialog", value, cursor });
+}
 
 function isCtrlC(input: string, key: InputKey): boolean {
   return input === "\x03" || (key.ctrl === true && input === "c");
