@@ -57,6 +57,11 @@ export type IncompleteYouTubeCacheEntry = {
   reason: string;
   title?: string;
   uploader?: string;
+  videoId?: string;
+  durationSeconds?: number;
+  cachedAt?: string;
+  container?: string;
+  mediaSizeBytes?: number;
 };
 
 export type YouTubeCacheProvider = Provider & {
@@ -136,7 +141,8 @@ class FileSystemYouTubeCacheProvider implements YouTubeCacheProvider {
         this.incompleteEntries.push(candidate.incomplete);
       }
     }
-    this.incompleteEntries.sort((left, right) => compareStrings(left.stem, right.stem));
+    this.incompleteEntries.sort((left, right) =>
+      (right.cachedAt ?? "").localeCompare(left.cachedAt ?? "") || compareStrings(left.stem, right.stem));
   }
 
   listTracks(): readonly Track[] {
@@ -256,12 +262,19 @@ function scanCache(cacheDir: string): ScanResult[] {
     const extension = extname(name).toLowerCase();
     if (!MEDIA_EXTENSIONS.has(extension) || consumedMedia.has(name)) continue;
     const stem = name.slice(0, -extension.length);
-    if (!normalizeVideoId(stem)) continue;
+    const videoId = normalizeVideoId(stem);
+    if (!videoId) continue;
     if (files.includes(`${stem}.json`)) continue;
+    const mediaPath = join(cacheDir, name);
+    const mediaStat = statSync(mediaPath);
     results.push({ incomplete: {
       stem,
-      paths: [join(cacheDir, name)],
+      paths: [mediaPath],
       reason: "Cache media has no sidecar",
+      videoId,
+      cachedAt: mediaStat.mtime.toISOString(),
+      container: extension.slice(1),
+      mediaSizeBytes: mediaStat.size,
     } });
   }
   return results;
@@ -274,12 +287,28 @@ function incompleteFrom(
   parsed: unknown,
 ): IncompleteYouTubeCacheEntry {
   const readable = isObject(parsed) ? parsed : {};
+  const existingPaths = [metadataPath, ...mediaPaths].filter((path) => existsSync(path));
+  const mediaPath = mediaPaths.find((path) => MEDIA_EXTENSIONS.has(extname(path).toLowerCase()));
+  const title = normalizeDisplayValue(readable.title);
+  const uploader = normalizeDisplayValue(readable.uploader);
+  const videoId = normalizeVideoId(readable.videoId);
+  const durationSeconds = normalizeDuration(readable.durationSeconds);
+  const cachedAt = normalizeTimestamp(readable.cachedAt);
   return {
     stem,
-    paths: [metadataPath, ...mediaPaths],
+    paths: existingPaths,
     reason: "Cache sidecar or media is invalid or incomplete",
-    ...(normalizeDisplayValue(readable.title) ? { title: normalizeDisplayValue(readable.title) } : {}),
-    ...(normalizeDisplayValue(readable.uploader) ? { uploader: normalizeDisplayValue(readable.uploader) } : {}),
+    ...(title ? { title } : {}),
+    ...(uploader ? { uploader } : {}),
+    ...(videoId ? { videoId } : {}),
+    ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+    ...(cachedAt ? { cachedAt } : {
+      cachedAt: existingPaths.reduce((latest, path) => {
+        const value = statSync(path).mtime.toISOString();
+        return value > latest ? value : latest;
+      }, ""),
+    }),
+    ...(mediaPath ? { container: extname(mediaPath).slice(1).toLowerCase(), mediaSizeBytes: statSync(mediaPath).size } : {}),
   };
 }
 

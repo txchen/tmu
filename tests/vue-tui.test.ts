@@ -430,7 +430,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("Shuffle");
   });
 
-  test("Library shows Cache Health and confirms permanent Cache Deletion", async () => {
+  test("Library unifies healthy and incomplete cache results with safe contextual actions", async () => {
     const track = cachedTrack("cached00001", "Cached");
     let deleted = false;
     let cleanedStem: string | undefined;
@@ -439,10 +439,16 @@ describe("TMU top-level surface smoke", () => {
       listTracks: () => deleted ? [] : [track], searchTracks: () => deleted ? [] : [track],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached00001.opus" }),
       refresh: () => undefined,
-      listCacheEntries: () => [],
+      listCacheEntries: () => deleted ? [] : [{
+        track, availability: { status: "available" },
+        metadata: {
+          videoId: "cached00001", title: "Cached", uploader: "Artist", durationSeconds: 125,
+          cachedAt: "2026-01-02T00:00:00.000Z", mediaFileName: "cached00001.opus", container: "opus",
+        }, metadataPath: "/cache/cached00001.json", mediaPath: "/cache/cached00001.opus", mediaSizeBytes: 2048,
+      }],
       listIncompleteEntries: () => cleanedStem ? [] : [
-        { stem: "broken00001", paths: ["/cache/broken00001.opus"], reason: "Cache media has no sidecar" },
-        { stem: "broken00002", paths: ["/cache/broken00002.opus"], reason: "Cache media has no sidecar" },
+        { stem: "broken00001", videoId: "actual00001", paths: ["/cache/broken00001.opus"], reason: "Cache media has no sidecar", title: "Broken First", uploader: "Channel B", durationSeconds: 61, cachedAt: "2026-01-03T00:00:00.000Z", mediaSizeBytes: 4096, container: "opus" },
+        { stem: "broken00002", paths: ["/cache/broken00002.opus"], reason: "Cache media has no sidecar", cachedAt: "2026-01-01T00:00:00.000Z", mediaSizeBytes: 1024, container: "opus" },
       ],
       findByIdentity: () => deleted ? undefined : ({
         track, availability: { status: "available" },
@@ -459,21 +465,45 @@ describe("TMU top-level surface smoke", () => {
       queue: new MemoryQueue(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNow", target: track });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 24 });
     await terminal.stdin.write("]");
-    expect(terminal.lastFrame()).toContain("Cache Health: broken00001");
-    await terminal.stdin.write("\x1b");
+    const initial = terminal.lastFrame()!;
+    expect(initial.indexOf("Broken First")).toBeLessThan(initial.indexOf("Cached"));
+    expect(initial).toContain("! Broken First · 1:01 · 4.0 KiB");
+    expect(initial).toContain("✓ Cached · 2:05 · 2.0 KiB");
+    expect(initial).not.toContain("Channel B ·");
+    expect(initial).toContain("Health: Cache media has no sidecar");
+    expect(initial).toContain("Video ID: actual00001");
+    expect(initial).toContain("Channel: Channel B");
+    expect(initial).toContain("d Clean · / Search");
+    expect(initial).not.toContain("Enter Play · a Add");
+    expect(initial.split("\n").find((line) => line.includes("Library ·"))).toContain("Incomplete Cache Entry");
+    await terminal.terminal.resize(100, 24);
+    await waitFor(() => coordinator.uiState.terminal.columns === 100);
+    expect(coordinator.uiState.terminal.tier).toBe("medium");
+    await terminal.stdin.write("a");
+    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    await terminal.stdin.write("d");
+    expect(terminal.lastFrame()).toContain("Clean incomplete entry “Broken First”?");
+    await terminal.stdin.write("n");
+    await terminal.stdin.write("j");
     await terminal.stdin.write("d");
     expect(terminal.lastFrame()).toContain("Permanently delete “Cached”?");
     expect(terminal.lastFrame()).toContain("current playback");
     expect(terminal.lastFrame()).toContain("will stop.");
     await terminal.stdin.write("y");
     expect(deleted).toBe(true);
-    await terminal.stdin.write("J");
-    await terminal.stdin.write("X");
+    await terminal.stdin.write("/");
+    await terminal.stdin.write("broken00002");
+    expect(terminal.lastFrame()).toContain("broken00002");
+    expect(terminal.lastFrame()).not.toContain("Broken First");
+    await terminal.stdin.write("\r");
+    expect(coordinator.uiState.library.inputFocused).toBe(false);
+    await terminal.stdin.write("d");
     expect(terminal.lastFrame()).toContain("Clean incomplete entry “broken00002”?");
     await terminal.stdin.write("y");
     expect(cleanedStem).toBe("broken00002");
+    expect(terminal.lastFrame()).toContain("No Cache Entries match your search.");
   });
 
   test("YouTube Downloader exposes pending removal, active cancellation, and session summaries", async () => {
@@ -615,8 +645,8 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     await terminal.stdin.write("\t");
     await terminal.stdin.write("second");
-    expect(terminal.lastFrame()).toContain("› Second Track");
-    expect(terminal.lastFrame()).not.toContain("› First Track");
+    expect(terminal.lastFrame()).toContain("› ✓ Second Track");
+    expect(terminal.lastFrame()).not.toContain("✓ First Track");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);

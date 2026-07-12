@@ -93,9 +93,9 @@ describe("YouTubeCacheProvider", () => {
       expect(provider.listTracks()).toEqual([]);
       expect(provider.listIncompleteEntries().map((entry) => entry.stem)).toEqual([
         "broken45678",
+        "orphan12345",
         "emptymedia0",
         "missmedia01",
-        "orphan12345",
       ]);
     } finally {
       await rm(dir, { recursive: true, force: true });

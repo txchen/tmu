@@ -9,7 +9,7 @@ import {
   type PublicationTimers,
 } from "../state-publication";
 import { dispatchTerminalResize } from "./resize";
-import { isYouTubeCacheProvider } from "../youtube-cache";
+import { isYouTubeCacheProvider, type IncompleteYouTubeCacheEntry, type YouTubeCacheEntry } from "../youtube-cache";
 import {
   activateConfirmation,
   activeConfirmation,
@@ -250,11 +250,11 @@ async function routeLibrary(
   coordinator: AppCoordinator,
 ): Promise<void> {
   const provider = coordinator.appState.providers["youtube-cache"];
-  const tracks = provider.searchTracks(coordinator.uiState.library.query);
-  const jump = listJump(input, key, chordPending(coordinator.uiState), tracks.length, coordinator.uiState.library.selectedIndex);
+  const results = libraryResults(provider, coordinator.uiState.library.query);
+  const jump = listJump(input, key, chordPending(coordinator.uiState), results.length, coordinator.uiState.library.selectedIndex);
   if (!coordinator.uiState.library.inputFocused && jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
   if (!coordinator.uiState.library.inputFocused && jump.index !== undefined) {
-    coordinator.dispatchUi({ type: "setLibrarySelection", index: jump.index, resultCount: tracks.length });
+    coordinator.dispatchUi({ type: "setLibrarySelection", index: jump.index, resultCount: results.length });
   } else if (key.escape) {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
   } else if (!coordinator.uiState.library.inputFocused && input === "/") {
@@ -263,39 +263,30 @@ async function routeLibrary(
     coordinator.dispatchUi({
       type: "setLibrarySelection",
       index: coordinator.uiState.library.selectedIndex + 1,
-      resultCount: tracks.length,
+      resultCount: results.length,
     });
   } else if (!coordinator.uiState.library.inputFocused && (input === "k" || key.upArrow)) {
     coordinator.dispatchUi({
       type: "setLibrarySelection",
       index: coordinator.uiState.library.selectedIndex - 1,
-      resultCount: tracks.length,
+      resultCount: results.length,
     });
   } else if (!coordinator.uiState.library.inputFocused && (input === "N" || input === "a")) {
-    const track = tracks[coordinator.uiState.library.selectedIndex];
-    if (track) await coordinator.dispatch({
+    const result = results[coordinator.uiState.library.selectedIndex];
+    if (result?.kind === "track") await coordinator.dispatch({
       type: input === "N" ? "playNext" : "addToQueue",
-      target: track,
+      target: result.track,
     });
   } else if (!coordinator.uiState.library.inputFocused && input === "d") {
-    const track = tracks[coordinator.uiState.library.selectedIndex];
-    if (track) await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: track.identity });
-  } else if (!coordinator.uiState.library.inputFocused && (input === "J" || input === "K") && isYouTubeCacheProvider(provider)) {
-    const entries = provider.listIncompleteEntries();
-    coordinator.dispatchUi({
-      type: "setCacheHealthSelection",
-      index: coordinator.uiState.library.healthSelectedIndex + (input === "J" ? 1 : -1),
-      resultCount: entries.length,
-    });
-  } else if (!coordinator.uiState.library.inputFocused && input === "X" && isYouTubeCacheProvider(provider)) {
-    const incomplete = provider.listIncompleteEntries()[coordinator.uiState.library.healthSelectedIndex];
-    if (incomplete) await coordinator.dispatch({ type: "cacheOperation", operation: "request-cleanup", stem: incomplete.stem });
+    const result = results[coordinator.uiState.library.selectedIndex];
+    if (result?.kind === "track") await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: result.track.identity });
+    else if (result) await coordinator.dispatch({ type: "cacheOperation", operation: "request-cleanup", stem: result.entry.stem });
   } else if (key.return && coordinator.uiState.library.inputFocused) {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
-    coordinator.dispatchUi({ type: "setLibrarySelection", index: 0, resultCount: tracks.length });
+    coordinator.dispatchUi({ type: "setLibrarySelection", index: 0, resultCount: results.length });
   } else if (key.return) {
-    const track = tracks[coordinator.uiState.library.selectedIndex];
-    if (track) await coordinator.dispatch({ type: "playNow", target: track });
+    const result = results[coordinator.uiState.library.selectedIndex];
+    if (result?.kind === "track") await coordinator.dispatch({ type: "playNow", target: result.track });
   } else if (coordinator.uiState.library.inputFocused && (key.backspace || key.delete)) {
     coordinator.dispatchUi({
       type: "setLibraryQuery",
@@ -383,6 +374,11 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     ]);
   }
 
+  const renderedLibraryResults = uiState.activeTab === "library"
+    ? libraryResults(coordinator.appState.providers["youtube-cache"], uiState.library.query)
+    : [];
+  const incompleteLibrarySelection = renderedLibraryResults[uiState.library.selectedIndex]?.kind === "incomplete";
+
   return h(Box, {
     flexDirection: "column",
     width: uiState.terminal.columns,
@@ -393,12 +389,12 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     uiState.activeTab === "playback"
         ? playbackView(snapshot, coordinator, noColor)
       : uiState.activeTab === "library"
-        ? libraryView(snapshot, coordinator, noColor)
+        ? libraryView(snapshot, noColor, renderedLibraryResults)
         : downloaderView(snapshot, noColor),
     uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
-      h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
+      h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab, incompleteLibrarySelection)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
     nowPlayingBar(snapshot, noColor),
-    h(Text, { dimColor: true }, () => footer(uiState)),
+    h(Text, { dimColor: true }, () => footer(uiState, incompleteLibrarySelection)),
   ]);
 }
 
@@ -528,27 +524,83 @@ function formatFileSize(bytes: number | undefined): string {
   return `${value.toFixed(1)} ${unit}`;
 }
 
-function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noColor: boolean) {
-  const provider = coordinator.appState.providers["youtube-cache"];
-  const tracks = provider.searchTracks(snapshot.uiState.library.query);
-  const incomplete = isYouTubeCacheProvider(provider) ? provider.listIncompleteEntries() : [];
+function libraryView(snapshot: PublicationSnapshot, noColor: boolean, resultsList: readonly LibraryResult[]) {
   const search = h(Box, { borderStyle: "round", borderColor: snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.library.inputFocused, paddingX: 1 }, () =>
     h(Text, { bold: snapshot.uiState.library.inputFocused }, () => `Search ${snapshot.uiState.library.inputFocused ? "│" : ""} ${snapshot.uiState.library.query || "(type to search)"}`));
   const results = h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
-    h(Text, { bold: !snapshot.uiState.library.inputFocused }, () => `Library · ${tracks.length} results · ${tracks.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${tracks.length}`),
-    ...tracks.slice(snapshot.uiState.library.scroll, snapshot.uiState.library.scroll + 10).map((track, visibleIndex) => { const index = visibleIndex + snapshot.uiState.library.scroll; return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.library.inputFocused && index === snapshot.uiState.library.selectedIndex, dimColor: snapshot.uiState.library.inputFocused && index === snapshot.uiState.library.selectedIndex }, () =>
-        `${index === snapshot.uiState.library.selectedIndex ? "›" : " "} ${track.title}${track.artist ? ` · ${track.artist}` : ""}`
-      ); }),
-    tracks.length === 0 ? h(Text, { dimColor: true }, () => "No cached Tracks") : null,
-    ...incomplete.map((entry, index) => h(Text, { color: noColor ? undefined : "yellow", wrap: "truncate-end" }, () =>
-      `${index === snapshot.uiState.library.healthSelectedIndex ? ">" : " "} Cache Health: ${entry.stem}${entry.title ? ` · ${entry.title}` : ""}${entry.uploader ? ` · ${entry.uploader}` : ""} · ${entry.reason}`)),
+    h(Text, { bold: !snapshot.uiState.library.inputFocused }, () => `Library · ${resultsList.length} results · ${resultsList.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${resultsList.length}`),
+    ...resultsList.slice(snapshot.uiState.library.scroll, snapshot.uiState.library.scroll + 10).map((result, visibleIndex) => { const index = visibleIndex + snapshot.uiState.library.scroll; const selected = index === snapshot.uiState.library.selectedIndex; return h(Text, {
+      wrap: "truncate-end", inverse: !snapshot.uiState.library.inputFocused && selected,
+      dimColor: snapshot.uiState.library.inputFocused && selected,
+      color: !noColor && result.kind === "incomplete" ? "red" : undefined,
+    }, () => `${selected ? "›" : " "} ${libraryRow(result, snapshot.uiState.terminal.columns)}`); }),
+    resultsList.length === 0 ? h(Text, { dimColor: true }, () => snapshot.uiState.library.query ? "No Cache Entries match your search." : "YouTube Cache is empty — use Downloads to add Tracks.") : null,
   ]);
-  const selected = tracks[snapshot.uiState.library.selectedIndex];
-  const inspector = selected ? h(Box, { borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1 }, () => [h(Text, { bold: true }, () => "Selected Track"), h(Text, () => selected.title), h(Text, { dimColor: true }, () => selected.artist ? `Channel: ${selected.artist}` : selected.identity.stableId)]) : null;
+  const selected = resultsList[snapshot.uiState.library.selectedIndex];
+  const inspector = selected ? libraryInspector(selected, noColor) : null;
   const body = snapshot.uiState.terminal.tier === "wide" && inspector
     ? h(Box, { flexDirection: "row", gap: 1, flexGrow: 1 }, () => [results, inspector])
     : h(Box, { flexDirection: "column", gap: 1, flexGrow: 1 }, () => [results, inspector]);
   return h(Box, { flexDirection: "column", flexGrow: 1, gap: 1 }, () => [search, body]);
+}
+
+type LibraryResult =
+  | { kind: "track"; track: import("../domain").Track; cacheEntry?: YouTubeCacheEntry }
+  | { kind: "incomplete"; entry: IncompleteYouTubeCacheEntry };
+
+function libraryResults(provider: import("../domain").Provider, query: string): LibraryResult[] {
+  if (!isYouTubeCacheProvider(provider)) return provider.searchTracks(query).map((track) => ({ kind: "track", track }));
+  const normalized = query.trim().toLocaleLowerCase();
+  const results: LibraryResult[] = [
+    ...provider.listCacheEntries().map((cacheEntry): LibraryResult => ({ kind: "track", track: cacheEntry.track, cacheEntry })),
+    ...provider.listIncompleteEntries().map((entry): LibraryResult => ({ kind: "incomplete", entry })),
+  ];
+  return results
+    .filter((result) => {
+      if (!normalized) return true;
+      const values = result.kind === "track"
+        ? [result.track.title, result.track.artist, result.track.identity.stableId, result.cacheEntry?.metadata.mediaFileName.replace(/\.[^.]+$/, "")]
+        : [result.entry.title, result.entry.uploader, result.entry.videoId, result.entry.stem];
+      return values.some((value) => value?.toLocaleLowerCase().includes(normalized));
+    })
+    .sort((left, right) => libraryTimestamp(right).localeCompare(libraryTimestamp(left)) || libraryStableId(left).localeCompare(libraryStableId(right)));
+}
+
+function libraryTimestamp(result: LibraryResult): string {
+  return result.kind === "track" ? result.cacheEntry?.metadata.cachedAt ?? "" : result.entry.cachedAt ?? "";
+}
+
+function libraryStableId(result: LibraryResult): string {
+  return result.kind === "track" ? result.track.identity.stableId : result.entry.videoId ?? result.entry.stem;
+}
+
+function libraryRow(result: LibraryResult, columns: number): string {
+  const title = result.kind === "track" ? result.track.title : result.entry.title ?? result.entry.stem;
+  const duration = result.kind === "track" ? result.track.durationSeconds ?? result.cacheEntry?.metadata.durationSeconds : result.entry.durationSeconds;
+  const size = formatFileSize(result.kind === "track" ? result.cacheEntry?.mediaSizeBytes : result.entry.mediaSizeBytes);
+  const details = columns < 75 ? "" : columns < 100 ? ` · ${formatDuration(duration)}` : ` · ${formatDuration(duration)} · ${size}`;
+  return `${result.kind === "track" ? "✓" : "!"} ${title}${details}`;
+}
+
+function libraryInspector(result: LibraryResult, noColor: boolean) {
+  const track = result.kind === "track" ? result.track : undefined;
+  const metadata = result.kind === "track" ? result.cacheEntry?.metadata : undefined;
+  const title = track?.title ?? (result.kind === "incomplete" ? result.entry.title : undefined) ?? libraryStableId(result);
+  const channel = track?.artist ?? (result.kind === "incomplete" ? result.entry.uploader : undefined);
+  const duration = track?.durationSeconds ?? metadata?.durationSeconds ?? (result.kind === "incomplete" ? result.entry.durationSeconds : undefined);
+  const cachedAt = metadata?.cachedAt ?? (result.kind === "incomplete" ? result.entry.cachedAt : undefined);
+  const container = metadata?.container ?? (result.kind === "incomplete" ? result.entry.container : undefined);
+  return h(Box, { flexDirection: "column", borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1 }, () => [
+    h(Text, { bold: true }, () => result.kind === "track" ? "Selected Track" : "Incomplete Cache Entry"),
+    h(Text, () => `Title: ${title}`),
+    ...(channel ? [h(Text, () => `Channel: ${channel}`)] : []),
+    h(Text, () => `Duration: ${formatDuration(duration)}`),
+    h(Text, () => `Cached: ${cachedAt ? cachedAt.slice(0, 10) : "Unknown"}`),
+    h(Text, () => `Format: ${container ?? "Unknown"}`),
+    h(Text, () => `Size: ${formatFileSize(result.kind === "track" ? result.cacheEntry?.mediaSizeBytes : result.entry.mediaSizeBytes)}`),
+    h(Text, () => `Video ID: ${libraryStableId(result)}`),
+    ...(result.kind === "incomplete" ? [h(Text, { color: noColor ? undefined : "red" }, () => `Health: ${result.entry.reason}`)] : []),
+  ]);
 }
 
 function downloaderView(snapshot: PublicationSnapshot, noColor: boolean) {
@@ -602,9 +654,10 @@ function statusBanner(notification: NonNullable<UiState["notification"]>, noColo
   }, () => `${semantics.symbol} ${semantics.label} · ${notification.message}`);
 }
 
-function footer(ui: UiState): string {
+function footer(ui: UiState, incompleteSelected = false): string {
   if (ui.activeTab === "playback") return "────────  j/k Move · Space Play · Enter Play · x Remove · ? Help";
   if (ui.activeTab === "library" && ui.library.inputFocused) return "────────  Type Search · Enter Results · Esc Results · Tab Focus · ? Help";
+  if (ui.activeTab === "library" && incompleteSelected) return "────────  j/k Move · d Clean · / Search · ? Help";
   if (ui.activeTab === "library") return "────────  j/k Move · / Search · Enter Play · a Add · ? Help";
   if (ui.downloader.inputFocused) return "────────  Type URL · Enter Submit · Esc Pipeline · Tab Focus · ? Help";
   return "────────  j/k Move · x Cancel/Remove · gg/G Ends · Tab Focus · ? Help";
@@ -631,11 +684,14 @@ function tabLabel(active: UiState["activeTab"]): string {
   return active === "playback" ? "Playback" : active === "library" ? "Library" : "YouTube Downloader";
 }
 
-function contextualHelp(active: UiState["activeTab"]): string {
+function contextualHelp(active: UiState["activeTab"], incompleteSelected = false): string {
   if (active === "playback") return "j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · Enter Play Selected · Space Play/Pause · N Play Next · J/K Reorder · x Remove · C Clear · Z Randomize";
-  if (active === "library") return "/ Search · Tab/Shift+Tab Focus · Enter Results/Play Now · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · N Play Next · a Add · d Delete/Clean";
+  if (active === "library") return incompleteSelected
+    ? "/ Search · Tab/Shift+Tab Focus · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · d Clean"
+    : "/ Search · Tab/Shift+Tab Focus · Enter Results/Play Now · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · N Play Next · a Add · d Delete";
   return "Tab/Shift+Tab Focus · Enter Submit · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · x Cancel/Remove";
 }
+
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
   return reason === "playback" ? "playback" : "state";
