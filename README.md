@@ -14,6 +14,8 @@ YouTube Cache is the only current Provider. TMU keeps a narrow internal Provider
 
 YouTube URL Download stores downloaded audio in the YouTube Cache without adding it to the Queue. Users are responsible for downloading and keeping only content they have the right to download and keep.
 
+The cache lives at `$XDG_CACHE_HOME/tmu/youtube-cache`, or `~/.cache/tmu/youtube-cache` when `XDG_CACHE_HOME` is not set. TMU manages the files in this directory; use the Library actions to rename or delete Tracks.
+
 ## Install and run
 
 Node.js and npm are TMU's runtime and installation requirements. TMU requires Node.js 24 or newer. Run it directly from the npm package:
@@ -31,7 +33,32 @@ tmu
 
 The npm package contains a prebuilt JavaScript executable, so no TypeScript loader or build step is needed after installation. Linux, macOS, and WSL (through Linux behavior) are supported; native Windows is not supported.
 
-`mpv` and `yt-dlp` are separate External Tools discovered through TMU Config and dependency health checks. They are not Node packages or npm runtime requirements. When either is missing, only its corresponding feature is disabled.
+`mpv` and `yt-dlp` are separate command-line External Tools used for playback and downloading, respectively. They must be available on `PATH` or configured explicitly, and are not installed by npm. When either is missing, TMU keeps running and disables only the corresponding feature.
+
+## Quick tutorial
+
+1. Start TMU with `npx tmu`. It opens on the Playback Tab, labeled `Player`. TMU requires a terminal at least 60 columns by 16 rows.
+2. Press `]` twice to open Downloads. Paste a YouTube, YouTube Music, or `youtu.be` video URL and press `Enter`. Explicit playlist URLs are also supported and require confirmation before the batch starts.
+3. Wait for the batch summary, then press `[` to open Library. Downloading caches Tracks but does not add them to the Queue automatically.
+4. Select a Track with `j`/`k` or the arrow keys. Press `Enter` to Play Now, `a` to add it to the end of the Queue without playing, or `N` to make it Play Next.
+5. Press `[` to return to Player. Use `j`/`k` to select a queued Track, `Enter` to play it, and `Space` to pause or resume.
+
+Useful global controls include `n`/`p` for next/previous, `h`/`l` to seek five seconds, `+`/`-` for volume, and `q` to quit. Press `?` outside a text input for the complete shortcut reference. Use `Esc` or `Tab` to leave a focused search or URL input first.
+
+Cache Search is local: press `/`, type part of a title, channel, or YouTube video ID, and press `Enter` to return focus to the results.
+
+## Configuration
+
+TMU reads optional JSON configuration from `$XDG_CONFIG_HOME/tmu/config.json`, or `~/.config/tmu/config.json` when `XDG_CONFIG_HOME` is not set. No file is required for the defaults. For example, External Tool commands can be overridden when they are not on `PATH`:
+
+```json
+{
+  "helpers": {
+    "mpv": "/path/to/mpv",
+    "ytDlp": "/path/to/yt-dlp"
+  }
+}
+```
 
 ## Development
 
