@@ -97,6 +97,19 @@ describe("MemoryQueue", () => {
     expect(queue.currentIndex).toBe(0);
   });
 
+  test("Play Selected changes Current by index without changing exact Queue order", () => {
+    const queue = new MemoryQueue();
+    for (const value of [track("youtube-cache", "a", "A"), track("youtube-cache", "b", "B"), track("youtube-cache", "c", "C")]) {
+      queue.enqueue(value);
+    }
+    const orderBefore = queue.snapshot().entries.map((entry) => entry.track.identity.stableId);
+
+    expect(queue.startAt(1)?.track.title).toBe("B");
+
+    expect(queue.snapshot().entries.map((entry) => entry.track.identity.stableId)).toEqual(orderBefore);
+    expect(queue.currentIndex).toBe(1);
+  });
+
   test("removes, moves, clears, and preserves the current Track selection", () => {
     const queue = new MemoryQueue();
     const amber = track("youtube-cache", "/music/amber.flac", "Amber");

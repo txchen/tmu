@@ -29,6 +29,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Player");
     expect(terminal.lastFrame()).toContain("Library");
     expect(terminal.lastFrame()).toContain("Downloads");
+    expect(terminal.lastFrame()).toContain("Queue is empty — open Library to add Tracks.");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("library");
@@ -135,7 +136,7 @@ describe("TMU top-level surface smoke", () => {
     await coordinator.dispatch({ type: "playNext", target: second });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
 
-    await terminal.stdin.write(" ");
+    await terminal.stdin.write("\r");
     expect(coordinator.appState.queue.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
 
@@ -184,6 +185,102 @@ describe("TMU top-level surface smoke", () => {
 
     await terminal.stdin.write("\r");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
+  });
+
+  test("renders the responsive Player Queue and complete selected cache metadata", async () => {
+    const first = { ...cachedTrack("first", "First"), durationSeconds: 65 };
+    const second = { ...cachedTrack("second", "Selected Song"), artist: "The Channel", durationSeconds: 245 };
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [first, second], searchTracks: () => [first, second],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+      refresh: () => undefined, listCacheEntries: () => [], listIncompleteEntries: () => [],
+      findByIdentity: (identity) => {
+        const track = identity.stableId === "first" ? first : identity.stableId === "second" ? second : undefined;
+        return track ? {
+          track, availability: { status: "available" },
+          metadata: { videoId: identity.stableId, title: track.title, uploader: track.artist ?? "The Channel",
+            ...(track.durationSeconds === undefined ? {} : { durationSeconds: track.durationSeconds }),
+            cachedAt: "2026-07-10T12:34:56.000Z", mediaFileName: `${identity.stableId}.opus`, container: "opus" },
+          metadataPath: `/cache/${identity.stableId}.json`, mediaPath: `/cache/${identity.stableId}.opus`,
+          mediaSizeBytes: identity.stableId === "second" ? 1_572_864 : 1024,
+        } : undefined;
+      },
+      deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({ type: "addToQueue", target: first });
+    await coordinator.dispatch({ type: "addToQueue", target: second });
+    coordinator.dispatchUi({ type: "selectQueue", index: 1, identities: coordinator.queueTrackIdentities() });
+    await coordinator.dispatch({ type: "playSelected", identity: first.identity });
+
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 28 });
+    let frame = terminal.lastFrame()!;
+    expect(frame).toContain("Queue · 2 Tracks · 2/2");
+    expect(frame).toContain("First · 1:05 · CURRENT");
+    expect(frame).toContain("Selected Song · 4:05");
+    expect(frame).toContain("Title: Selected Song");
+    expect(frame).toContain("Channel: The Channel");
+    expect(frame).toContain("Cached: 2026-07-10");
+    expect(frame).toContain("Format: opus");
+    expect(frame).toContain("Size: 1.5 MiB");
+    expect(frame).toContain("Video ID: second");
+    const wideQueueLine = frame.split("\n").findIndex((line) => line.includes("Queue ·"));
+    const widePreviewLine = frame.split("\n").findIndex((line) => line.includes("Selected Track"));
+    expect(widePreviewLine).toBe(wideQueueLine);
+
+    await terminal.terminal.resize(100, 28);
+    frame = terminal.lastFrame()!;
+    const mediumTitleLine = frame.split("\n").find((line) => line.includes("Queue ·") && line.includes("Selected Track"))!;
+    const borders = [...mediumTitleLine].flatMap((character, index) => character === "│" ? [index] : []);
+    expect(borders).toHaveLength(4);
+    expect((borders[1]! - borders[0]!) / (borders[3]! - borders[2]!)).toBeGreaterThan(1.6);
+    expect((borders[1]! - borders[0]!) / (borders[3]! - borders[2]!)).toBeLessThan(2.2);
+
+    await terminal.terminal.resize(80, 28);
+    frame = terminal.lastFrame()!;
+    expect(frame.split("\n").findIndex((line) => line.includes("Selected Track")))
+      .toBeGreaterThan(frame.split("\n").findIndex((line) => line.includes("Selected Song · 4:05")));
+  });
+
+  test("keeps Queue selection independent while Player shortcuts edit exact visible order", async () => {
+    const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C")];
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks, searchTracks: () => tracks,
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({ appState: createInitialAppState({ "youtube-cache": provider }),
+      uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer() });
+    for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("j");
+    expect(terminal.lastFrame()).toContain("› · B");
+    expect(terminal.lastFrame()).toContain("▶ A");
+    await terminal.stdin.write(" ");
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    await terminal.stdin.write("J");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B"]);
+    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[1]!.identity);
+    await terminal.stdin.write("K");
+    await terminal.stdin.write("N");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
+    await terminal.stdin.write("x");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.playback).toMatchObject({ status: "idle", currentTrackIdentity: null });
+    await terminal.stdin.write(" ");
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    await terminal.stdin.write("C");
+    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
   });
 
   test("Library shows Cache Health and confirms permanent Cache Deletion", async () => {
@@ -350,7 +447,9 @@ describe("TMU top-level surface smoke", () => {
       queue, player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
-    expect(terminal.lastFrame()).toContain("Broken Track · YouTube Cache · unavailable: mpv playback failed: corrupt");
+    expect(terminal.lastFrame()).toContain("! Broken Track · —:—");
+    expect(terminal.lastFrame()).toContain("Unavailable: mpv playback");
+    expect(terminal.lastFrame()).toContain("failed: corrupt stream");
   });
 
   test("Library Cache Search finds a cached Track and places it in Queue", async () => {

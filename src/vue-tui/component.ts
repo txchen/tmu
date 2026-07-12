@@ -1,7 +1,7 @@
 import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
-import type { QueueEntry, UiState } from "../domain";
+import type { UiState } from "../domain";
 import {
   StatePublicationGate,
   type PublicationCause,
@@ -30,7 +30,6 @@ export function createTmuRoot(options: TmuRootOptions) {
       coordinator.dispatchUi({
         type: "syncQueue",
         identities: coordinator.queueTrackIdentities(),
-        preferredIdentity: coordinator.appState.playback.currentTrackIdentity,
       });
       const existingError = coordinator.appState.appErrors.at(-1);
       if (existingError && !coordinator.uiState.notification) {
@@ -158,12 +157,7 @@ export function createTmuRoot(options: TmuRootOptions) {
           else if (ui.activeTab === "downloader") coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: !ui.downloader.inputFocused });
         }
         else if (input === " " && !textInputFocused) {
-          const selected = coordinator.appState.queue.entries[ui.selectedQueueIndex];
-          if (coordinator.appState.queue.currentIndex < 0 && selected) {
-            await coordinator.dispatch({ type: "playNow", target: selected.track });
-          } else {
-            await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
-          }
+          await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
         } else if (!textInputFocused && await routeGlobalPlayback(input, key, coordinator)) {
           // Global playback action handled before tab-local routing.
         } else if (ui.activeTab === "playback") {
@@ -229,6 +223,9 @@ async function routePlayback(
       identities,
     });
   } else if (key.return) {
+    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    if (selected) await coordinator.dispatch({ type: "playSelected", identity: selected.track.identity });
+  } else if (input === "N") {
     const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
     if (selected) await coordinator.dispatch({ type: "playNext", target: selected.track });
   } else if (input === "x") {
@@ -391,7 +388,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     tabHeader(uiState.activeTab, noColor),
     uiState.notification ? statusBanner(uiState.notification, noColor) : null,
     uiState.activeTab === "playback"
-        ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState, noColor)
+        ? playbackView(snapshot, coordinator, noColor)
       : uiState.activeTab === "library"
         ? libraryView(snapshot, coordinator, noColor)
         : downloaderView(snapshot, noColor),
@@ -413,31 +410,78 @@ function tabHeader(active: UiState["activeTab"], noColor: boolean) {
 }
 
 function playbackView(
-  entries: readonly QueueEntry[],
-  currentIndex: number,
-  uiState: PublicationSnapshot["uiState"],
+  snapshot: PublicationSnapshot,
+  coordinator: AppCoordinator,
   noColor: boolean,
 ) {
+  const { uiState } = snapshot;
+  const entries = snapshot.appState.queue.entries;
+  const currentIndex = snapshot.appState.queue.currentIndex;
   const lines = entries.length === 0
     ? ["Queue is empty — open Library to add Tracks."]
     : entries.map((entry, index) => {
       const selected = index === uiState.selectedQueueIndex ? "›" : " ";
-      const current = index === currentIndex ? "*" : " ";
-      const unavailable = entry.availability.status === "unavailable" ? "!" : " ";
-      const reason = entry.availability.status === "unavailable" ? ` · unavailable: ${entry.availability.reason}` : "";
-      return `${selected}${current}${unavailable} ${entry.track.title}${index === currentIndex ? " · CURRENT" : ""} · ${entry.track.providerLabel}${reason}`;
+      const status = entry.availability.status === "unavailable"
+        ? "!"
+        : index === currentIndex
+          ? snapshot.appState.playback.status === "playing" ? "▶" : snapshot.appState.playback.status === "paused" ? "Ⅱ" : "■"
+          : "·";
+      return `${selected} ${status} ${entry.track.title} · ${formatDuration(entry.track.durationSeconds)}${index === currentIndex ? " · CURRENT" : ""}`;
     });
   const position = entries.length ? uiState.selectedQueueIndex + 1 : 0;
-  const queue = h(Box, { flexDirection: "column", flexGrow: 2, borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 1 }, () => [
-    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Queue · ${entries.length} tracks · ${position}/${entries.length}`),
+  const queue = h(Box, {
+    flexDirection: "column", flexGrow: 2, width: uiState.terminal.tier === "narrow" ? "100%" : "66%",
+    borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 1,
+  }, () => [
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Queue · ${entries.length} Track${entries.length === 1 ? "" : "s"} · ${position}/${entries.length}`),
     ...lines.slice(uiState.queueScroll, uiState.queueScroll + 10).map((line, index) => h(Text, { wrap: "truncate-end", inverse: entries.length > 0 && index + uiState.queueScroll === uiState.selectedQueueIndex }, () => line)),
   ]);
   const selected = entries[uiState.selectedQueueIndex];
   if (!selected) return queue;
-  const preview = h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderDimColor: true, paddingX: 1 }, () => [
-    h(Text, { bold: true }, () => "Selected Track"), h(Text, () => selected.track.title), h(Text, { dimColor: true }, () => selected.track.providerLabel),
+  const provider = coordinator.appState.providers[selected.track.identity.providerId];
+  const cacheEntry = isYouTubeCacheProvider(provider) ? provider.findByIdentity(selected.track.identity) : undefined;
+  const metadata = cacheEntry?.metadata;
+  const unavailableReason = selected.availability.status === "unavailable"
+    ? selected.availability.reason
+    : undefined;
+  const preview = h(Box, {
+    flexDirection: "column", flexGrow: 1, width: uiState.terminal.tier === "narrow" ? "100%" : "34%",
+    borderStyle: "round", borderDimColor: true, paddingX: 1,
+  }, () => [
+    h(Text, { bold: true }, () => "Selected Track"),
+    h(Text, () => `Title: ${selected.track.title}`),
+    ...(selected.track.artist ? [h(Text, () => `Channel: ${selected.track.artist}`)] : []),
+    h(Text, () => `Duration: ${formatDuration(selected.track.durationSeconds)}`),
+    ...(metadata ? [
+      h(Text, () => `Cached: ${metadata.cachedAt.slice(0, 10)}`),
+      h(Text, () => `Format: ${metadata.container}`),
+      h(Text, () => `Size: ${formatFileSize(cacheEntry.mediaSizeBytes)}`),
+      h(Text, () => `Video ID: ${metadata.videoId}`),
+    ] : [h(Text, () => `Video ID: ${selected.track.identity.stableId}`)]),
+    ...(unavailableReason
+      ? [h(Text, { color: noColor ? undefined : "red" }, () => `Unavailable: ${unavailableReason}`)]
+      : []),
   ]);
   return h(Box, { flexDirection: uiState.terminal.tier === "narrow" ? "column" : "row", gap: 1, flexGrow: 1 }, () => [queue, preview]);
+}
+
+function formatDuration(seconds: number | undefined): string {
+  if (seconds === undefined || !Number.isFinite(seconds)) return "—:—";
+  const rounded = Math.max(0, Math.round(seconds));
+  return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
+}
+
+function formatFileSize(bytes: number | undefined): string {
+  if (bytes === undefined) return "Unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  let unit = units[0]!;
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index]!;
+  }
+  return `${value.toFixed(1)} ${unit}`;
 }
 
 function libraryView(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noColor: boolean) {

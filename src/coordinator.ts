@@ -156,6 +156,9 @@ export class AppCoordinator {
         case "playNow":
           await this.playNowTarget(intent.target);
           return;
+        case "playSelected":
+          await this.playSelected(intent.identity);
+          return;
         case "addToQueue":
           this.addToQueue(intent.target);
           return;
@@ -326,6 +329,15 @@ export class AppCoordinator {
     if (queuedEntry?.availability.status === "unknown") {
       this.markSelectedYouTubeCacheAvailability(queuedEntry);
     }
+    await this.startQueueEntryFromBeginning(entry);
+  }
+
+  private async playSelected(identity: Track["identity"]): Promise<void> {
+    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    await this.startQueueEntryFromBeginning(this.queue.startAt(index));
+  }
+
+  private async startQueueEntryFromBeginning(entry: QueueEntry | undefined): Promise<void> {
     if (!entry) {
       this.appState.lastEvent = "Track is not in Queue";
       this.syncQueueState();
@@ -806,6 +818,7 @@ export class AppCoordinator {
     this.appState.playback = {
       ...this.player.playback,
       status: "playing",
+      positionSeconds: 0,
       currentTrackIdentity: entry.track.identity,
     };
     this.appState.lastEvent = `started ${entry.track.title}`;

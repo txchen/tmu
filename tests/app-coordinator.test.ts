@@ -86,6 +86,27 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(player.loaded).toEqual([{ kind: "file", path: "/cache/cached-track.opus" }]);
   });
 
+  test("Play Selected starts an existing Queue Track from the beginning without changing Queue order", async () => {
+    const { coordinator, player } = harness();
+    const first = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "first" }, title: "First" };
+    const selected = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "selected" }, title: "Selected" };
+    const last = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "last" }, title: "Last" };
+    for (const track of [first, selected, last]) {
+      await coordinator.dispatch({ type: "addToQueue", target: track });
+    }
+
+    await coordinator.dispatch({ type: "playSelected", identity: selected.identity });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["first", "selected", "last"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    expect(coordinator.appState.playback).toMatchObject({
+      currentTrackIdentity: selected.identity,
+      positionSeconds: 0,
+    });
+    expect(player.loaded.at(-1)).toEqual({ kind: "file", path: "/cache/cached-track.opus" });
+  });
+
   test("Add to Queue appends once without moving Current or starting playback", async () => {
     const { coordinator, player } = harness();
     const later: Track = {

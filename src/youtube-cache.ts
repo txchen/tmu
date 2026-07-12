@@ -47,6 +47,8 @@ export type YouTubeCacheEntry = {
   metadata: YouTubeCacheMetadata;
   metadataPath: string;
   mediaPath: string;
+  /** Derived from the cached file and never persisted in the authoritative sidecar. */
+  mediaSizeBytes?: number;
 };
 
 export type IncompleteYouTubeCacheEntry = {
@@ -246,6 +248,7 @@ function scanCache(cacheDir: string): ScanResult[] {
       metadata,
       metadataPath,
       mediaPath,
+      mediaSizeBytes: statSync(mediaPath).size,
     } });
   }
 

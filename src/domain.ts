@@ -243,6 +243,7 @@ export type UiState = {
 export type AppIntent =
   | { type: "playNext"; target: Track }
   | { type: "playNow"; target: Track }
+  | { type: "playSelected"; identity: TrackIdentity }
   | { type: "addToQueue"; target: Track }
   | { type: "removeQueueTrack"; identity: TrackIdentity }
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
