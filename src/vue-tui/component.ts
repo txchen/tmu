@@ -552,7 +552,10 @@ function formatFileSize(bytes: number | undefined): string {
 function libraryView(snapshot: PublicationSnapshot, noColor: boolean, resultsList: readonly LibraryResult[]) {
   const search = h(Box, { borderStyle: "round", borderColor: snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.library.inputFocused, paddingX: 1 }, () =>
     h(Text, { bold: snapshot.uiState.library.inputFocused }, () => `Search ${snapshot.uiState.library.inputFocused ? "│" : ""} ${snapshot.uiState.library.query || "(type to search)"}`));
-  const results = h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
+  const results = h(Box, {
+    flexDirection: "column", flexGrow: 2, width: snapshot.uiState.terminal.tier === "wide" ? "66%" : "100%",
+    borderStyle: "round", borderColor: !snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1,
+  }, () => [
     h(Text, { bold: !snapshot.uiState.library.inputFocused }, () => `Library · ${resultsList.length} results · ${resultsList.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${resultsList.length}`),
     ...resultsList.slice(snapshot.uiState.library.scroll, snapshot.uiState.library.scroll + 10).map((result, visibleIndex) => { const index = visibleIndex + snapshot.uiState.library.scroll; const selected = index === snapshot.uiState.library.selectedIndex; return h(Text, {
       wrap: "truncate-end", inverse: !snapshot.uiState.library.inputFocused && selected,
@@ -602,8 +605,7 @@ function libraryStableId(result: LibraryResult): string {
 function libraryRow(result: LibraryResult, columns: number): string {
   const title = result.kind === "track" ? result.track.title : result.entry.title ?? result.entry.stem;
   const duration = result.kind === "track" ? result.track.durationSeconds ?? result.cacheEntry?.metadata.durationSeconds : result.entry.durationSeconds;
-  const size = formatFileSize(result.kind === "track" ? result.cacheEntry?.mediaSizeBytes : result.entry.mediaSizeBytes);
-  const details = columns < 75 ? "" : columns < 100 ? ` · ${formatDuration(duration)}` : ` · ${formatDuration(duration)} · ${size}`;
+  const details = columns < 75 ? "" : ` · ${formatDuration(duration)}`;
   return `${result.kind === "track" ? "✓" : "!"} ${title}${details}`;
 }
 
@@ -615,7 +617,9 @@ function libraryInspector(result: LibraryResult, noColor: boolean) {
   const duration = track?.durationSeconds ?? metadata?.durationSeconds ?? (result.kind === "incomplete" ? result.entry.durationSeconds : undefined);
   const cachedAt = metadata?.cachedAt ?? (result.kind === "incomplete" ? result.entry.cachedAt : undefined);
   const container = metadata?.container ?? (result.kind === "incomplete" ? result.entry.container : undefined);
-  return h(Box, { flexDirection: "column", borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1 }, () => [
+  return h(Box, {
+    flexDirection: "column", width: "34%", borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1,
+  }, () => [
     h(Text, { bold: true }, () => result.kind === "track" ? "Selected Track" : "Incomplete Cache Entry"),
     h(Text, () => `Title: ${title}`),
     ...(channel ? [h(Text, () => `Channel: ${channel}`)] : []),

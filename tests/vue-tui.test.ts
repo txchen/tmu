@@ -662,6 +662,32 @@ describe("TMU top-level surface smoke", () => {
       .toBeGreaterThan(frame.split("\n").findIndex((line) => line.includes("Selected Song · 4:05")));
   });
 
+  test("keeps the wide Library inspector width stable across Track selection", async () => {
+    const tracks = [
+      cachedTrack("a", "Short"),
+      cachedTrack("b", "A Track Title Long Enough To Influence Intrinsic Flex Sizing"),
+    ];
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks, searchTracks: () => tracks,
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    coordinator.dispatchUi({ type: "switchTab", tab: "library" });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 24 });
+    const inspectorLeft = () => {
+      const line = terminal.lastFrame()!.split("\n").find((candidate) => candidate.includes("Selected Track"))!;
+      return line.indexOf("│", 1);
+    };
+
+    const initialInspectorLeft = inspectorLeft();
+    await terminal.stdin.write("j");
+
+    expect(inspectorLeft()).toBe(initialInspectorLeft);
+  });
+
   test("keeps Queue selection independent while Player shortcuts edit exact visible order", async () => {
     const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C")];
     const provider: Provider = {
@@ -764,8 +790,13 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     const initial = terminal.lastFrame()!;
     expect(initial.indexOf("Broken First")).toBeLessThan(initial.indexOf("Cached"));
-    expect(initial).toContain("! Broken First · 1:01 · 4.0 KiB");
-    expect(initial).toContain("✓ Cached · 2:05 · 2.0 KiB");
+    const incompleteRow = initial.split("\n").find((line) => line.includes("! Broken First"))!;
+    const cachedRow = initial.split("\n").find((line) => line.includes("✓ Cached"))!;
+    expect(incompleteRow).toContain("! Broken First · 1:01");
+    expect(cachedRow).toContain("✓ Cached · 2:05");
+    expect(incompleteRow).not.toContain("KiB");
+    expect(cachedRow).not.toContain("KiB");
+    expect(initial).toContain("Size: 4.0 KiB");
     expect(initial).not.toContain("Channel B ·");
     expect(initial).toContain("Health: Cache media has no sidecar");
     expect(initial).toContain("Video ID: actual00001");
