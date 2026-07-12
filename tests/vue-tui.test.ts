@@ -288,6 +288,16 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Enter/q/?/Esc");
     expect(terminal.lastFrame()).toContain("Close");
     const bottomScroll = coordinator.uiState.overlays.at(-1)!.scroll;
+    await terminal.stdin.write("\x1b[A");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBe(bottomScroll - 1);
+    await terminal.stdin.write("\x1b[B");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBe(bottomScroll);
+    await terminal.stdin.write("\x1b[5~");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBeLessThan(bottomScroll);
+    await terminal.stdin.write("\x1b[6~");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBe(bottomScroll);
+    await terminal.stdin.write("k");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBe(bottomScroll - 1);
     await terminal.stdin.write("g");
     await terminal.stdin.write("j");
     await terminal.stdin.write("g");
@@ -301,6 +311,77 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("QUEUE PANE");
+  });
+
+  test("preserves Player state while complete Shortcut Help handles input and resize", async () => {
+    const { coordinator } = createTmuApp();
+    for (let index = 0; index < 12; index++) {
+      await coordinator.dispatch({ type: "addToQueue", target: cachedTrack(`help-${index}`, `Help Track ${index}`) });
+    }
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 20 });
+    await terminal.stdin.write("G");
+    const before = {
+      activeTab: coordinator.uiState.activeTab,
+      selectedQueueIndex: coordinator.uiState.selectedQueueIndex,
+      selectedQueueIdentity: coordinator.uiState.selectedQueueIdentity,
+      queueScroll: coordinator.uiState.queueScroll,
+      queue: coordinator.appState.queue,
+      playback: coordinator.appState.playback,
+    };
+
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("j/k Move · Space Play/Pause · Enter Play Selected");
+    expect(terminal.lastFrame()).toContain("QUEUE PANE");
+    await terminal.stdin.write("\x1b[6~");
+    expect(terminal.lastFrame()).toContain("Randomize upcoming Queue");
+    await terminal.stdin.write("G");
+    expect(terminal.lastFrame()).toContain("Ctrl-C");
+    expect(terminal.lastFrame()).toContain("Quit (confirm downloads)");
+
+    for (const suppressed of ["]", " ", "x", "C", "N", "s", "r"] as const) {
+      await terminal.stdin.write(suppressed);
+    }
+    await terminal.terminal.resize(120, 30);
+    await waitFor(() => coordinator.uiState.terminal.columns === 120);
+    expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 120)).toBe(true);
+    await terminal.stdin.write("q");
+
+    expect({
+      activeTab: coordinator.uiState.activeTab,
+      selectedQueueIndex: coordinator.uiState.selectedQueueIndex,
+      selectedQueueIdentity: coordinator.uiState.selectedQueueIdentity,
+      queueScroll: coordinator.uiState.queueScroll,
+      queue: coordinator.appState.queue,
+      playback: coordinator.appState.playback,
+    }).toEqual(before);
+    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+  });
+
+  test("keeps the normal Ctrl-C download quit confirmation above Shortcut Help", async () => {
+    const appState = createInitialAppState({});
+    const coordinator = new AppCoordinator({
+      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+      prepareDownloadBatch: async () => ({
+        kind: "confirmation-required",
+        confirmation: { title: "Help Queue", itemCount: 2 },
+        confirm: () => ({ sourceUrl: "https://youtube.com/playlist?list=help", kind: "playlist", entries: [] }),
+        cancel: () => ({ kind: "cancelled" }),
+      }),
+    });
+    void coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtube.com/playlist?list=help" });
+    await waitFor(() => appState.downloads.confirmation !== undefined);
+    delete appState.downloads.confirmation;
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
+    await terminal.stdin.write("\x03");
+    await waitFor(() => coordinator.appState.downloads.quitConfirmationRequired);
+    expect(terminal.lastFrame()).toContain("Quit TMU?");
+    expect(terminal.lastFrame()).toContain("Active and pending download work will be");
+    expect(terminal.lastFrame()).toContain("cancelled.");
+    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+    await terminal.stdin.write("y");
   });
 
   test("keeps confirmations above Help", async () => {
@@ -323,7 +404,9 @@ describe("TMU top-level surface smoke", () => {
     await terminal.terminal.resize(59, 15);
     expect(terminal.lastFrame()).toContain("Terminal too small");
     await terminal.stdin.write("]");
+    await terminal.stdin.write("?");
     expect(coordinator.uiState.activeTab).toBe("playback");
+    expect(coordinator.uiState.overlays).toEqual([]);
     await terminal.terminal.resize(120, 24);
     expect(coordinator.uiState.terminal.tier).toBe("wide");
     expect(terminal.lastFrame()).toContain("Player");
