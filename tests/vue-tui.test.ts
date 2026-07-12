@@ -31,6 +31,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Library");
     expect(terminal.lastFrame()).toContain("Downloads");
     expect(terminal.lastFrame()).toContain("Queue is empty — open Library to add Tracks.");
+    expect(terminal.lastFrame()).toContain("──  j/k Move · Space Play/Pause · Enter Play Selected · n/p Next/Prev · ? Help");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("library");
@@ -58,7 +59,7 @@ describe("TMU top-level surface smoke", () => {
       queue, player: new NoopPlayer(),
     });
     const hidden = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
-    expect(hidden.lastFrame()).not.toContain("NOW PLAYING");
+    expect(hidden.lastFrame()).not.toContain("▶ PLAYING");
     coordinator.appState.queue = queue.snapshot();
     coordinator.appState.playback = {
       status: "playing", currentTrackIdentity: track.identity,
@@ -71,13 +72,14 @@ describe("TMU top-level surface smoke", () => {
     for (const tab of ["playback", "library", "downloader"] as const) {
       coordinator.dispatchUi({ type: "switchTab", tab });
       const frame = terminal.lastFrame()!;
+      expect(frame).toContain("── ▶ PLAYING · A Very Long Current T");
       expect(frame).toContain("▶ PLAYING");
-      expect(frame).toContain("A Very Long Current Track");
+      expect(frame).toContain("A Very Long Current T");
       expect(frame).toContain("1:05/4:05");
       expect(frame).toContain("[==--------]");
       expect(frame).toContain("Vol 73%");
       expect(frame).toContain("↻ ALL");
-      expect(frame.indexOf("NOW PLAYING")).toBeLessThan(frame.indexOf("? Help"));
+      expect(frame.indexOf("▶ PLAYING")).toBeLessThan(frame.indexOf("? Help"));
       expect(frame).not.toContain("Artist:");
       expect(frame).not.toContain("Channel:");
       expect(frame).not.toContain("Randomize");

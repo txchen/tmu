@@ -394,7 +394,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
       h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab, incompleteLibrarySelection)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
     nowPlayingBar(snapshot, noColor),
-    h(Text, { dimColor: true }, () => footer(uiState, incompleteLibrarySelection)),
+    footer(uiState, incompleteLibrarySelection, noColor),
   ]);
 }
 
@@ -425,10 +425,10 @@ function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
   const repeat = queue.repeatAll ? " · ↻ ALL" : "";
   return h(Box, { width: "100%", flexDirection: "row" }, () => [
     h(Text, {
-      bold: true, color: noColor ? undefined : semantics.color,
-    }, () => `──────── NOW PLAYING · ${semantics.cue} · `),
+      bold: true, color: noColor ? undefined : semantics.color, flexShrink: 0,
+    }, () => `── ${semantics.cue} · `),
     h(Text, { bold: true, wrap: "truncate-end", flexGrow: 1 }, () => current.track.title),
-    h(Text, { bold: true }, () => ` ·${progress} · ${volumeLabel}${repeat}`),
+    h(Text, { bold: true, flexShrink: 0 }, () => ` ·${progress} · ${volumeLabel}${repeat}`),
   ]);
 }
 
@@ -677,13 +677,26 @@ function statusBanner(notification: NonNullable<UiState["notification"]>, noColo
   }, () => `${semantics.symbol} ${semantics.label} · ${notification.message}`);
 }
 
-function footer(ui: UiState, incompleteSelected = false): string {
-  if (ui.activeTab === "playback") return "────────  j/k Move · Space Play · Enter Play · x Remove · ? Help";
-  if (ui.activeTab === "library" && ui.library.inputFocused) return "────────  Type Search · Enter Results · Esc Results · Tab Focus · ? Help";
-  if (ui.activeTab === "library" && incompleteSelected) return "────────  j/k Move · d Clean · / Search · ? Help";
-  if (ui.activeTab === "library") return "────────  j/k Move · / Search · Enter Play · a Add · ? Help";
-  if (ui.downloader.inputFocused) return "────────  Type URL · Enter Submit · Esc Pipeline · Tab Focus · ? Help";
-  return "────────  j/k Move · x Cancel/Remove · gg/G Ends · Tab Focus · ? Help";
+function footer(ui: UiState, incompleteSelected = false, noColor = false) {
+  const shortcuts: Array<[key: string, action: string]> = ui.activeTab === "playback"
+    ? [["j/k", "Move"], ["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["?", "Help"]]
+    : ui.activeTab === "library" && ui.library.inputFocused
+      ? [["Type", "Search"], ["Enter", "Results"], ["Esc", "Results"], ["Tab", "Focus"], ["?", "Help"]]
+      : ui.activeTab === "library" && incompleteSelected
+        ? [["j/k", "Move"], ["d", "Clean"], ["/", "Search"], ["?", "Help"]]
+        : ui.activeTab === "library"
+          ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
+          : ui.downloader.inputFocused
+            ? [["Type", "URL"], ["Enter", "Submit"], ["Esc", "Pipeline"], ["Tab", "Focus"], ["?", "Help"]]
+            : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
+  return h(Box, { width: "100%", flexDirection: "row" }, () => [
+    h(Text, { dimColor: true }, () => "──  "),
+    ...shortcuts.flatMap(([key, action], index) => [
+      ...(index === 0 ? [] : [h(Text, { dimColor: true }, () => " · ")]),
+      h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => key),
+      h(Text, { dimColor: true }, () => ` ${action}`),
+    ]),
+  ]);
 }
 
 function adjacentTab(active: UiState["activeTab"], delta: 1 | -1): UiState["activeTab"] {
