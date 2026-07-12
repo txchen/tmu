@@ -347,7 +347,7 @@ export class MpvPlayer implements Player {
     return ["loadfile", locator.path, "replace", -1, {
       ...LOCAL_FILE_PLAYBACK_OPTIONS,
       ...(typeof options.startSeconds === "number" && options.startSeconds > 0
-        ? { start: options.startSeconds }
+        ? { start: String(options.startSeconds) }
         : {}),
     }];
   }

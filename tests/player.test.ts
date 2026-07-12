@@ -273,7 +273,7 @@ describe("MpvPlayer", () => {
     expect(adapter.ipc.sent.at(-1)).toEqual({
       command: ["loadfile", "/music/amber.flac", "replace", -1, {
         ...localFilePlaybackOptions,
-        start: 42,
+        start: "42",
       }],
       request_id: 6,
     });
@@ -599,7 +599,7 @@ describe("MpvPlayer smoke", () => {
   mpvSmokeTest("loads a generated wav through real mpv when the helper is available", async () => {
     workspace = await mkdtemp(join(tmpdir(), "tmu-mpv-smoke-"));
     const samplePath = join(workspace, "sample.wav");
-    await writeFile(samplePath, createWavSample(0.4, 440));
+    await writeFile(samplePath, createWavSample(2, 440));
     const player = new MpvPlayer({
       command: "mpv",
       ipcPath: join(workspace, "mpv.sock"),
@@ -610,8 +610,9 @@ describe("MpvPlayer smoke", () => {
 
     try {
       await player.start();
-      await player.load({ kind: "file", path: samplePath });
+      await player.load({ kind: "file", path: samplePath }, { startSeconds: 1 });
       await waitUntil(() => player.playback.durationSeconds !== null, 2500);
+      await waitUntil(() => (player.playback.positionSeconds ?? 0) >= 1, 2500);
       await player.setPaused(true);
       await waitUntil(() => player.playback.paused === true, 2500);
       await player.setVolume(35);
