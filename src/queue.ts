@@ -18,7 +18,6 @@ export type MemoryQueueOptions = {
 export class MemoryQueue implements Queue {
   private readonly items: QueueEntry[] = [];
   private activeIndex = -1;
-  private shuffleEnabled = false;
   private repeatAllEnabled = false;
   private readonly random: () => number;
 
@@ -155,12 +154,6 @@ export class MemoryQueue implements Queue {
 
     if (!this.repeatAllEnabled) return undefined;
 
-    if (this.shuffleEnabled && this.activeIndex >= 0) {
-      this.activeIndex = 0;
-      this.shuffleAfterCurrent();
-      return this.items[this.activeIndex];
-    }
-
     this.activeIndex = 0;
     return this.items[this.activeIndex];
   }
@@ -176,10 +169,8 @@ export class MemoryQueue implements Queue {
     return undefined;
   }
 
-  setShuffle(enabled: boolean): void {
-    if (enabled === this.shuffleEnabled) return;
-    this.shuffleEnabled = enabled;
-    if (enabled) this.shuffleAfterCurrent();
+  randomizeUpcoming(): void {
+    this.randomizeAfterCurrent();
   }
 
   setRepeatAll(enabled: boolean): void {
@@ -206,7 +197,6 @@ export class MemoryQueue implements Queue {
         availability: entry.availability,
       })),
       currentIndex: this.activeIndex,
-      shuffle: this.shuffleEnabled,
       repeatAll: this.repeatAllEnabled,
     };
   }
@@ -219,11 +209,10 @@ export class MemoryQueue implements Queue {
     this.activeIndex = snapshot.currentIndex >= 0 && snapshot.currentIndex < this.items.length
       ? snapshot.currentIndex
       : -1;
-    this.shuffleEnabled = snapshot.shuffle;
     this.repeatAllEnabled = snapshot.repeatAll;
   }
 
-  private shuffleAfterCurrent(): void {
+  private randomizeAfterCurrent(): void {
     const start = Math.max(0, this.activeIndex + 1);
     for (let index = this.items.length - 1; index > start; index -= 1) {
       const candidate = start + Math.floor(this.random() * (index - start + 1));

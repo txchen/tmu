@@ -100,7 +100,7 @@ export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersis
 }
 
 export function createLastQueueSnapshot(
-  queue: Pick<QueueState, "entries" | "currentIndex" | "shuffle" | "repeatAll">,
+  queue: Pick<QueueState, "entries" | "currentIndex" | "repeatAll">,
   volume: VolumeState,
   positionSeconds: number | null | undefined = 0,
 ): LastQueueSnapshot {
@@ -110,7 +110,6 @@ export function createLastQueueSnapshot(
       track: snapshotTrackFromTrack(entry.track),
     })),
     currentIndex: queue.currentIndex,
-    shuffle: queue.shuffle,
     repeatAll: queue.repeatAll,
     volume: { ...volume },
     positionSeconds: normalizePosition(positionSeconds),
@@ -124,7 +123,6 @@ function cloneSnapshot(snapshot: LastQueueSnapshot): LastQueueSnapshot {
       track: snapshotTrackFromTrack(entry.track),
     })),
     currentIndex: snapshot.currentIndex,
-    shuffle: snapshot.shuffle,
     repeatAll: snapshot.repeatAll,
     volume: { ...snapshot.volume },
     positionSeconds: snapshot.positionSeconds ?? 0,
@@ -136,7 +134,6 @@ function parseSnapshot(value: unknown): LastQueueSnapshot | null {
   if (value.version !== 1) return null;
   if (!Array.isArray(value.entries)) return null;
   if (typeof value.currentIndex !== "number") return null;
-  if (typeof value.shuffle !== "boolean") return null;
   if (typeof value.repeatAll !== "boolean") return null;
   if (!isVolumeState(value.volume)) return null;
   const positionSeconds = value.positionSeconds === undefined ? 0 : value.positionSeconds;
@@ -156,7 +153,6 @@ function parseSnapshot(value: unknown): LastQueueSnapshot | null {
     version: 1,
     entries,
     currentIndex: value.currentIndex,
-    shuffle: value.shuffle,
     repeatAll: value.repeatAll,
     volume: value.volume,
     positionSeconds,

@@ -128,12 +128,10 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["Cinder", "Drift"]);
     expect(queue.snapshot().currentIndex).toBe(0);
 
-    queue.setShuffle(true);
     queue.setRepeatAll(true);
     queue.clear();
     expect(queue.snapshot().entries).toEqual([]);
     expect(queue.snapshot().currentIndex).toBe(-1);
-    expect(queue.snapshot().shuffle).toBe(true);
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
@@ -165,7 +163,7 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
-  test("shuffle visibly randomizes only Tracks after Current Track and keeps that order when disabled", () => {
+  test("Randomize Queue visibly reorders only Tracks after Current Track on every invocation", () => {
     const queue = new MemoryQueue({ random: () => 0 });
     queue.enqueue(track("youtube-cache", "a", "A"));
     queue.enqueue(track("youtube-cache", "b", "B"));
@@ -173,31 +171,12 @@ describe("MemoryQueue", () => {
     queue.enqueue(track("youtube-cache", "d", "D"));
     queue.startAt(0);
 
-    queue.setShuffle(true);
+    queue.randomizeUpcoming();
     expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
     expect(queue.next()?.track.title).toBe("C");
-    queue.setShuffle(false);
-    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
-    expect(queue.next()?.track.title).toBe("D");
-    expect(queue.snapshot().shuffle).toBe(false);
-  });
-
-  test("shuffle mode stops after every Track has played unless repeat-all is enabled", () => {
-    const queue = new MemoryQueue({ random: () => 0 });
-    queue.enqueue(track("youtube-cache", "a", "A"));
-    queue.enqueue(track("youtube-cache", "b", "B"));
-    queue.enqueue(track("youtube-cache", "c", "C"));
-    queue.startAt(0);
-    queue.setShuffle(true);
-
-    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B"]);
-    expect(queue.next()?.track.title).toBe("C");
-    expect(queue.next()?.track.title).toBe("B");
-    expect(queue.next()).toBeUndefined();
-
-    queue.setRepeatAll(true);
-    expect(queue.next()?.track.title).toBe("A");
-    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
+    queue.randomizeUpcoming();
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B", "D"]);
+    expect(queue.currentIndex).toBe(1);
   });
 
   test("keeps unavailable Tracks visible in snapshots", () => {
@@ -228,7 +207,6 @@ describe("MemoryQueue", () => {
         },
       ],
       currentIndex: 1,
-      shuffle: true,
       repeatAll: true,
     };
 
@@ -238,7 +216,6 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot()).toEqual({
       entries: snapshot.entries,
       currentIndex: 1,
-      shuffle: true,
       repeatAll: true,
     });
     expect(queue.snapshot().entries[0]?.track).not.toHaveProperty("playbackLocator");

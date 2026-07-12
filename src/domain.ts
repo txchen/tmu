@@ -51,7 +51,6 @@ export type QueueEntry = {
 export type QueueState = {
   entries: QueueEntry[];
   currentIndex: number;
-  shuffle: boolean;
   repeatAll: boolean;
 };
 
@@ -99,7 +98,6 @@ export type LastQueueSnapshot = {
   version: 1;
   entries: LastQueueSnapshotEntry[];
   currentIndex: number;
-  shuffle: boolean;
   repeatAll: boolean;
   volume: VolumeState;
   /** Last resumable position for Current Track. Missing in legacy version-1 files means zero. */
@@ -143,7 +141,7 @@ export type Queue = {
   startAt(index: number): QueueEntry | undefined;
   next(): QueueEntry | undefined;
   previous(): QueueEntry | undefined;
-  setShuffle(enabled: boolean): void;
+  randomizeUpcoming(): void;
   setRepeatAll(enabled: boolean): void;
   markAvailability(identity: TrackIdentity, availability: TrackAvailability): void;
   updateTrack(track: Track): QueueEntry | undefined;
@@ -263,7 +261,7 @@ export type AppIntent =
       | "stop"
       | "next-track"
       | "previous-track"
-      | "toggle-shuffle"
+      | "randomize-queue"
       | "toggle-repeat-all"
       | "quit";
   }

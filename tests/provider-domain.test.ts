@@ -48,7 +48,6 @@ describe("narrow Provider domain", () => {
         availability: { status: "unavailable", reason: "cache entry missing" },
       }],
       currentIndex: 0,
-      shuffle: false,
       repeatAll: false,
     }, { percent: 80, ready: true });
 

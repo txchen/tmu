@@ -37,7 +37,6 @@ export function createInitialAppState(
     queue: {
       entries: [],
       currentIndex: -1,
-      shuffle: false,
       repeatAll: false,
     },
     playback: {

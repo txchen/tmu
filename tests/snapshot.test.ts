@@ -26,7 +26,6 @@ function snapshot(): LastQueueSnapshot {
       },
     ],
     currentIndex: 0,
-    shuffle: true,
     repeatAll: false,
     volume: { percent: 88, ready: true },
     positionSeconds: 42,
@@ -57,6 +56,22 @@ describe("Last Queue Snapshot persistence", () => {
     }
   });
 
+  test("restores supported version-1 snapshots that contain obsolete shuffle state without retaining it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-snapshot-legacy-shuffle-"));
+    const file = join(dir, "last-queue.json");
+    const persistence = new FileLastQueueSnapshotPersistence(file);
+    try {
+      await writeFile(file, JSON.stringify({ ...snapshot(), shuffle: true }));
+
+      const restored = await persistence.load();
+
+      expect(restored).toEqual(snapshot());
+      expect(restored).not.toHaveProperty("shuffle");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("serializes only durable Track Identity and display metadata", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-snapshot-"));
     const file = join(dir, "last-queue.json");
@@ -77,6 +92,7 @@ describe("Last Queue Snapshot persistence", () => {
 
       expect(raw).not.toContain("playbackLocator");
       expect(raw).not.toContain("auth-token");
+      expect(raw).not.toContain("shuffle");
       expect(loaded?.entries[0]?.track).toEqual({
         identity: { providerId: "youtube-cache", stableId: "song-secret" },
         title: "Cached Secret",
@@ -175,7 +191,6 @@ describe("Last Queue Snapshot persistence", () => {
         providerLabel: "YouTube Cache",
       } });
       await first.coordinator.dispatch({ type: "playerOperation", operation: "set-volume", percent: 61, ready: true });
-      await first.coordinator.dispatch({ type: "playerOperation", operation: "toggle-shuffle" });
       await first.coordinator.teardown();
       first = undefined;
 
@@ -183,7 +198,6 @@ describe("Last Queue Snapshot persistence", () => {
       await second.coordinator.start();
 
       expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Song A");
-      expect(second.coordinator.appState.queue.shuffle).toBe(true);
       expect(second.coordinator.appState.volume).toEqual({ percent: 61, ready: true });
     } finally {
       await first?.coordinator.teardown();
@@ -228,7 +242,7 @@ describe("Last Queue Snapshot persistence", () => {
       await runtime.coordinator.start();
 
       expect(runtime.coordinator.uiState.activeTab).toBe("playback");
-      expect(runtime.coordinator.appState.queue).toMatchObject({ currentIndex: 0, shuffle: true, repeatAll: true });
+      expect(runtime.coordinator.appState.queue).toMatchObject({ currentIndex: 0, repeatAll: true });
       expect(runtime.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Track");
       expect(runtime.coordinator.appState.playback).toMatchObject({
         status: "paused", positionSeconds: 42, currentTrackIdentity: snapshot().entries[0]?.track.identity,

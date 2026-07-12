@@ -5,7 +5,6 @@ import { JsonRecoveryMessages, loadJsonRecord } from "./json-persistence";
 
 export type AppPreferencesRecord = {
   version: 1;
-  shuffle?: boolean;
   repeatAll?: boolean;
   volume?: VolumeState;
 };
@@ -64,12 +63,10 @@ function parseAppPreferencesRecord(value: unknown): AppPreferencesRecord | null 
   if (typeof value !== "object" || value === null) return null;
   const record = value as Partial<AppPreferencesRecord>;
   if (record.version !== 1) return null;
-  if (record.shuffle !== undefined && typeof record.shuffle !== "boolean") return null;
   if (record.repeatAll !== undefined && typeof record.repeatAll !== "boolean") return null;
   if (record.volume !== undefined && !isVolumeState(record.volume)) return null;
 
   const parsed: AppPreferencesRecord = { version: 1 };
-  if (record.shuffle !== undefined) parsed.shuffle = record.shuffle;
   if (record.repeatAll !== undefined) parsed.repeatAll = record.repeatAll;
   if (record.volume !== undefined) parsed.volume = { ...record.volume };
   return parsed;

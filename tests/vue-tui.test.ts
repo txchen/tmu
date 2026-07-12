@@ -283,6 +283,21 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
   });
 
+  test("Z visibly randomizes only the upcoming Queue", async () => {
+    const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C"), cachedTrack("d", "D")];
+    const coordinator = new AppCoordinator({ appState: createInitialAppState({}), uiState: createInitialUiState(),
+      queue: new MemoryQueue({ random: () => 0 }), player: new NoopPlayer() });
+    for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("Z");
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
+    expect(terminal.lastFrame()!.indexOf("· C")).toBeLessThan(terminal.lastFrame()!.indexOf("· B"));
+    expect(terminal.lastFrame()).not.toContain("Shuffle");
+  });
+
   test("Library shows Cache Health and confirms permanent Cache Deletion", async () => {
     const track = cachedTrack("cached00001", "Cached");
     let deleted = false;

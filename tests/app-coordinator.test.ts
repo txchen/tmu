@@ -66,6 +66,24 @@ function harness() {
 }
 
 describe("AppCoordinator with the narrow Provider", () => {
+  test("Randomize Queue reorders upcoming Tracks without changing Current", async () => {
+    const queue = new MemoryQueue({ random: () => 0 });
+    const coordinator = new AppCoordinator({ appState: createInitialAppState({}), uiState: createInitialUiState(),
+      queue, player: new NoopPlayer() });
+    const tracks = [cachedTrack, ...["b", "c", "d"].map((id) => ({
+      ...cachedTrack, identity: { ...cachedTrack.identity, stableId: id }, title: id.toUpperCase(),
+    }))];
+    for (const target of tracks) await coordinator.dispatch({ type: "addToQueue", target });
+    await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
+
+    await coordinator.dispatch({ type: "playerOperation", operation: "randomize-queue" });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+      .toEqual(["cached-track", "c", "d", "b"]);
+    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.lastEvent).toBe("randomized upcoming Queue");
+  });
+
   test("Play Next queues a cached Track without starting playback", async () => {
     const { coordinator, player } = harness();
 
@@ -564,7 +582,6 @@ describe("AppCoordinator with the narrow Provider", () => {
           version: 1,
           entries: [{ track: cachedTrack }],
           currentIndex: 0,
-          shuffle: false,
           repeatAll: false,
           volume: { percent: 100, ready: false },
           positionSeconds: 42,

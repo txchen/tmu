@@ -243,7 +243,6 @@ export class AppCoordinator {
     const record = await this.appPreferencesPersistence.load();
     this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
 
-    if (record?.shuffle !== undefined) this.queue.setShuffle(record.shuffle);
     if (record?.repeatAll !== undefined) this.queue.setRepeatAll(record.repeatAll);
     if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
 
@@ -253,7 +252,6 @@ export class AppCoordinator {
   private async persistPlaybackPreferences(): Promise<void> {
     const queue = this.queue.snapshot();
     await this.persistAppPreferences({
-      shuffle: queue.shuffle,
       repeatAll: queue.repeatAll,
       volume: this.appState.volume,
     });
@@ -394,7 +392,7 @@ export class AppCoordinator {
         return;
       case "next-track": await this.nextTrack(); return;
       case "previous-track": await this.previousTrack(); return;
-      case "toggle-shuffle": await this.toggleShuffle(); return;
+      case "randomize-queue": this.randomizeQueue(); return;
       case "toggle-repeat-all": await this.toggleRepeatAll(); return;
       case "seek": await this.seekBy(intent.seconds); return;
       case "adjust-volume":
@@ -668,11 +666,10 @@ export class AppCoordinator {
     await this.playQueueEntry(entry);
   }
 
-  private async toggleShuffle(): Promise<void> {
-    this.queue.setShuffle(!this.queue.snapshot().shuffle);
-    this.appState.lastEvent = this.queue.snapshot().shuffle ? "shuffle on" : "shuffle off";
+  private randomizeQueue(): void {
+    this.queue.randomizeUpcoming();
+    this.appState.lastEvent = "randomized upcoming Queue";
     this.syncQueueState();
-    await this.persistPlaybackPreferences();
   }
 
   private async toggleRepeatAll(): Promise<void> {
