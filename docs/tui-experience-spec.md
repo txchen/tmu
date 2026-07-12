@@ -24,7 +24,7 @@ Transient operation feedback appears in a single-line semantic status banner abo
 
 Playback shows the shared Queue in a focusable pane and the selected Queue Track in a separate, non-focusable preview. At medium and wide widths they use an approximately 2:1 left/right split; at narrow widths the preview stacks below the Queue. The preview is absent when no Track is selected and never substitutes for Current Track playback state.
 
-Queue rows show a playback/status symbol, title, and duration. Current Track also has an explicit `CURRENT` badge so stopped or paused state remains distinguishable from selection. Channel and other metadata stay in the preview.
+Queue rows show a playback/status symbol, title, and duration. The leading symbol identifies playing, paused, stopped, unavailable, and non-current Tracks without a trailing Current Track badge; an unavailable Current Track uses `⚠`, distinct from the `!` on other unavailable Tracks. Channel and other metadata stay in the preview.
 
 In the Queue, Enter invokes Play Selected: it makes the selected existing Queue Track Current and starts it from the beginning without changing Queue order. Space toggles play/pause for Current; `N` moves the selected Track to Play Next; `J`/`K` moves it down/up with selection following; `x` removes it without confirmation because cached media is unaffected; `C` opens Clear Queue confirmation; and `Z` invokes one-shot Randomize Queue. Removing Current stops playback and clears the Current designation.
 

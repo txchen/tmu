@@ -87,10 +87,10 @@ describe("TMU top-level surface smoke", () => {
   });
 
   test.each([
-    ["paused", "Ⅱ PAUSED"],
-    ["stopped", "■ STOPPED"],
-    ["error", "! ERROR"],
-  ] as const)("gives %s playback a non-color status cue", async (status, cue) => {
+    ["paused", "Ⅱ PAUSED", "Ⅱ"],
+    ["stopped", "■ STOPPED", "■"],
+    ["error", "! ERROR", "⚠"],
+  ] as const)("gives %s playback a non-color status cue", async (status, cue, queueCue) => {
     const track = cachedTrack("status", "Status Track");
     const queue = new MemoryQueue();
     queue.enqueue(track);
@@ -103,6 +103,8 @@ describe("TMU top-level surface smoke", () => {
     const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
     expect(terminal.lastFrame()).toContain(cue);
+    expect(terminal.lastFrame()).toContain(`${queueCue} Status Track`);
+    expect(terminal.lastFrame()).not.toContain("CURRENT");
     expect(terminal.lastFrame()).toContain("0:42");
     expect(terminal.lastFrame()).not.toContain("0:42/");
   });
@@ -633,7 +635,8 @@ describe("TMU top-level surface smoke", () => {
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 28 });
     let frame = terminal.lastFrame()!;
     expect(frame).toContain("Queue · 2 Tracks · 2/2");
-    expect(frame).toContain("First · 1:05 · CURRENT");
+    expect(frame).toContain("▶ First · 1:05");
+    expect(frame).not.toContain("CURRENT");
     expect(frame).toContain("Selected Song · 4:05");
     expect(frame).toContain("Title: Selected Song");
     expect(frame).toContain("Channel: The Channel");

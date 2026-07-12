@@ -487,11 +487,11 @@ function playbackView(
     : entries.map((entry, index) => {
       const selected = index === uiState.selectedQueueIndex ? "›" : " ";
       const status = entry.availability.status === "unavailable"
-        ? "!"
+        ? index === currentIndex ? "⚠" : "!"
         : index === currentIndex
           ? snapshot.appState.playback.status === "playing" ? "▶" : snapshot.appState.playback.status === "paused" ? "Ⅱ" : "■"
           : "·";
-      return `${selected} ${status} ${entry.track.title} · ${formatDuration(entry.track.durationSeconds)}${index === currentIndex ? " · CURRENT" : ""}`;
+      return `${selected} ${status} ${entry.track.title} · ${formatDuration(entry.track.durationSeconds)}`;
     });
   const position = entries.length ? uiState.selectedQueueIndex + 1 : 0;
   const queue = h(Box, {
