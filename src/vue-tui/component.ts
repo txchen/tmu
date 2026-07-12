@@ -605,23 +605,46 @@ function libraryInspector(result: LibraryResult, noColor: boolean) {
 
 function downloaderView(snapshot: PublicationSnapshot, noColor: boolean) {
   const downloads = snapshot.appState.downloads;
+  const batchCount = downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0);
+  const selectedIndex = snapshot.uiState.downloader.selectedBatchIndex;
   const rows = [
-    ...(downloads.activeBatch ? [h(Text, { dimColor: snapshot.uiState.downloader.inputFocused && snapshot.uiState.downloader.selectedBatchIndex === 0, inverse: !snapshot.uiState.downloader.inputFocused && snapshot.uiState.downloader.selectedBatchIndex === 0 }, () =>
-      `${snapshot.uiState.downloader.selectedBatchIndex === 0 ? "› " : "  "}Active #${downloads.activeBatch!.id}${downloads.activeBatch!.activeTrack === undefined ? "" : ` Track ${downloads.activeBatch!.activeTrack.index + 1}${downloads.activeBatch!.activeTrack.title ? ` · ${downloads.activeBatch!.activeTrack.title}` : ""}`}: ${downloads.activeBatch!.sourceUrl}`)] : []),
+    ...(downloads.activeBatch ? [h(Text, { wrap: "truncate-end", dimColor: snapshot.uiState.downloader.inputFocused && selectedIndex === 0, inverse: !snapshot.uiState.downloader.inputFocused && selectedIndex === 0 }, () => {
+      const batch = downloads.activeBatch!;
+      const position = batch.activeTrack ? `${batch.activeTrack.index + 1}/${batch.itemCount}` : `0/${batch.itemCount}`;
+      const progress = progressIndicator(batch.progressPercent);
+      const source = truncateMiddle(batch.sourceUrl, 28);
+      return `${selectedIndex === 0 ? "› " : "  "}ACTIVE #${batch.id} · ${position} · ${progress} · ${batch.activeTrack?.title ?? source}${batch.activeTrack?.title ? ` · ${source}` : ""}`;
+    })] : []),
     ...downloads.pendingBatches.map((batch, index) => { const row = index + (downloads.activeBatch ? 1 : 0); return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex, dimColor: snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex }, () =>
-      `${row === snapshot.uiState.downloader.selectedBatchIndex ? "›" : " "} Pending #${batch.id}: ${batch.sourceUrl}`); }),
+      `${row === selectedIndex ? "› " : "  "}PENDING #${batch.id} · ${batch.itemCount} ${batch.itemCount === 1 ? "item" : "items"} · ${truncateMiddle(batch.sourceUrl, 36)}`); }),
     ...downloads.summaries.map((summary, index) => { const row = index + downloads.pendingBatches.length + (downloads.activeBatch ? 1 : 0); return h(Text, { wrap: "truncate-end", inverse: !snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex, dimColor: snapshot.uiState.downloader.inputFocused && row === snapshot.uiState.downloader.selectedBatchIndex }, () =>
-      `${row === snapshot.uiState.downloader.selectedBatchIndex ? "› " : "  "}Summary #${summary.id}: ${summary.downloaded} downloaded · ${summary.alreadyCached} cached · ${summary.failed} failed · ${summary.cancelled} cancelled`); }),
+      `${row === selectedIndex ? "› " : "  "}COMPLETED #${summary.id} · ${summary.downloaded} downloaded · ${summary.alreadyCached} cached · ${summary.failed} failed · ${summary.cancelled} cancelled · ${summary.sourceUrl}`); }),
   ];
+  const selectedSummaryIndex = selectedIndex - downloads.pendingBatches.length - (downloads.activeBatch ? 1 : 0);
+  const selectedFailure = !snapshot.uiState.downloader.inputFocused
+    ? downloads.summaries[selectedSummaryIndex]?.failures[0]
+    : undefined;
   return h(Box, { flexDirection: "column", flexGrow: 1, gap: 1 }, () => [
     h(Box, { borderStyle: "round", borderColor: snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.downloader.inputFocused, paddingX: 1 }, () => h(Text, { bold: snapshot.uiState.downloader.inputFocused }, () => `URL Input ${snapshot.uiState.downloader.inputFocused ? "│" : ""} ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`)),
     h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
-    h(Text, { bold: !snapshot.uiState.downloader.inputFocused }, () => `Pipeline · ${downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0)} batches`),
+    h(Text, { bold: !snapshot.uiState.downloader.inputFocused }, () => `Pipeline · ${batchCount} ${batchCount === 1 ? "batch" : "batches"} · ${batchCount ? selectedIndex + 1 : 0}/${batchCount}`),
     rows.length === 0 ? h(Text, { dimColor: true }, () => downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "Paste a YouTube URL above to begin.") : null,
-    ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
     ...rows.slice(snapshot.uiState.downloader.scroll, snapshot.uiState.downloader.scroll + 10),
+    ...(selectedFailure ? [h(Text, { color: noColor ? undefined : "red", wrap: "truncate-end" }, () => `Failure: ${selectedFailure.title ?? `Item ${selectedFailure.index + 1}`} — ${selectedFailure.message}`)] : []),
     ]),
   ]);
+}
+
+function progressIndicator(percent: number | undefined): string {
+  const rounded = Math.round(percent ?? 0);
+  const filled = Math.round(rounded / 10);
+  return `[${"█".repeat(filled)}${"░".repeat(10 - filled)}] ${rounded}%`;
+}
+
+function truncateMiddle(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const leftLength = Math.ceil((maxLength - 1) / 2);
+  return `${value.slice(0, leftLength)}…${value.slice(-(maxLength - leftLength - 1))}`;
 }
 
 function confirmationModal(confirmation: ConfirmationDescriptor, ui: UiState, noColor: boolean) {

@@ -515,7 +515,10 @@ describe("TMU top-level surface smoke", () => {
       appState: createInitialAppState(base.appState.providers), uiState: createInitialUiState(),
       queue, player: new NoopPlayer(),
       prepareDownloadBatch: async (url) => ({
-        kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] },
+        kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [{
+          kind: "track", url,
+          metadata: { extractor: "youtube", id: "One00000001", title: "First Track", uploader: "Artist" },
+        }] },
       }),
       executeDownloadBatch: async (batch, options) => {
         if (batch.sourceUrl.endsWith("/one")) {
@@ -524,6 +527,7 @@ describe("TMU top-level surface smoke", () => {
             url: batch.sourceUrl,
             metadata: { extractor: "youtube", id: "One00000001", title: "First Track", uploader: "Artist" },
           });
+          options.onProgress?.(0, "[download]  42.5% of 3.00MiB at 1.00MiB/s");
           await waitFor(() => options.signal?.aborted === true);
           return { downloaded: 0, alreadyCached: 0, failed: 0, cancelled: 1, failures: [] };
         }
@@ -535,14 +539,15 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/one");
     await terminal.stdin.write("\r");
-    await waitFor(() => coordinator.appState.downloads.activeBatch !== undefined);
-    expect(terminal.lastFrame()).toContain("Active #1 Track 1 · First Track: https://youtu.be/one");
+    await waitFor(() => coordinator.appState.downloads.activeBatch?.progressPercent === 42.5);
+    expect(terminal.lastFrame()).toContain("ACTIVE #1 · 1/1");
+    expect(terminal.lastFrame()).toContain("43%");
     expect(coordinator.uiState.downloader.urlInput).toBe("");
 
     await terminal.stdin.write("https://youtu.be/two");
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 1);
-    expect(terminal.lastFrame()).toContain("Pending #2: https://youtu.be/two");
+    expect(terminal.lastFrame()).toContain("PENDING #2 · 1 item · https://youtu.be/two");
     await terminal.stdin.write("https://youtu.be/three");
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 2);
@@ -563,6 +568,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("x");
     await terminal.stdin.write("y");
     expect(coordinator.appState.downloads.pendingBatches).toEqual([]);
+    expect(coordinator.uiState.downloader.selectedBatchIndex).toBe(0);
 
     await terminal.stdin.write("g");
     await terminal.stdin.write("g");
@@ -570,8 +576,70 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Cancel Download Batch #1");
     await terminal.stdin.write("y");
     await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
-    expect(terminal.lastFrame()).toContain("Summary #1: 0 downloaded · 0 cached · 0 failed · 1 cancelled");
+    expect(terminal.lastFrame()).toContain("COMPLETED #1 · 0 downloaded · 0 cached · 0 failed · 1 cancelled");
     expect(coordinator.appState.queue).toEqual(queueBefore);
+  });
+
+  test("Download Pipeline shows selected failure detail, position, empty guidance, and preserves input focus cycling", async () => {
+    const appState = createInitialAppState({});
+    appState.downloads.summaries = [{
+      id: 9,
+      sourceUrl: "https://youtube.com/watch?v=a-url-that-is-deliberately-long-enough-to-truncate-before-the-status-columns",
+      downloaded: 1,
+      alreadyCached: 0,
+      failed: 1,
+      cancelled: 0,
+      failures: [{ index: 1, title: "Unavailable Track", message: "Video unavailable" }],
+    }];
+    const uiState = createInitialUiState();
+    uiState.activeTab = "downloader";
+    const coordinator = new AppCoordinator({ appState, uiState, queue: new MemoryQueue(), player: new NoopPlayer() });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 90, rows: 24 });
+
+    expect(terminal.lastFrame()).toContain("Pipeline · 1 batch · 1/1");
+    expect(terminal.lastFrame()).toContain("COMPLETED #9 · 1 downloaded · 0 cached · 1 failed · 0 cancelled");
+    expect(terminal.lastFrame()).not.toContain(appState.downloads.summaries[0]!.sourceUrl);
+    expect(terminal.lastFrame()).not.toContain("Video unavailable");
+    await terminal.stdin.write("\t");
+    expect(coordinator.uiState.downloader.inputFocused).toBe(false);
+    expect(terminal.lastFrame()).toContain("Failure: Unavailable Track — Video unavailable");
+    await terminal.stdin.write("x");
+    expect(coordinator.uiState.pendingConfirmation).toBeNull();
+    await terminal.stdin.write("c");
+    expect(coordinator.uiState.pendingConfirmation).toBeNull();
+    await terminal.stdin.write("\t");
+    expect(coordinator.uiState.downloader.inputFocused).toBe(true);
+  });
+
+  test("Download Pipeline empty state guides URL submission and Shift+Tab focuses the Pipeline", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 90, rows: 24 });
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
+    expect(terminal.lastFrame()).toContain("Pipeline · 0 batches · 0/0");
+    expect(terminal.lastFrame()).toContain("Paste a YouTube URL above to begin.");
+    await terminal.stdin.write("\x1b[Z");
+    expect(coordinator.uiState.downloader.inputFocused).toBe(false);
+  });
+
+  test("Download Pipeline preserves active progress and pending counts beside long URLs at narrow width", async () => {
+    const appState = createInitialAppState({});
+    const longUrl = "https://youtube.com/watch?v=a-url-that-would-otherwise-consume-the-whole-row";
+    appState.downloads.activeBatch = {
+      id: 4, sourceUrl: longUrl, kind: "playlist", itemCount: 12, progressPercent: 67,
+      activeTrack: { index: 3, title: "A Track With A Very Long Display Title" },
+    };
+    appState.downloads.active = true;
+    appState.downloads.pendingBatches = [{ id: 5, sourceUrl: longUrl, kind: "playlist", itemCount: 24 }];
+    const uiState = createInitialUiState();
+    uiState.activeTab = "downloader";
+    uiState.downloader.inputFocused = false;
+    const coordinator = new AppCoordinator({ appState, uiState, queue: new MemoryQueue(), player: new NoopPlayer() });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+
+    expect(terminal.lastFrame()).toContain("ACTIVE #4 · 4/12 · [███████░░░] 67%");
+    expect(terminal.lastFrame()).toContain("PENDING #5 · 24 items");
+    expect(terminal.lastFrame()).not.toContain(longUrl);
   });
 
   test("YouTube Downloader confirms playlists and clears input only after acceptance", async () => {
@@ -584,10 +652,12 @@ describe("TMU top-level surface smoke", () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
       queue: new MemoryQueue(), player: new NoopPlayer(),
-      prepareDownloadBatch: async () => ({
-        kind: "confirmation-required", confirmation: { title: "Road Trip", itemCount: 12 },
-        confirm: () => batch, cancel: () => ({ kind: "cancelled" }),
-      }),
+      prepareDownloadBatch: async (input) => input.includes("invalid")
+        ? { kind: "rejected", message: "YouTube Downloader rejects non-YouTube URLs" }
+        : {
+            kind: "confirmation-required", confirmation: { title: "Road Trip", itemCount: 12 },
+            confirm: () => batch, cancel: () => ({ kind: "cancelled" }),
+          },
       executeDownloadBatch: async () => ({
         downloaded: 2, alreadyCached: 1, failed: 0, cancelled: 0, failures: [],
       }),
@@ -595,6 +665,12 @@ describe("TMU top-level surface smoke", () => {
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("]");
     await terminal.stdin.write("]");
+    const invalidUrl = "https://example.com/invalid";
+    await terminal.stdin.write(invalidUrl);
+    await terminal.stdin.write("\r");
+    await waitFor(() => coordinator.appState.lastEvent.includes("rejects"));
+    expect(coordinator.uiState.downloader.urlInput).toBe(invalidUrl);
+    coordinator.dispatchUi({ type: "setDownloaderInput", value: "" });
     await terminal.stdin.write(url);
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
@@ -607,7 +683,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("y");
     await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
     expect(coordinator.uiState.downloader.urlInput).toBe("");
-    expect(terminal.lastFrame()).toContain("Summary #2: 2 downloaded · 1 cached · 0 failed · 0 cancelled");
+    expect(terminal.lastFrame()).toContain("COMPLETED #3 · 2 downloaded · 1 cached · 0 failed · 0 cancelled");
   });
 
   test("Playback keeps unavailable Tracks visible with their reason", async () => {

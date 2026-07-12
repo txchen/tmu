@@ -879,7 +879,7 @@ export class AppCoordinator {
       cancelled: summary.cancelled,
     };
     this.appState.downloads.summary = categoricalSummary;
-    this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary });
+    this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary, failures: summary.failures });
     this.recordOperationFeedback(
       summary.failed > 0 || summary.cancelled > 0 ? "warning" : "success",
       `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`,
@@ -1004,6 +1004,7 @@ export class AppCoordinator {
         id: active.id,
         sourceUrl: active.batch.sourceUrl,
         kind: active.batch.kind,
+        itemCount: active.batch.entries.length,
       };
     } else {
       delete this.appState.downloads.activeBatch;
@@ -1012,7 +1013,16 @@ export class AppCoordinator {
       id,
       sourceUrl: batch.sourceUrl,
       kind: batch.kind,
+      itemCount: batch.entries.length,
     }));
+    const pipelineCount = this.appState.downloads.pendingBatches.length
+      + this.appState.downloads.summaries.length
+      + (this.appState.downloads.activeBatch ? 1 : 0);
+    this.uiStateStore.dispatch({
+      type: "setDownloaderBatchSelection",
+      index: this.uiState.downloader.selectedBatchIndex,
+      resultCount: pipelineCount,
+    });
   }
 
   private recordActiveDownloadTrack(entryIndex: number, entry: DownloadBatchEntry): void {
@@ -1026,6 +1036,10 @@ export class AppCoordinator {
   private recordYouTubeDownloadProgress(_entryIndex: number, line: string): void {
     const lines = [...this.appState.downloads.lines, line].slice(-4);
     this.appState.downloads.lines = lines;
+    const percent = line.match(/(?:^|\s)(\d+(?:\.\d+)?)%/)?.[1];
+    if (percent && this.appState.downloads.activeBatch) {
+      this.appState.downloads.activeBatch.progressPercent = Math.max(0, Math.min(100, Number(percent)));
+    }
     this.notifyStateChanged();
   }
 

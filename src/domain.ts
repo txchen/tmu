@@ -169,9 +169,11 @@ export type AppState = {
       id: number;
       sourceUrl: string;
       kind: "single" | "playlist";
+      itemCount: number;
+      progressPercent?: number;
       activeTrack?: { index: number; title?: string; stableId?: string };
     };
-    pendingBatches: Array<{ id: number; sourceUrl: string; kind: "single" | "playlist" }>;
+    pendingBatches: Array<{ id: number; sourceUrl: string; kind: "single" | "playlist"; itemCount: number }>;
     summaries: Array<{
       id: number;
       sourceUrl: string;
@@ -179,6 +181,7 @@ export type AppState = {
       alreadyCached: number;
       failed: number;
       cancelled: number;
+      failures: ReadonlyArray<{ index: number; title?: string; message: string }>;
     }>;
     quitConfirmationRequired: boolean;
     preparingSubmissions: number;
