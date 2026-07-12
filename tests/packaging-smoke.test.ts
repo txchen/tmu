@@ -37,11 +37,15 @@ afterAll(async () => {
 describe("Node npm package", () => {
   test("builds one executable ESM CLI bundle with a source map", async () => {
     const pkg = JSON.parse(await readFile("package.json", "utf8")) as {
+      name: string;
       bin: Record<string, string>; engines: Record<string, string>;
+      publishConfig: { access: string };
       dependencies: Record<string, string>; devDependencies: Record<string, string>;
     };
+    expect(pkg.name).toBe("@txchen/tmu");
     expect(pkg.bin).toEqual({ tmu: "dist/cli.js" });
     expect(pkg.engines).toEqual({ node: ">=24.0.0" });
+    expect(pkg.publishConfig).toEqual({ access: "public" });
     expect(pkg.dependencies).toMatchObject({ "@vue-tui/runtime": "0.0.3", vue: "3.5.39" });
     expect(pkg.devDependencies).toHaveProperty("tsdown");
     expect(packageFiles).toContain("package/dist/cli.js");
