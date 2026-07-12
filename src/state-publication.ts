@@ -158,6 +158,12 @@ export class StatePublicationGate {
     const previousFingerprint = this.observedFingerprint;
     this.observedFingerprint = candidateFingerprint;
 
+    if (cause === "input") {
+      if (candidateFingerprint.full !== this.latestFingerprint?.full) {
+        this.publish(candidate, candidateFingerprint);
+      }
+      return;
+    }
     if (!previousFingerprint) {
       this.publish(candidate, candidateFingerprint);
       return;
@@ -170,10 +176,6 @@ export class StatePublicationGate {
 
     const progressKind = progressOnlyChange(previousFingerprint, candidateFingerprint);
     if (!progressKind) {
-      this.publish(candidate, candidateFingerprint);
-      return;
-    }
-    if (cause === "input") {
       this.publish(candidate, candidateFingerprint);
       return;
     }

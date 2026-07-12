@@ -180,6 +180,10 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("l");
     expect(terminal.lastFrame()).toContain("0:07/1:40");
     expect(terminal.lastFrame()).toContain("[▊░░░░░░░░░]");
+
+    await terminal.stdin.write("l");
+    expect(terminal.lastFrame()).toContain("0:12/1:40");
+    expect(terminal.lastFrame()).toContain("[█▎░░░░░░░░]");
   });
 
   test("removes numeric tabs and command palette while help suspends actions", async () => {
