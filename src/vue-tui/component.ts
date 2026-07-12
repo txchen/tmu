@@ -434,12 +434,8 @@ function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
 
 function progressBar(positionSeconds: number, durationSeconds: number): string {
   const width = 10;
-  const progressCells = Math.max(0, Math.min(width, (positionSeconds / durationSeconds) * width));
-  const filled = Math.floor(progressCells);
-  const partialIndex = Math.round((progressCells - filled) * 8);
-  const partial = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"][partialIndex] ?? "";
-  const played = partialIndex === 8 ? "█".repeat(filled + 1) : `${"█".repeat(filled)}${partial}`;
-  return `[${played}${"░".repeat(width - [...played].length)}]`;
+  const filled = Math.max(0, Math.min(width, Math.floor((positionSeconds / durationSeconds) * width)));
+  return `[${"=".repeat(filled)}${"-".repeat(width - filled)}]`;
 }
 
 function tabHeader(active: UiState["activeTab"], noColor: boolean) {

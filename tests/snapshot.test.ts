@@ -207,19 +207,30 @@ describe("Last Queue Snapshot persistence", () => {
   });
 
   test("runtime creation does not check helpers eagerly", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-lazy-dependencies-"));
+    const configPath = join(dir, "config.json");
     const checked: string[] = [];
-    const runtime = await createTmuRuntime({
-      startPlayer: false,
-      dependencyRunner: async ({ helper }) => {
-        checked.push(helper);
-        return { exitCode: 0, stdout: `${helper} 1.0\n`, stderr: "" };
-      },
-    });
+    let runtime: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
 
     try {
+      await writeFile(configPath, JSON.stringify({
+        persistence: {
+          lastQueueSnapshotPath: join(dir, "last-queue.json"),
+          appPreferencesPath: join(dir, "preferences.json"),
+        },
+      }));
+      runtime = await createTmuRuntime({
+        configPath,
+        startPlayer: false,
+        dependencyRunner: async ({ helper }) => {
+          checked.push(helper);
+          return { exitCode: 0, stdout: `${helper} 1.0\n`, stderr: "" };
+        },
+      });
       expect(checked).toEqual([]);
     } finally {
-      await runtime.coordinator.teardown();
+      await runtime?.coordinator.teardown();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
@@ -248,6 +259,35 @@ describe("Last Queue Snapshot persistence", () => {
         status: "paused", positionSeconds: 42, currentTrackIdentity: snapshot().entries[0]?.track.identity,
       });
       expect(runtime.coordinator.appState.volume).toEqual({ percent: 88, ready: true });
+    } finally {
+      await runtime?.coordinator.teardown();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stored volume preference takes precedence over the queue snapshot volume", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-volume-preference-"));
+    const configPath = join(dir, "config.json");
+    const snapshotPath = join(dir, "last-queue.json");
+    const preferencesPath = join(dir, "preferences.json");
+    let runtime: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
+    try {
+      await writeFile(configPath, JSON.stringify({
+        persistence: { lastQueueSnapshotPath: snapshotPath, appPreferencesPath: preferencesPath },
+      }));
+      await new FileLastQueueSnapshotPersistence(snapshotPath).save({
+        ...snapshot(), volume: { percent: 100, ready: false },
+      });
+      await writeFile(preferencesPath, JSON.stringify({
+        version: 1, volume: { percent: 37, ready: true },
+      }));
+
+      runtime = await createTmuRuntime({ configPath, startPlayer: false });
+      await runtime.coordinator.start();
+
+      expect(runtime.coordinator.appState.volume).toEqual({ percent: 37, ready: true });
+      await runtime.coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: 5 });
+      expect(runtime.coordinator.appState.volume).toEqual({ percent: 42, ready: true });
     } finally {
       await runtime?.coordinator.teardown();
       await rm(dir, { recursive: true, force: true });

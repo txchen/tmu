@@ -140,8 +140,8 @@ export class AppCoordinator {
   }
 
   async start(): Promise<void> {
-    await this.restoreAppPreferences();
-    await this.restoreQueueSnapshotIfPresent();
+    const preferences = await this.restoreAppPreferences();
+    await this.restoreQueueSnapshotIfPresent(preferences?.volume);
     this.syncQueueState();
     this.notifyStateChanged();
   }
@@ -239,7 +239,7 @@ export class AppCoordinator {
     return () => this.stateListeners.delete(listener);
   }
 
-  private async restoreAppPreferences(): Promise<void> {
+  private async restoreAppPreferences(): Promise<AppPreferencesRecord | null> {
     const record = await this.appPreferencesPersistence.load();
     this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
 
@@ -247,6 +247,7 @@ export class AppCoordinator {
     if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
 
     this.syncQueueState();
+    return record;
   }
 
   private async persistPlaybackPreferences(): Promise<void> {
@@ -272,13 +273,13 @@ export class AppCoordinator {
     }
   }
 
-  private async restoreQueueSnapshotIfPresent(): Promise<void> {
+  private async restoreQueueSnapshotIfPresent(preferredVolume?: AppPreferencesRecord["volume"]): Promise<void> {
     const snapshot = await this.snapshotPersistence.load();
     this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
     this.snapshotSaveBlockedUntilMeaningfulChange = this.snapshotPersistence.wasLastLoadQuarantined?.() ?? false;
     if (!snapshot) return;
 
-    await this.applyLastQueueSnapshot(snapshot);
+    await this.applyLastQueueSnapshot(snapshot, preferredVolume);
   }
 
   private recordPersistenceRecoveryMessages(persistence: { drainRecoveryMessages?(): string[] }): void {
@@ -287,7 +288,10 @@ export class AppCoordinator {
     }
   }
 
-  private async applyLastQueueSnapshot(snapshot: LastQueueSnapshot): Promise<void> {
+  private async applyLastQueueSnapshot(
+    snapshot: LastQueueSnapshot,
+    preferredVolume?: AppPreferencesRecord["volume"],
+  ): Promise<void> {
     this.queue.restore({
       ...snapshot,
       entries: snapshot.entries.map((entry) => ({
@@ -296,9 +300,10 @@ export class AppCoordinator {
       })),
     });
     await this.refreshRestoredProviderAvailability();
-    this.appState.volume = snapshot.volume;
-    if (snapshot.volume.ready) {
-      await this.runPlayerCommand(() => this.player.setVolume(snapshot.volume.percent));
+    const volume = preferredVolume ?? snapshot.volume;
+    this.appState.volume = { ...volume };
+    if (volume.ready) {
+      await this.runPlayerCommand(() => this.player.setVolume(volume.percent));
     }
     const current = this.queue.entries[this.queue.currentIndex];
     this.appState.playback = current
