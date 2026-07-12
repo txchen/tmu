@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 export type ExternalUrlOpener = (url: string) => Promise<void>;
 
 export function youtubeTrackUrl(videoId: string): string {
-  return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=0`;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
 export const openExternalUrl: ExternalUrlOpener = async (url) => {
