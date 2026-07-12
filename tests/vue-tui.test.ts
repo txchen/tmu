@@ -869,7 +869,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     await terminal.stdin.write("O");
 
-    expect(opened).toEqual(["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]);
+    expect(opened).toEqual(["https://www.youtube.com/embed/dQw4w9WgXcQ?autoplay=0"]);
     await terminal.stdin.write("\t");
     await terminal.stdin.write("O");
     expect(coordinator.uiState.library.query).toBe("O");
