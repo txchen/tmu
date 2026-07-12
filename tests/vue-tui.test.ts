@@ -240,27 +240,49 @@ describe("TMU top-level surface smoke", () => {
     }
   });
 
-  test("keeps question marks in focused Library input and scopes Library Shortcut Help", async () => {
+  test.each([
+    { columns: 120, rows: 30, leaveKey: "Tab", leaveInput: "\t" },
+    { columns: 120, rows: 30, leaveKey: "Esc", leaveInput: "\x1b" },
+    { columns: 60, rows: 16, leaveKey: "Tab", leaveInput: "\t" },
+    { columns: 60, rows: 16, leaveKey: "Esc", leaveInput: "\x1b" },
+  ])("documents complete Library shortcuts after $leaveKey at $columns×$rows", async ({ columns, rows, leaveInput }) => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
 
     await terminal.stdin.write("]");
     await terminal.stdin.write("\t");
     await terminal.stdin.write("why?");
     expect(coordinator.uiState.library.query).toBe("why?");
     expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
-    await terminal.stdin.write("\x1b");
+    expect(terminal.lastFrame()).not.toContain("? Help ·");
+    await terminal.stdin.write(leaveInput);
+    const before = { ...coordinator.uiState.library };
     await terminal.stdin.write("?");
+    expect(coordinator.uiState.overlays.at(-1)?.scroll).toBe(0);
     expect(terminal.lastFrame()).toContain("Library Shortcuts");
     expect(terminal.lastFrame()).toContain("SEARCH INPUT");
-    expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
+    expect(terminal.lastFrame()).toContain("Type");
+    expect(terminal.lastFrame()).not.toContain("Type (including ?)");
+    expect(terminal.lastFrame()).toContain("Backspace/Delete");
     expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
+    expect(terminal.lastFrame()).not.toContain("DOWNLOAD PIPELINE");
+    if (rows < 30) await terminal.stdin.write("\x1b[6~");
+    expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
+    expect(terminal.lastFrame()).toContain("Play Now");
+    expect(terminal.lastFrame()).toContain("Play Next");
+    if (rows < 30) await terminal.stdin.write("\x1b[6~");
+    expect(terminal.lastFrame()).toContain("Add to Queue");
+    expect(terminal.lastFrame()).toContain("Delete Track (confirm)");
+    expect(terminal.lastFrame()).not.toContain("Play Selected");
+    expect(terminal.lastFrame()).not.toContain("Cancel active batch");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Printable keys");
     expect(terminal.lastFrame()).toContain("Captured by text input");
     expect(terminal.lastFrame()).toContain("[/], Ctrl-C");
-    expect(terminal.lastFrame()).toContain("Remain global during input");
+    expect(terminal.lastFrame()).toContain("Remain global during");
+    expect(terminal.lastFrame()).toContain("input");
     await terminal.stdin.write("q");
+    expect(coordinator.uiState.library).toEqual(before);
   });
 
   test.each([
@@ -735,6 +757,15 @@ describe("TMU top-level surface smoke", () => {
     expect(initial).toContain("d Clean · / Search");
     expect(initial).not.toContain("Enter Play · a Add");
     expect(initial.split("\n").find((line) => line.includes("Library ·"))).toContain("Incomplete Cache Entry");
+    const beforeHelp = { ...coordinator.uiState.library };
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Clean incomplete Cache");
+    expect(terminal.lastFrame()).toContain("Entry");
+    expect(terminal.lastFrame()).not.toContain("Play Now");
+    expect(terminal.lastFrame()).not.toContain("Play Next");
+    expect(terminal.lastFrame()).not.toContain("Add to Queue");
+    await terminal.stdin.write("q");
+    expect(coordinator.uiState.library).toEqual(beforeHelp);
     await terminal.terminal.resize(100, 24);
     await waitFor(() => coordinator.uiState.terminal.columns === 100);
     expect(coordinator.uiState.terminal.tier).toBe("medium");

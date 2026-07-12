@@ -768,7 +768,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
     {
       title: "SEARCH INPUT",
       rows: [
-        ["Type (including ?)", "Edit Cache Search"], ["Backspace/Delete", "Delete character"],
+        ["Type", "Edit Cache Search"], ["Backspace/Delete", "Delete character"],
         ["Enter", "Show Results"], ["Esc", "Leave input"], ["Tab/Shift+Tab", "Change focus"],
       ],
     },
