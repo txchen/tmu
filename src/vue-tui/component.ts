@@ -513,7 +513,7 @@ function playbackView(
     flexDirection: "column", flexGrow: 1, width: uiState.terminal.tier === "narrow" ? "100%" : "34%",
     borderStyle: "round", borderDimColor: true, paddingX: 1,
   }, () => [
-    h(Text, { bold: true }, () => "Selected Track"),
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => "Selected Track"),
     h(Text, () => `Title: ${selected.track.title}`),
     ...(selected.track.artist ? [h(Text, () => `Channel: ${selected.track.artist}`)] : []),
     h(Text, () => `Duration: ${formatDuration(selected.track.durationSeconds)}`),
@@ -556,7 +556,7 @@ function libraryView(snapshot: PublicationSnapshot, noColor: boolean, resultsLis
     flexDirection: "column", flexGrow: 2, width: snapshot.uiState.terminal.tier === "wide" ? "66%" : "100%",
     borderStyle: "round", borderColor: !snapshot.uiState.library.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1,
   }, () => [
-    h(Text, { bold: !snapshot.uiState.library.inputFocused }, () => `Library · ${resultsList.length} results · ${resultsList.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${resultsList.length}`),
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Library · ${resultsList.length} results · ${resultsList.length ? snapshot.uiState.library.selectedIndex + 1 : 0}/${resultsList.length}`),
     ...resultsList.slice(snapshot.uiState.library.scroll, snapshot.uiState.library.scroll + 10).map((result, visibleIndex) => { const index = visibleIndex + snapshot.uiState.library.scroll; const selected = index === snapshot.uiState.library.selectedIndex; return h(Text, {
       wrap: "truncate-end", inverse: !snapshot.uiState.library.inputFocused && selected,
       dimColor: snapshot.uiState.library.inputFocused && selected,
@@ -620,7 +620,7 @@ function libraryInspector(result: LibraryResult, noColor: boolean) {
   return h(Box, {
     flexDirection: "column", width: "34%", borderStyle: "round", borderDimColor: true, paddingX: 1, flexGrow: 1,
   }, () => [
-    h(Text, { bold: true }, () => result.kind === "track" ? "Selected Track" : "Incomplete Cache Entry"),
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => result.kind === "track" ? "Selected Track" : "Incomplete Cache Entry"),
     h(Text, () => `Title: ${title}`),
     ...(channel ? [h(Text, () => `Channel: ${channel}`)] : []),
     h(Text, () => `Duration: ${formatDuration(duration)}`),
