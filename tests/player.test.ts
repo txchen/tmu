@@ -33,6 +33,7 @@ class FakeProcessHandle implements MpvProcessHandle {
 
 class FakeIpcClient implements MpvIpcClient {
   readonly sent: unknown[] = [];
+  effectivePaused = false;
   closed = false;
   autoReply = true;
   nextError: string | null = null;
@@ -43,6 +44,9 @@ class FakeIpcClient implements MpvIpcClient {
   writeLine(line: string): void {
     const message = JSON.parse(line) as { request_id?: number; command?: unknown[] };
     this.sent.push(message);
+    if (message.command?.[0] === "set_property" && message.command[1] === "pause") {
+      this.effectivePaused = message.command[2] === true;
+    }
     this.onCommand?.(message.command ?? []);
     if (!this.autoReply || typeof message.request_id !== "number") return;
 
@@ -355,6 +359,43 @@ describe("MpvPlayer", () => {
       eof: true,
       idle: true,
     });
+  });
+
+  test("keeps replacement playback active when mpv reports the replaced file stopping", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+
+    await player.load({ kind: "file", path: "/music/second.flac" });
+    await player.load({ kind: "file", path: "/music/first.flac" });
+    adapter.ipc.emit({ event: "end-file", reason: "stop" });
+
+    expect(player.playback).toMatchObject({
+      status: "playing",
+      idle: false,
+      eof: false,
+    });
+  });
+
+  test("unpauses mpv when replacing a paused Track", async () => {
+    const adapter = new FakeProcessAdapter();
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+
+    await player.load({ kind: "file", path: "/music/second.flac" });
+    await player.setPaused(true);
+    await player.load({ kind: "file", path: "/music/first.flac" });
+
+    expect(player.playback.status).toBe("playing");
+    expect(adapter.ipc.effectivePaused).toBe(false);
   });
 
   test("clears observed position and duration when playback boundaries change", async () => {

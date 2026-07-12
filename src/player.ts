@@ -191,6 +191,7 @@ export class MpvPlayer implements Player {
   }
 
   async load(locator: PlaybackLocator): Promise<void> {
+    const wasPaused = this.state.paused === true || this.state.status === "paused";
     if (!this.process || !this.ipc) {
       const volume = this.state.volumePercent;
       try {
@@ -205,6 +206,7 @@ export class MpvPlayer implements Player {
       }
     }
     await this.command(this.loadCommand(locator));
+    if (wasPaused) await this.command(["set_property", "pause", false]);
     this.updateState({
       status: "playing",
       positionSeconds: null,
@@ -404,6 +406,10 @@ export class MpvPlayer implements Player {
     }
 
     if (message.event === "end-file") {
+      // mpv emits end-file(reason=stop) for the old file when loadfile replaces it.
+      // load() already publishes the new file's playing state, while an explicit
+      // stop() publishes its own stopped state after the command succeeds.
+      if (message.reason === "stop") return;
       this.clearPositionPoll();
       const playbackFailed = message.reason === "error";
       this.updateState({
