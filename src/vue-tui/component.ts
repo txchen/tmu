@@ -222,7 +222,6 @@ async function routeGlobalPlayback(
   else if (input === "l" || key.rightArrow) await coordinator.dispatch({ type: "playerOperation", operation: "seek", seconds: 5 });
   else if (input === "+") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: 5 });
   else if (input === "-") await coordinator.dispatch({ type: "playerOperation", operation: "adjust-volume", delta: -5 });
-  else if (input === "Z") await coordinator.dispatch({ type: "playerOperation", operation: "randomize-queue" });
   else if (input === "r") await coordinator.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
   else return false;
   return true;
@@ -267,6 +266,7 @@ async function routePlayback(
       delta: input === "J" ? 1 : -1,
     });
   } else if (input === "C") coordinator.dispatchUi({ type: "requestConfirmation", kind: "clear-queue" });
+  else if (input === "Z") await coordinator.dispatch({ type: "playerOperation", operation: "randomize-queue" });
 }
 
 async function routeLibrary(
@@ -762,6 +762,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
       ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"], ["gg/G", "First/last Track"],
       ["Enter", "Play Selected"], ["N", "Play Next"], ["J/K", "Move Track down/up"],
       ["x", "Remove Track"], ["C", "Clear Queue (confirm)"],
+      ["Z", "Randomize upcoming Queue"],
     ],
   }];
   if (tab === "library") return [
@@ -810,7 +811,6 @@ function globalShortcutGroups(): ShortcutGroup[] {
       rows: [
         ["Space", "Play/Pause"], ["n/p", "Next/Previous Track"], ["s", "Stop"],
         ["h/l, ←/→", "Seek −/+ 5 seconds"], ["+/−", "Volume −/+ 5%"], ["r", "Repeat All"],
-        ["Z", "Randomize upcoming Queue"],
       ],
     },
     {

@@ -220,6 +220,7 @@ describe("TMU top-level surface smoke", () => {
     const playerHelp = terminal.lastFrame()!;
     expect(playerHelp).toContain("Playback Shortcuts");
     expect(playerHelp).toContain("QUEUE PANE");
+    expect(playerHelp).toContain("Randomize upcoming");
     expect(playerHelp).toContain("GLOBAL PLAYBACK");
     expect(playerHelp).toContain("j/k or ↑/↓ Scroll · PgUp/PgDn Page · Enter/q/?/Esc Close");
     expect(playerHelp).not.toContain("SEARCH INPUT");
@@ -265,6 +266,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("Type (including ?)");
     expect(terminal.lastFrame()).toContain("Backspace/Delete");
     expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
+    expect(terminal.lastFrame()).not.toContain("Randomize upcoming Queue");
     expect(terminal.lastFrame()).not.toContain("DOWNLOAD PIPELINE");
     if (rows < 30) await terminal.stdin.write("\x1b[6~");
     expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
@@ -323,6 +325,7 @@ describe("TMU top-level surface smoke", () => {
     }
     expect(top).not.toContain("Play Selected");
     expect(top).not.toContain("Play Now");
+    expect(top).not.toContain("Randomize upcoming Queue");
 
     if (rows < 30) {
       await terminal.stdin.write("\x1b[6~");
@@ -403,8 +406,8 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("j/k Move · Space Play/Pause · Enter Play Selected");
     expect(terminal.lastFrame()).toContain("QUEUE PANE");
-    await terminal.stdin.write("\x1b[6~");
     expect(terminal.lastFrame()).toContain("Randomize upcoming Queue");
+    await terminal.stdin.write("\x1b[6~");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Ctrl-C");
     expect(terminal.lastFrame()).toContain("Quit (confirm downloads)");
@@ -694,19 +697,27 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
   });
 
-  test("Z visibly randomizes only the upcoming Queue", async () => {
+  test("Z randomizes the upcoming Queue only from the Player Queue Pane", async () => {
     const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C"), cachedTrack("d", "D")];
-    const coordinator = new AppCoordinator({ appState: createInitialAppState({}), uiState: createInitialUiState(),
-      queue: new MemoryQueue({ random: () => 0 }), player: new NoopPlayer() });
-    for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
-    await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    for (const tab of ["library", "downloader", "playback"] as const) {
+      const provider: Provider = { id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks,
+        searchTracks: () => tracks, resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/test.opus" }) };
+      const coordinator = new AppCoordinator({ appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+        queue: new MemoryQueue({ random: () => 0 }), player: new NoopPlayer() });
+      for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
+      await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
+      coordinator.dispatchUi({ type: "switchTab", tab });
+      const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
 
-    await terminal.stdin.write("Z");
+      await terminal.stdin.write("Z");
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
-    expect(terminal.lastFrame()!.indexOf("· C")).toBeLessThan(terminal.lastFrame()!.indexOf("· B"));
-    expect(terminal.lastFrame()).not.toContain("Shuffle");
+      const titles = coordinator.appState.queue.entries.map((entry) => entry.track.title);
+      expect(titles).toEqual(tab === "playback" ? ["A", "C", "D", "B"] : ["A", "B", "C", "D"]);
+      if (tab === "playback") {
+        expect(terminal.lastFrame()!.indexOf("· C")).toBeLessThan(terminal.lastFrame()!.indexOf("· B"));
+        expect(terminal.lastFrame()).not.toContain("Shuffle");
+      }
+    }
   });
 
   test("Library unifies healthy and incomplete cache results with safe contextual actions", async () => {
