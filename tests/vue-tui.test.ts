@@ -255,6 +255,11 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("SEARCH INPUT");
     expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
     expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
+    await terminal.stdin.write("G");
+    expect(terminal.lastFrame()).toContain("Printable keys");
+    expect(terminal.lastFrame()).toContain("Captured by text input");
+    expect(terminal.lastFrame()).toContain("[/], Ctrl-C");
+    expect(terminal.lastFrame()).toContain("Remain global during input");
     await terminal.stdin.write("q");
 
     await terminal.stdin.write("]");

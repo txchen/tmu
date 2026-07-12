@@ -826,7 +826,11 @@ function globalShortcutGroups(): ShortcutGroup[] {
     },
     {
       title: "INPUT CAPTURE",
-      rows: [["?", "Typed literally in text input"], ["Esc/Tab", "Leave input before Help"]],
+      rows: [
+        ["Printable keys", "Captured by text input (including ? and command keys)"],
+        ["[/], Ctrl-C", "Remain global during input"],
+        ["Esc/Tab", "Leave input before Help"],
+      ],
     },
   ];
 }
