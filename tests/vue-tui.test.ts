@@ -220,7 +220,7 @@ describe("TMU top-level surface smoke", () => {
     const playerHelp = terminal.lastFrame()!;
     expect(playerHelp).toContain("Playback Shortcuts");
     expect(playerHelp).toContain("QUEUE PANE");
-    expect(playerHelp).toContain("Randomize upcoming");
+    expect(playerHelp).toContain("Randomize entire Queue");
     expect(playerHelp).toContain("GLOBAL PLAYBACK");
     expect(playerHelp).toContain("j/k or ↑/↓ Scroll · PgUp/PgDn Page · Enter/q/?/Esc Close");
     expect(playerHelp).not.toContain("SEARCH INPUT");
@@ -266,7 +266,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("Type (including ?)");
     expect(terminal.lastFrame()).toContain("Backspace/Delete");
     expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
-    expect(terminal.lastFrame()).not.toContain("Randomize upcoming Queue");
+    expect(terminal.lastFrame()).not.toContain("Randomize entire Queue");
     expect(terminal.lastFrame()).not.toContain("DOWNLOAD PIPELINE");
     if (rows < 30) await terminal.stdin.write("\x1b[6~");
     expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
@@ -325,7 +325,7 @@ describe("TMU top-level surface smoke", () => {
     }
     expect(top).not.toContain("Play Selected");
     expect(top).not.toContain("Play Now");
-    expect(top).not.toContain("Randomize upcoming Queue");
+    expect(top).not.toContain("Randomize entire Queue");
 
     if (rows < 30) {
       await terminal.stdin.write("\x1b[6~");
@@ -406,7 +406,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("j/k Move · Space Play/Pause · Enter Play Selected");
     expect(terminal.lastFrame()).toContain("QUEUE PANE");
-    expect(terminal.lastFrame()).toContain("Randomize upcoming Queue");
+    expect(terminal.lastFrame()).toContain("Randomize entire Queue");
     await terminal.stdin.write("\x1b[6~");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Ctrl-C");
@@ -697,7 +697,7 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
   });
 
-  test("Z randomizes the upcoming Queue only from the Player Queue Pane", async () => {
+  test("Z randomizes the entire Queue only from the Player Queue Pane", async () => {
     const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C"), cachedTrack("d", "D")];
     for (const tab of ["library", "downloader", "playback"] as const) {
       const provider: Provider = { id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks,
@@ -712,9 +712,11 @@ describe("TMU top-level surface smoke", () => {
       await terminal.stdin.write("Z");
 
       const titles = coordinator.appState.queue.entries.map((entry) => entry.track.title);
-      expect(titles).toEqual(tab === "playback" ? ["A", "C", "D", "B"] : ["A", "B", "C", "D"]);
+      expect(titles).toEqual(tab === "playback" ? ["B", "C", "D", "A"] : ["A", "B", "C", "D"]);
       if (tab === "playback") {
-        expect(terminal.lastFrame()!.indexOf("· C")).toBeLessThan(terminal.lastFrame()!.indexOf("· B"));
+        expect(coordinator.appState.queue.currentIndex).toBe(3);
+        expect(coordinator.appState.playback).toMatchObject({ status: "playing", currentTrackIdentity: tracks[0]!.identity });
+        expect(terminal.lastFrame()!.indexOf("· B")).toBeLessThan(terminal.lastFrame()!.indexOf("▶ A"));
         expect(terminal.lastFrame()).not.toContain("Shuffle");
       }
     }

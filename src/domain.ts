@@ -148,7 +148,7 @@ export type Queue = {
   startAt(index: number): QueueEntry | undefined;
   next(): QueueEntry | undefined;
   previous(): QueueEntry | undefined;
-  randomizeUpcoming(): void;
+  randomize(): void;
   setRepeatAll(enabled: boolean): void;
   markAvailability(identity: TrackIdentity, availability: TrackAvailability): void;
   updateTrack(track: Track): QueueEntry | undefined;

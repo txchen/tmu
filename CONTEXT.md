@@ -161,8 +161,8 @@ The destructive TUI action that, after explicit confirmation, stops playback, cl
 _Avoid_: unconfirmed clear, automatic advance after clear
 
 **Randomize Queue**:
-The one-shot Queue action that visibly randomizes only Tracks after the Current Track, preserving listening history and the Current Track. Playback then follows that visible order and Play Next remains literally next. Randomize Queue is not a playback mode: it has no enabled state, toggle, or status indicator, and invoking it again simply randomizes the upcoming portion again.
-_Avoid_: Shuffle mode, hidden random playback order, reshuffling listening history
+The one-shot Queue action that visibly randomizes every Track, including the Current Track. The Current Track keeps playing without interruption and remains Current at its new visible index; playback then follows the resulting visible order and Play Next remains literally next. Randomize Queue is not a playback mode: it has no enabled state, toggle, or status indicator, and invoking it again simply randomizes the entire Queue again.
+_Avoid_: Shuffle mode, hidden random playback order
 
 **Next Track**:
 The playback action that starts the next playable Track in visible Queue order, skipping unavailable Tracks without removing them. Repeat All wraps through that visible order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Queue.

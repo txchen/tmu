@@ -32,7 +32,7 @@ A non-focusable Now Playing Bar appears immediately above the shortcut footer on
 
 An empty Player Queue says “Queue is empty — open Library to add Tracks.”
 
-Randomize Queue is a one-shot operation that visibly reorders only entries after the Current Track. It preserves listening history and Current position; playback continues through the resulting visible order. It is not a playback mode and has no persistent toggle or indicator.
+Randomize Queue is a one-shot operation that visibly reorders every Queue entry, including the Current Track. The Current Track keeps playing without interruption and remains Current at its new visible index; playback continues through the resulting visible order. It is not a playback mode and has no persistent toggle or indicator.
 
 ## Library
 

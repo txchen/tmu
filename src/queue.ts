@@ -169,8 +169,15 @@ export class MemoryQueue implements Queue {
     return undefined;
   }
 
-  randomizeUpcoming(): void {
-    this.randomizeAfterCurrent();
+  randomize(): void {
+    const current = this.items[this.activeIndex];
+    for (let index = this.items.length - 1; index > 0; index -= 1) {
+      const candidate = Math.floor(this.random() * (index + 1));
+      const value = this.items[index];
+      this.items[index] = this.items[candidate]!;
+      this.items[candidate] = value!;
+    }
+    this.activeIndex = current ? this.items.indexOf(current) : -1;
   }
 
   setRepeatAll(enabled: boolean): void {
@@ -210,16 +217,6 @@ export class MemoryQueue implements Queue {
       ? snapshot.currentIndex
       : -1;
     this.repeatAllEnabled = snapshot.repeatAll;
-  }
-
-  private randomizeAfterCurrent(): void {
-    const start = Math.max(0, this.activeIndex + 1);
-    for (let index = this.items.length - 1; index > start; index -= 1) {
-      const candidate = start + Math.floor(this.random() * (index - start + 1));
-      const value = this.items[index];
-      this.items[index] = this.items[candidate]!;
-      this.items[candidate] = value!;
-    }
   }
 
   private extractBlock(

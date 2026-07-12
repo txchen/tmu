@@ -673,8 +673,8 @@ export class AppCoordinator {
   }
 
   private randomizeQueue(): void {
-    this.queue.randomizeUpcoming();
-    this.appState.lastEvent = "randomized upcoming Queue";
+    this.queue.randomize();
+    this.appState.lastEvent = "randomized Queue";
     this.syncQueueState();
   }
 

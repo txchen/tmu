@@ -762,7 +762,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
       ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"], ["gg/G", "First/last Track"],
       ["Enter", "Play Selected"], ["N", "Play Next"], ["J/K", "Move Track down/up"],
       ["x", "Remove Track"], ["C", "Clear Queue (confirm)"],
-      ["Z", "Randomize upcoming Queue"],
+      ["Z", "Randomize entire Queue"],
     ],
   }];
   if (tab === "library") return [

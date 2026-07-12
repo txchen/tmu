@@ -163,7 +163,7 @@ describe("MemoryQueue", () => {
     expect(queue.snapshot().repeatAll).toBe(true);
   });
 
-  test("Randomize Queue visibly reorders only Tracks after Current Track on every invocation", () => {
+  test("Randomize Queue reorders every Track and moves Current Track with its identity", () => {
     const queue = new MemoryQueue({ random: () => 0 });
     queue.enqueue(track("youtube-cache", "a", "A"));
     queue.enqueue(track("youtube-cache", "b", "B"));
@@ -171,12 +171,12 @@ describe("MemoryQueue", () => {
     queue.enqueue(track("youtube-cache", "d", "D"));
     queue.startAt(0);
 
-    queue.randomizeUpcoming();
-    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "D", "B"]);
-    expect(queue.next()?.track.title).toBe("C");
-    queue.randomizeUpcoming();
-    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B", "D"]);
-    expect(queue.currentIndex).toBe(1);
+    queue.randomize();
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["B", "C", "D", "A"]);
+    expect(queue.currentIndex).toBe(3);
+    queue.randomize();
+    expect(queue.snapshot().entries.map((entry) => entry.track.title)).toEqual(["C", "D", "A", "B"]);
+    expect(queue.currentIndex).toBe(2);
   });
 
   test("keeps unavailable Tracks visible in snapshots", () => {
