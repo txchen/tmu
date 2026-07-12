@@ -98,6 +98,7 @@ export class AppCoordinator {
   private lastSnapshotCheckpointAt = Number.NEGATIVE_INFINITY;
   private snapshotSaveBlockedUntilMeaningfulChange = false;
   private snapshotWriteTail: Promise<void> = Promise.resolve();
+  private feedbackRevision = 0;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
@@ -422,7 +423,7 @@ export class AppCoordinator {
     }
 
     this.activeDownloadBatch.controller.abort();
-    this.appState.lastEvent = "cancelling active Download Batch and cleaning up partial files";
+    this.recordOperationFeedback("warning", "cancelling active Download Batch and cleaning up partial files");
   }
 
   private requestCacheDeletion(identity: Track["identity"]): void {
@@ -477,9 +478,10 @@ export class AppCoordinator {
     delete this.appState.cacheConfirmation;
     if (confirmation.kind === "cleanup-incomplete") {
       const removed = await provider.cleanupIncompleteEntry(confirmation.stem);
-      this.appState.lastEvent = removed
-        ? `cleaned incomplete YouTube Cache entry ${confirmation.stem}`
-        : `incomplete YouTube Cache entry is missing: ${confirmation.stem}`;
+      this.recordOperationFeedback(
+        removed ? "success" : "error",
+        removed ? `cleaned incomplete YouTube Cache entry ${confirmation.stem}` : `incomplete YouTube Cache entry is missing: ${confirmation.stem}`,
+      );
       return;
     }
 
@@ -489,7 +491,7 @@ export class AppCoordinator {
     if (deletesPlayingCurrent && !await this.stopAndRetainCurrentTrack("stopped for Cache Deletion")) return;
     const removed = await provider.deleteCacheEntry(identity);
     if (!removed) {
-      this.appState.lastEvent = `YouTube Cache entry is missing: ${confirmation.stem}`;
+      this.recordOperationFeedback("error", `YouTube Cache entry is missing: ${confirmation.stem}`);
       return;
     }
     this.queue.markAvailability(identity, {
@@ -497,12 +499,12 @@ export class AppCoordinator {
       reason: `YouTube Cache entry was deleted: ${confirmation.stem}`,
     });
     this.syncQueueState();
-    this.appState.lastEvent = `permanently deleted YouTube Cache entry ${confirmation.stem}`;
+    this.recordOperationFeedback("success", `permanently deleted YouTube Cache entry ${confirmation.stem}`);
   }
 
   private cancelCacheOperation(): void {
     delete this.appState.cacheConfirmation;
-    this.appState.lastEvent = "Cache operation cancelled";
+    this.recordOperationFeedback("warning", "Cache operation cancelled");
   }
 
   private async startSelectedQueueEntry(): Promise<void> {
@@ -569,7 +571,7 @@ export class AppCoordinator {
       currentTrackIdentity: null,
     };
     this.uiStateStore.dispatch({ type: "syncQueue", identities: [] });
-    this.appState.lastEvent = "cleared Queue";
+    this.recordOperationFeedback("success", "cleared Queue");
     this.syncQueueState();
   }
 
@@ -867,7 +869,10 @@ export class AppCoordinator {
     };
     this.appState.downloads.summary = categoricalSummary;
     this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary });
-    this.appState.lastEvent = `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`;
+    this.recordOperationFeedback(
+      summary.failed > 0 || summary.cancelled > 0 ? "warning" : "success",
+      `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`,
+    );
     const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
     if (isYouTubeCacheProvider(provider)) provider.refresh();
   }
@@ -882,7 +887,7 @@ export class AppCoordinator {
     delete this.appState.downloads.confirmation;
     this.enqueueDownloadBatch(pending.id, pending.prepared.confirm(), pending.sourceUrl);
     pending.settle();
-    this.appState.lastEvent = "queued confirmed playlist Download Batch";
+    this.recordOperationFeedback("success", "created confirmed playlist Download Batch in the Download Pipeline");
   }
 
   private cancelPlaylistDownload(): void {
@@ -895,7 +900,7 @@ export class AppCoordinator {
     this.pendingPlaylistConfirmation = null;
     delete this.appState.downloads.confirmation;
     pending.settle();
-    this.appState.lastEvent = "playlist Download Batch cancelled before start";
+    this.recordOperationFeedback("warning", "playlist Download Batch cancelled before start");
   }
 
   private enqueueDownloadBatch(id: number, batch: YouTubeDownloadBatch, submittedInput: string): void {
@@ -939,7 +944,7 @@ export class AppCoordinator {
     }
     this.pendingDownloadBatches.splice(index, 1);
     this.syncDownloadPipelineState();
-    this.appState.lastEvent = "removed pending Download Batch";
+    this.recordOperationFeedback("success", "removed pending Download Batch");
   }
 
   private acknowledgeAcceptedSubmission(submissionId: number): void {
@@ -972,7 +977,12 @@ export class AppCoordinator {
 
   private cancelQuitWithDownloads(): void {
     this.appState.downloads.quitConfirmationRequired = false;
-    this.appState.lastEvent = "quit cancelled; Download Pipeline continues";
+    this.recordOperationFeedback("warning", "quit cancelled; Download Pipeline continues");
+  }
+
+  private recordOperationFeedback(level: "success" | "warning" | "error", message: string): void {
+    this.appState.lastEvent = message;
+    this.appState.operationFeedback = { level, message, revision: ++this.feedbackRevision };
   }
 
   private syncDownloadPipelineState(): void {

@@ -46,4 +46,15 @@ describe("top-level tab UI state", () => {
     state = reduceUiState(state, { type: "setLibrarySelection", index: -1, resultCount: 3 });
     expect(state.library.selectedIndex).toBe(0);
   });
+
+  test("opens confirmations on the safe choice and navigates choices", () => {
+    let state = reduceUiState(createInitialUiState(), {
+      type: "requestConfirmation", kind: "cancel-download", batchId: 7, target: "Road Trip",
+    });
+    expect(state.pendingConfirmation).toEqual({
+      kind: "cancel-download", batchId: 7, target: "Road Trip", choice: "cancel",
+    });
+    state = reduceUiState(state, { type: "setConfirmationChoice", choice: "confirm" });
+    expect(state.pendingConfirmation?.choice).toBe("confirm");
+  });
 });

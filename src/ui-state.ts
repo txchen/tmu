@@ -26,8 +26,11 @@ export type UiStateAction =
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
   | { type: "openOverlay"; kind: "shortcut-help" }
   | { type: "dismissOverlay" }
-  | { type: "requestConfirmation"; kind: import("./domain").ConfirmationKind }
-  | { type: "cancelConfirmation" };
+  | { type: "requestConfirmation"; kind: import("./domain").ConfirmationKind; batchId?: number; target?: string }
+  | { type: "setConfirmationChoice"; choice: "cancel" | "confirm" }
+  | { type: "cancelConfirmation" }
+  | { type: "setNotification"; notification: NonNullable<UiState["notification"]> }
+  | { type: "dismissNotification" };
 
 export function createInitialUiState(options: InitialUiStateOptions = {}): UiState {
   const columns = options.columns ?? 100;
@@ -42,6 +45,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
+    notification: null,
     pendingVimChord: null,
   };
 }
@@ -114,9 +118,21 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "dismissOverlay":
       return { ...state, overlays: state.overlays.slice(0, -1) };
     case "requestConfirmation":
-      return { ...state, pendingConfirmation: { kind: action.kind, choice: "cancel" } };
+      return { ...state, pendingConfirmation: {
+        kind: action.kind, choice: "cancel",
+        ...(action.batchId === undefined ? {} : { batchId: action.batchId }),
+        ...(action.target === undefined ? {} : { target: action.target }),
+      } };
+    case "setConfirmationChoice":
+      return state.pendingConfirmation
+        ? { ...state, pendingConfirmation: { ...state.pendingConfirmation, choice: action.choice } }
+        : state;
     case "cancelConfirmation":
       return { ...state, pendingConfirmation: null };
+    case "setNotification":
+      return { ...state, notification: action.notification };
+    case "dismissNotification":
+      return { ...state, notification: null };
   }
 }
 

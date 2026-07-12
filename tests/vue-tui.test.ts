@@ -13,6 +13,15 @@ import type { YouTubeCacheProvider } from "../src/youtube-cache";
 afterEach(() => cleanup());
 
 describe("TMU top-level surface smoke", () => {
+  test("shows and dismisses an error recorded before the TUI mounts", async () => {
+    const { coordinator } = createTmuApp();
+    coordinator.appState.appErrors.push("Could not restore Last Queue Snapshot");
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    expect(terminal.lastFrame()).toContain("× ERROR · Could not restore Last Queue Snapshot");
+    await terminal.stdin.write("\x1b");
+    expect(terminal.lastFrame()).not.toContain("Could not restore Last Queue Snapshot");
+  });
+
   test("renders the keyboard-first shell and routes global brackets through focused inputs", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
@@ -141,9 +150,24 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("[");
 
     await terminal.stdin.write("C");
-    expect(terminal.lastFrame()).toContain("Clear Queue permanently?");
-    await terminal.stdin.write("y");
+    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("› Cancel ‹");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    await terminal.stdin.write("C");
+    await terminal.stdin.write("\t");
+    expect(terminal.lastFrame()).toContain("› Clear ‹");
+    await terminal.stdin.write("\x1b[D");
+    expect(terminal.lastFrame()).toContain("› Cancel ‹");
+    await terminal.stdin.write("\x1b[C");
+    expect(terminal.lastFrame()).toContain("› Clear ‹");
+    await terminal.stdin.write("\r");
     expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(terminal.lastFrame()).toContain("✓ SUCCESS");
+    await sleep(2_600);
+    expect(terminal.lastFrame()).not.toContain("✓ SUCCESS");
 
     await terminal.stdin.write("]");
     await terminal.stdin.write("\x1b");
@@ -196,12 +220,14 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Cache Health: broken00001");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("d");
-    expect(terminal.lastFrame()).toContain("Permanently delete Cached? This will stop playback.");
+    expect(terminal.lastFrame()).toContain("Permanently delete “Cached”?");
+    expect(terminal.lastFrame()).toContain("current playback");
+    expect(terminal.lastFrame()).toContain("will stop.");
     await terminal.stdin.write("y");
     expect(deleted).toBe(true);
     await terminal.stdin.write("J");
     await terminal.stdin.write("X");
-    expect(terminal.lastFrame()).toContain("Clean incomplete broken00002?");
+    expect(terminal.lastFrame()).toContain("Clean incomplete entry “broken00002”?");
     await terminal.stdin.write("y");
     expect(cleanedStem).toBe("broken00002");
   });
@@ -248,16 +274,27 @@ describe("TMU top-level surface smoke", () => {
     await waitFor(() => coordinator.appState.downloads.pendingBatches.length === 2);
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("q");
-    expect(terminal.lastFrame()).toContain("Quit will cancel active and pending Download Batches");
+    expect(terminal.lastFrame()).toContain("Quit TMU?");
+    expect(terminal.lastFrame()).toContain("Active and pending download work will be cancelled.");
     await terminal.stdin.write("n");
     expect(coordinator.appState.downloads.pendingBatches).toHaveLength(2);
+    expect(terminal.lastFrame()).toContain("! WARNING");
+    await terminal.stdin.write("\x1b");
+    expect(terminal.lastFrame()).not.toContain("! WARNING");
     await terminal.stdin.write("j");
     await terminal.stdin.write("x");
+    expect(terminal.lastFrame()).toContain("Remove pending Download Batch #2");
+    await terminal.stdin.write("y");
     expect(coordinator.appState.downloads.pendingBatches.map((batch) => batch.id)).toEqual([3]);
     await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
     expect(coordinator.appState.downloads.pendingBatches).toEqual([]);
 
-    await terminal.stdin.write("c");
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("x");
+    expect(terminal.lastFrame()).toContain("Cancel Download Batch #1");
+    await terminal.stdin.write("y");
     await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
     expect(terminal.lastFrame()).toContain("Summary #1: 0 downloaded · 0 cached · 0 failed · 1 cancelled");
     expect(coordinator.appState.queue).toEqual(queueBefore);
@@ -287,7 +324,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write(url);
     await terminal.stdin.write("\r");
     await waitFor(() => coordinator.appState.downloads.confirmation !== undefined);
-    expect(terminal.lastFrame()).toContain("Confirm playlist Road Trip (12 source items)?");
+    expect(terminal.lastFrame()).toContain("Accept playlist “Road Trip”?");
     await terminal.stdin.write("n");
     expect(coordinator.uiState.downloader.urlInput).toBe(url);
 

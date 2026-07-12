@@ -4,7 +4,14 @@ import type { DependencyHealthState } from "./dependencies";
 export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small";
 export const YOUTUBE_CACHE_PROVIDER_ID = "youtube-cache" as const;
 export type ProviderId = typeof YOUTUBE_CACHE_PROVIDER_ID;
-export type ConfirmationKind = "clear-queue" | "cancel-download" | "quit-download";
+export type ConfirmationKind =
+  | "clear-queue"
+  | "cancel-download"
+  | "remove-pending-download"
+  | "delete-cache"
+  | "cleanup-cache"
+  | "accept-playlist"
+  | "quit-downloads";
 
 export type PickerOverlay = {
   kind: "shortcut-help";
@@ -185,6 +192,11 @@ export type AppState = {
   };
   appErrors: string[];
   lastEvent: string;
+  operationFeedback?: {
+    level: "success" | "warning" | "error";
+    message: string;
+    revision: number;
+  };
 };
 
 export type UiState = {
@@ -214,6 +226,13 @@ export type UiState = {
   pendingConfirmation: null | {
     kind: ConfirmationKind;
     choice: "cancel" | "confirm";
+    batchId?: number;
+    target?: string;
+  };
+  notification: null | {
+    level: "success" | "warning" | "error";
+    message: string;
+    expiresAtMs?: number;
   };
   pendingVimChord: null | {
     key: "g";

@@ -9,6 +9,12 @@ import {
 } from "../state-publication";
 import { dispatchTerminalResize } from "./resize";
 import { isYouTubeCacheProvider } from "../youtube-cache";
+import {
+  activateConfirmation,
+  activeConfirmation,
+  matchingConfirmationChoice,
+  type ConfirmationDescriptor,
+} from "./confirmation";
 
 export type TmuRootOptions = {
   coordinator: AppCoordinator;
@@ -26,6 +32,13 @@ export function createTmuRoot(options: TmuRootOptions) {
         identities: coordinator.queueTrackIdentities(),
         preferredIdentity: coordinator.appState.playback.currentTrackIdentity,
       });
+      const existingError = coordinator.appState.appErrors.at(-1);
+      if (existingError && !coordinator.uiState.notification) {
+        coordinator.dispatchUi({
+          type: "setNotification",
+          notification: { level: "error", message: existingError },
+        });
+      }
       const cadence = coordinator.appState.config.lowPower;
       const publication = new StatePublicationGate({
         readState: () => ({ appState: coordinator.appState, uiState: coordinator.uiState }),
@@ -37,6 +50,9 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
       const snapshot = shallowRef(publication.publishInitial());
       const unsubscribePublication = publication.subscribe((next) => { snapshot.value = next; });
+      let notificationTimer: ReturnType<typeof setTimeout> | undefined;
+      let observedFeedbackRevision = coordinator.appState.operationFeedback?.revision ?? 0;
+      let observedErrorCount = coordinator.appState.appErrors.length;
       let handledAcceptedSubmissionId: number | undefined;
       const unsubscribeCoordinator = coordinator.onStateChange((reason) => {
         const accepted = coordinator.appState.downloads.acceptedSubmission;
@@ -50,6 +66,27 @@ export function createTmuRoot(options: TmuRootOptions) {
             operation: "acknowledge-accepted",
             submissionId: accepted.id,
           });
+        }
+        const feedback = coordinator.appState.operationFeedback;
+        const newError = coordinator.appState.appErrors.length > observedErrorCount
+          ? coordinator.appState.appErrors.at(-1)
+          : undefined;
+        observedErrorCount = coordinator.appState.appErrors.length;
+        if ((feedback && feedback.revision !== observedFeedbackRevision) || newError) {
+          if (feedback) observedFeedbackRevision = feedback.revision;
+          const source = newError ? { level: "error" as const, message: newError } : feedback!;
+          const notification = {
+            level: source.level,
+            message: source.message,
+            ...(source.level === "success" ? { expiresAtMs: Date.now() + 2_500 } : {}),
+          };
+          if (notificationTimer) clearTimeout(notificationTimer);
+          coordinator.dispatchUi({ type: "setNotification", notification });
+          if (notification.expiresAtMs) notificationTimer = setTimeout(() => {
+            if (coordinator.uiState.notification?.message === notification.message) {
+              coordinator.dispatchUi({ type: "dismissNotification" });
+            }
+          }, Math.max(0, notification.expiresAtMs - Date.now()));
         }
         publication.notify(publicationCause(reason));
       });
@@ -67,39 +104,22 @@ export function createTmuRoot(options: TmuRootOptions) {
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
         if (ui.terminal.tier === "terminal-too-small" && !(key.ctrl && input === "c")) return;
-        if (coordinator.appState.downloads.quitConfirmationRequired) {
-          if (input === "y" || key.return) {
-            await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-quit" });
-            app.exit();
-          } else if (input === "n" || key.escape) {
-            await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-quit" });
-          }
-          publication.notify("input");
-          return;
-        }
-        if (coordinator.appState.downloads.confirmation) {
-          if (input === "y" || key.return) {
-            await coordinator.dispatch({ type: "downloadOperation", operation: "confirm-playlist" });
-          } else if (input === "n" || key.escape) {
-            await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-playlist" });
-          }
-          publication.notify("input");
-          return;
-        }
-        if (coordinator.appState.cacheConfirmation) {
-          if (input === "y" || key.return) {
-            await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
-          } else if (input === "n" || key.escape) {
-            await coordinator.dispatch({ type: "cacheOperation", operation: "cancel" });
-          }
-          publication.notify("input");
-          return;
-        }
-        if (ui.pendingConfirmation) {
-          if (input === "y" || key.return) {
-            if (ui.pendingConfirmation.kind === "clear-queue") await coordinator.dispatch({ type: "clearQueue" });
+        const confirmation = activeConfirmation(coordinator);
+        if (confirmation) {
+          const selected = matchingConfirmationChoice(ui, confirmation);
+          if (key.leftArrow || key.rightArrow || key.tab) {
+            coordinator.dispatchUi({
+              type: "requestConfirmation", kind: confirmation.kind,
+              ...(confirmation.batchId === undefined ? {} : { batchId: confirmation.batchId }),
+              ...(confirmation.target === undefined ? {} : { target: confirmation.target }),
+            });
+            coordinator.dispatchUi({ type: "setConfirmationChoice", choice: selected === "cancel" ? "confirm" : "cancel" });
+          } else if (input === "y" || (key.return && selected === "confirm")) {
+            await activateConfirmation(confirmation, true, coordinator);
             coordinator.dispatchUi({ type: "cancelConfirmation" });
-          } else if (input === "n" || key.escape) {
+            if (confirmation.kind === "quit-downloads") app.exit();
+          } else if (input === "n" || key.escape || (key.return && selected === "cancel")) {
+            await activateConfirmation(confirmation, false, coordinator);
             coordinator.dispatchUi({ type: "cancelConfirmation" });
           }
           publication.notify("input");
@@ -107,6 +127,11 @@ export function createTmuRoot(options: TmuRootOptions) {
         }
         if (ui.overlays.length > 0) {
           if (key.escape || input === "?") coordinator.dispatchUi({ type: "dismissOverlay" });
+          publication.notify("input");
+          return;
+        }
+        if (key.escape && ui.notification) {
+          coordinator.dispatchUi({ type: "dismissNotification" });
           publication.notify("input");
           return;
         }
@@ -152,6 +177,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       }
 
       onScopeDispose(() => {
+        if (notificationTimer) clearTimeout(notificationTimer);
         unsubscribeCoordinator();
         unsubscribePublication();
         publication.stop();
@@ -307,20 +333,19 @@ async function routeDownloader(
   } else if (!coordinator.uiState.downloader.inputFocused && input === "x") {
     const selectedIndex = coordinator.uiState.downloader.selectedBatchIndex;
     if (downloads.activeBatch && selectedIndex === 0) {
-      await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
+      coordinator.dispatchUi({
+        type: "requestConfirmation", kind: "cancel-download", batchId: downloads.activeBatch.id,
+        target: `Download Batch #${downloads.activeBatch.id} (${downloads.activeBatch.sourceUrl})`,
+      });
       return;
     }
     const pending = downloads.pendingBatches[selectedIndex - (downloads.activeBatch ? 1 : 0)];
     if (pending) {
-      await coordinator.dispatch({ type: "downloadOperation", operation: "remove-pending", batchId: pending.id });
       coordinator.dispatchUi({
-        type: "setDownloaderBatchSelection",
-        index: coordinator.uiState.downloader.selectedBatchIndex,
-        resultCount: coordinator.appState.downloads.pendingBatches.length + coordinator.appState.downloads.summaries.length + (coordinator.appState.downloads.activeBatch ? 1 : 0),
+        type: "requestConfirmation", kind: "remove-pending-download", batchId: pending.id,
+        target: `pending Download Batch #${pending.id} (${pending.sourceUrl})`,
       });
     }
-  } else if (!coordinator.uiState.downloader.inputFocused && input === "c") {
-    await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
   } else if (key.return) {
     const url = coordinator.uiState.downloader.urlInput.trim();
     if (url) await coordinator.dispatch({ type: "downloadOperation", operation: "start", url });
@@ -346,25 +371,32 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     ]);
   }
 
+  const confirmation = activeConfirmation(coordinator);
+  if (confirmation) {
+    return h(Box, {
+      flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows,
+    }, () => [
+      tabHeader(uiState.activeTab, noColor),
+      h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () =>
+        confirmationModal(confirmation, uiState, noColor)),
+      h(Text, { dimColor: true }, () => "Modal open · unrelated actions suspended"),
+    ]);
+  }
+
   return h(Box, {
     flexDirection: "column",
     width: uiState.terminal.columns,
     height: uiState.terminal.rows,
   }, () => [
     tabHeader(uiState.activeTab, noColor),
+    uiState.notification ? statusBanner(uiState.notification, noColor) : null,
     uiState.activeTab === "playback"
         ? playbackView(appState.queue.entries, appState.queue.currentIndex, uiState, noColor)
       : uiState.activeTab === "library"
         ? libraryView(snapshot, coordinator, noColor)
         : downloaderView(snapshot, noColor),
-    appState.appErrors.at(-1)
-      ? h(Text, { color: noColor ? undefined : "yellow", wrap: "truncate-end" }, () => `! WARNING · ${appState.appErrors.at(-1)}`)
-      : null,
     uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
       h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
-    appState.cacheConfirmation ? h(Text, { bold: true }, () =>
-      `${appState.cacheConfirmation!.kind === "delete-track" ? "Permanently delete" : "Clean incomplete"} ${appState.cacheConfirmation!.title ?? appState.cacheConfirmation!.stem}?${appState.cacheConfirmation!.stopsPlayback ? " This will stop playback." : ""} y Confirm · n Cancel`) : null,
-    uiState.pendingConfirmation ? h(Text, { bold: true }, () => "Clear Queue permanently? y Confirm · n Cancel") : null,
     h(Text, { dimColor: true }, () => footer(uiState)),
   ]);
 }
@@ -445,16 +477,41 @@ function downloaderView(snapshot: PublicationSnapshot, noColor: boolean) {
     h(Box, { borderStyle: "round", borderColor: snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.downloader.inputFocused, paddingX: 1 }, () => h(Text, { bold: snapshot.uiState.downloader.inputFocused }, () => `URL Input ${snapshot.uiState.downloader.inputFocused ? "│" : ""} ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`)),
     h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
     h(Text, { bold: !snapshot.uiState.downloader.inputFocused }, () => `Pipeline · ${downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0)} batches`),
-    downloads.confirmation ? h(Text, { bold: true }, () =>
-      `Confirm playlist ${downloads.confirmation!.title} (${downloads.confirmation!.itemCount} source items)? y All · n Cancel`) : null,
-    downloads.quitConfirmationRequired ? h(Text, { bold: true }, () =>
-      "Quit will cancel active and pending Download Batches. y Quit · n Stay") : null,
     rows.length === 0 ? h(Text, { dimColor: true }, () => downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "Paste a YouTube URL above to begin.") : null,
     ...downloads.lines.map((line) => h(Text, { wrap: "truncate-end" }, () => line)),
     ...rows.slice(snapshot.uiState.downloader.scroll, snapshot.uiState.downloader.scroll + 10),
-    h(Text, { dimColor: true, wrap: "truncate-end" }, () => snapshot.appState.lastEvent),
     ]),
   ]);
+}
+
+function confirmationModal(confirmation: ConfirmationDescriptor, ui: UiState, noColor: boolean) {
+  const choice = matchingConfirmationChoice(ui, confirmation);
+  const button = (id: "cancel" | "confirm", label: string) => h(Text, {
+    inverse: choice === id, bold: choice === id,
+    color: !noColor && id === "confirm" ? "red" : undefined,
+  }, () => choice === id ? `› ${label} ‹` : `  ${label}  `);
+  return h(Box, {
+    flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "red",
+    paddingX: 2, alignSelf: "center", width: "70%",
+  }, () => [
+    h(Text, { bold: true }, () => confirmation.title),
+    h(Text, { wrap: "wrap" }, () => confirmation.consequence),
+    h(Box, { justifyContent: "center", gap: 2 }, () => [
+      button("cancel", "Cancel"), button("confirm", confirmation.confirmLabel),
+    ]),
+    h(Text, { dimColor: true }, () => "←/→ or Tab Choose · Enter Select · y Confirm · n/Esc Cancel"),
+  ]);
+}
+
+function statusBanner(notification: NonNullable<UiState["notification"]>, noColor: boolean) {
+  const semantics = notification.level === "success"
+    ? { symbol: "✓", label: "SUCCESS", color: "green" }
+    : notification.level === "warning"
+      ? { symbol: "!", label: "WARNING", color: "yellow" }
+      : { symbol: "×", label: "ERROR", color: "red" };
+  return h(Text, {
+    bold: true, color: noColor ? undefined : semantics.color, wrap: "truncate-end",
+  }, () => `${semantics.symbol} ${semantics.label} · ${notification.message}`);
 }
 
 function footer(ui: UiState): string {
