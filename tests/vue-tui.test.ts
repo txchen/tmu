@@ -276,6 +276,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Play Next");
     if (rows < 30) await terminal.stdin.write("\x1b[6~");
     expect(terminal.lastFrame()).toContain("Add to Queue");
+    expect(terminal.lastFrame()).toContain("Open on YouTube");
     expect(terminal.lastFrame()).toContain("Delete Track (confirm)");
     expect(terminal.lastFrame()).not.toContain("Play Selected");
     expect(terminal.lastFrame()).not.toContain("Cancel active batch");
@@ -790,7 +791,10 @@ describe("TMU top-level surface smoke", () => {
       queue: new MemoryQueue(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNow", target: track });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 24 });
+    const opened: string[] = [];
+    const terminal = await render(createTmuRoot({
+      coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
+    }), { columns: 120, rows: 24 });
     await terminal.stdin.write("]");
     const initial = terminal.lastFrame()!;
     expect(initial.indexOf("Broken First")).toBeLessThan(initial.indexOf("Cached"));
@@ -808,6 +812,8 @@ describe("TMU top-level surface smoke", () => {
     expect(initial).toContain("d Clean · / Search");
     expect(initial).not.toContain("Enter Play · a Add");
     expect(initial.split("\n").find((line) => line.includes("Library ·"))).toContain("Incomplete Cache Entry");
+    await terminal.stdin.write("O");
+    expect(opened).toEqual([]);
     const beforeHelp = { ...coordinator.uiState.library };
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Clean incomplete Cache");
@@ -843,6 +849,31 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("y");
     expect(cleanedStem).toBe("broken00002");
     expect(terminal.lastFrame()).toContain("No Cache Entries match your search.");
+  });
+
+  test("opens the selected healthy Library Track on YouTube with O", async () => {
+    const track = cachedTrack("dQw4w9WgXcQ", "Open Me");
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [track], searchTracks: () => [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/video.opus" }),
+    };
+    const opened: string[] = [];
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    const terminal = await render(createTmuRoot({
+      coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
+    }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("O");
+
+    expect(opened).toEqual(["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]);
+    await terminal.stdin.write("\t");
+    await terminal.stdin.write("O");
+    expect(coordinator.uiState.library.query).toBe("O");
+    expect(opened).toHaveLength(1);
   });
 
   test("YouTube Downloader exposes pending removal, active cancellation, and session summaries", async () => {

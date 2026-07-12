@@ -5,7 +5,7 @@ TMU is a lean terminal music player focused on downloading YouTube media, cachin
 TMU opens on Playback and provides three top-level tabs:
 
 - Playback manages the shared Queue and Current Track.
-- Library searches healthy cached Tracks locally and provides Play Now, Play Next, Add to Queue, Cache Deletion, and Cache Health cleanup.
+- Library searches healthy cached Tracks locally and provides Play Now, Play Next, Add to Queue, opening on YouTube, Cache Deletion, and Cache Health cleanup.
 - YouTube Downloader submits video or playlist URLs to a session-only Download Pipeline without adding Tracks to the Queue.
 
 YouTube Cache is the only current Provider. TMU keeps a narrow internal Provider boundary for listing/searching Tracks and resolving local playback, as documented in [`docs/adr/0001-keep-narrow-provider-abstraction.md`](docs/adr/0001-keep-narrow-provider-abstraction.md).

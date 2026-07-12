@@ -16,9 +16,11 @@ import {
   matchingConfirmationChoice,
   type ConfirmationDescriptor,
 } from "./confirmation";
+import { openExternalUrl, youtubeTrackUrl, type ExternalUrlOpener } from "../open-external-url";
 
 export type TmuRootOptions = {
   coordinator: AppCoordinator;
+  openUrl?: ExternalUrlOpener;
   measureCellWidth?: (value: string) => number;
   noColor?: boolean;
   publicationTimers?: Partial<PublicationTimers>;
@@ -215,7 +217,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         } else if (ui.activeTab === "playback") {
           await routePlayback(input, key, coordinator);
         } else if (ui.activeTab === "library") {
-          await routeLibrary(input, key, coordinator);
+          await routeLibrary(input, key, coordinator, options.openUrl ?? openExternalUrl);
         } else {
           await routeDownloader(input, key, coordinator);
         }
@@ -297,6 +299,7 @@ async function routeLibrary(
   input: string,
   key: InputKey,
   coordinator: AppCoordinator,
+  openUrl: ExternalUrlOpener,
 ): Promise<void> {
   const provider = coordinator.appState.providers["youtube-cache"];
   const results = libraryResults(provider, coordinator.uiState.library.query);
@@ -337,6 +340,18 @@ async function routeLibrary(
       identity: result.track.identity,
       currentTitle: result.track.title,
     });
+  } else if (!coordinator.uiState.library.inputFocused && input === "O") {
+    const result = results[coordinator.uiState.library.selectedIndex];
+    if (result?.kind === "track") {
+      try {
+        await openUrl(youtubeTrackUrl(result.track.identity.stableId));
+      } catch (error) {
+        coordinator.dispatchUi({
+          type: "setNotification",
+          notification: { level: "error", message: error instanceof Error ? error.message : String(error) },
+        });
+      }
+    }
   } else if (key.return && coordinator.uiState.library.inputFocused) {
     coordinator.dispatchUi({ type: "setLibraryInputFocus", focused: false });
     coordinator.dispatchUi({ type: "setLibrarySelection", index: 0, resultCount: results.length });
@@ -848,7 +863,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
         ["gg/G", "First/last result"],
         ...(incompleteSelected
           ? [["d", "Clean incomplete Cache Entry"]] as Array<readonly [string, string]>
-          : [["Enter", "Play Now"], ["N", "Play Next"], ["e", "Rename Track"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
+          : [["Enter", "Play Now"], ["N", "Play Next"], ["O", "Open on YouTube"], ["e", "Rename Track"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
         ["Tab/Shift+Tab", "Change focus"],
       ],
     },
