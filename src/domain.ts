@@ -18,6 +18,7 @@ export type PickerOverlay = {
   focus: "search" | "results";
   query: string;
   scroll: number;
+  pendingG: boolean;
 };
 
 export type TrackAvailability =

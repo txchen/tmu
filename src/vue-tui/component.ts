@@ -1,5 +1,5 @@
-import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
-import { defineComponent, h, onScopeDispose, shallowRef, watch } from "vue";
+import { Box, Spacer, Text as RuntimeText, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
+import { computed, defineComponent, h, inject, onScopeDispose, provide, shallowRef, unref, watch, type Ref } from "vue";
 import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
 import type { UiState } from "../domain";
 import {
@@ -23,6 +23,20 @@ export type TmuRootOptions = {
   noColor?: boolean;
   publicationTimers?: Partial<PublicationTimers>;
 };
+
+const shortcutHelpSubdued = Symbol("shortcut-help-subdued");
+const Text = defineComponent({
+  name: "TmuText",
+  inheritAttrs: false,
+  props: { subdued: { type: Boolean, default: undefined } },
+  setup(props, { attrs, slots }) {
+    const inherited = inject<Ref<boolean>>(shortcutHelpSubdued, shallowRef(false));
+    return () => h(RuntimeText, {
+      ...attrs,
+      dimColor: props.subdued ?? (unref(inherited) || attrs.dimColor === true),
+    }, slots);
+  },
+});
 
 export function createTmuRoot(options: TmuRootOptions) {
   return defineComponent({
@@ -51,6 +65,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         timers: options.publicationTimers,
       });
       const snapshot = shallowRef(publication.publishInitial());
+      provide(shortcutHelpSubdued, computed(() => snapshot.value.uiState.overlays.length > 0));
       const unsubscribePublication = publication.subscribe((next) => { snapshot.value = next; });
       let notificationTimer: ReturnType<typeof setTimeout> | undefined;
       let observedFeedbackRevision = coordinator.appState.operationFeedback?.revision ?? 0;
@@ -96,6 +111,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       const { columns, rows } = useWindowSize();
       watch([columns, rows], ([nextColumns, nextRows]) => {
         dispatchTerminalResize(coordinator, nextColumns, nextRows);
+        clampShortcutHelpScroll(coordinator);
         publication.notify("resize");
       }, { immediate: true });
 
@@ -105,7 +121,7 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
-        if (ui.terminal.tier === "terminal-too-small" && !(key.ctrl && input === "c")) return;
+        if (ui.terminal.tier === "terminal-too-small" && !isCtrlC(input, key)) return;
         const confirmation = activeConfirmation(coordinator);
         if (confirmation) {
           const selected = matchingConfirmationChoice(ui, confirmation);
@@ -128,7 +144,16 @@ export function createTmuRoot(options: TmuRootOptions) {
           return;
         }
         if (ui.overlays.length > 0) {
-          if (key.escape || input === "?") coordinator.dispatchUi({ type: "dismissOverlay" });
+          if (isCtrlC(input, key)) {
+            await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+            if (coordinator.appState.downloads.quitConfirmationRequired) {
+              coordinator.dispatchUi({ type: "dismissOverlay" });
+            } else app.exit();
+          } else if (key.escape || key.return || input === "q" || input === "?") {
+            coordinator.dispatchUi({ type: "dismissOverlay" });
+          } else {
+            routeShortcutHelp(input, key, coordinator);
+          }
           publication.notify("input");
           return;
         }
@@ -150,7 +175,7 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
-        if ((key.ctrl && input === "c") || (input === "q" && !textInputFocused)) {
+        if (isCtrlC(input, key) || (input === "q" && !textInputFocused)) {
           await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
           if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
           return;
@@ -383,6 +408,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     flexDirection: "column",
     width: uiState.terminal.columns,
     height: uiState.terminal.rows,
+    position: "relative",
   }, () => [
     tabHeader(uiState.activeTab, noColor),
     uiState.notification ? statusBanner(uiState.notification, noColor) : null,
@@ -391,10 +417,9 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
       : uiState.activeTab === "library"
         ? libraryView(snapshot, noColor, renderedLibraryResults)
         : downloaderView(snapshot, noColor),
-    uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
-      h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab, incompleteLibrarySelection)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
     nowPlayingBar(snapshot, noColor),
     footer(uiState, incompleteLibrarySelection, noColor),
+    uiState.overlays.at(-1) ? shortcutHelpModal(uiState, incompleteLibrarySelection, noColor) : null,
   ]);
 }
 
@@ -677,17 +702,219 @@ function statusBanner(notification: NonNullable<UiState["notification"]>, noColo
   }, () => `${semantics.symbol} ${semantics.label} · ${notification.message}`);
 }
 
+type ShortcutGroup = {
+  title: string;
+  rows: ReadonlyArray<readonly [keys: string, action: string]>;
+};
+
+const HELP_HINT = "j/k or ↑/↓ Scroll · PgUp/PgDn Page · Enter/q/?/Esc Close";
+
+function shortcutHelpModal(ui: UiState, incompleteSelected: boolean, noColor: boolean) {
+  const layout = shortcutHelpLayout(ui, incompleteSelected);
+  const scroll = Math.min(ui.overlays.at(-1)?.scroll ?? 0, layout.maxScroll);
+  return h(Box, {
+    position: "absolute",
+    top: layout.top,
+    left: layout.left,
+    width: layout.width,
+    height: layout.height,
+    flexDirection: "column",
+    borderStyle: "round",
+    borderColor: noColor ? undefined : "cyan",
+    overflow: "hidden",
+  }, () => [
+    h(Text, { bold: true, inverse: true, subdued: false }, () => `${tabLabel(ui.activeTab)} Shortcuts`.padEnd(layout.innerWidth)),
+    h(Box, { flexDirection: "column", height: layout.bodyHeight, overflow: "hidden" }, () =>
+      layout.lines.slice(scroll, scroll + layout.bodyHeight).map((line) => h(Text, { subdued: false }, () => line.padEnd(layout.innerWidth)))),
+    ...layout.hintLines.map((line) => h(Text, { bold: true, subdued: false }, () => line.padEnd(layout.innerWidth))),
+  ]);
+}
+
+function shortcutHelpLayout(ui: UiState, incompleteSelected = false) {
+  const width = Math.min(88, ui.terminal.columns - 4);
+  const innerWidth = width - 2;
+  const hintLines = wrapHelpText(HELP_HINT, innerWidth);
+  const activeGroups = activeShortcutGroups(ui.activeTab, incompleteSelected);
+  const globalGroups = globalShortcutGroups();
+  const lines = ui.terminal.tier === "narrow"
+    ? shortcutGroupLines([...activeGroups, ...globalGroups], innerWidth)
+    : twoColumnHelpLines(activeGroups, globalGroups, innerWidth);
+  const wantedHeight = lines.length + hintLines.length + 3;
+  const height = Math.min(ui.terminal.rows - 4, wantedHeight);
+  const bodyHeight = Math.max(1, height - hintLines.length - 3);
+  return {
+    width,
+    innerWidth,
+    height,
+    left: Math.floor((ui.terminal.columns - width) / 2),
+    top: Math.floor((ui.terminal.rows - height) / 2),
+    bodyHeight,
+    hintLines,
+    lines,
+    maxScroll: Math.max(0, lines.length - bodyHeight),
+  };
+}
+
+function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boolean): ShortcutGroup[] {
+  if (tab === "playback") return [{
+    title: "QUEUE PANE",
+    rows: [
+      ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"], ["gg/G", "First/last Track"],
+      ["Enter", "Play Selected"], ["N", "Play Next"], ["J/K", "Move Track down/up"],
+      ["x", "Remove Track"], ["C", "Clear Queue (confirm)"],
+    ],
+  }];
+  if (tab === "library") return [
+    {
+      title: "SEARCH INPUT",
+      rows: [
+        ["Type (including ?)", "Edit Cache Search"], ["Backspace/Delete", "Delete character"],
+        ["Enter", "Show Results"], ["Esc", "Leave input"], ["Tab/Shift+Tab", "Change focus"],
+      ],
+    },
+    {
+      title: "LIBRARY RESULTS",
+      rows: [
+        ["/", "Focus Search Input"], ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"],
+        ["gg/G", "First/last result"],
+        ...(incompleteSelected
+          ? [["d", "Clean incomplete Cache Entry"]] as Array<readonly [string, string]>
+          : [["Enter", "Play Now"], ["N", "Play Next"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
+        ["Tab/Shift+Tab", "Change focus"],
+      ],
+    },
+  ];
+  return [
+    {
+      title: "URL INPUT",
+      rows: [
+        ["Type (including ?)", "Edit YouTube URL"], ["Backspace/Delete", "Delete character"],
+        ["Enter", "Submit URL"], ["Esc", "Leave input"], ["Tab/Shift+Tab", "Change focus"],
+      ],
+    },
+    {
+      title: "DOWNLOAD PIPELINE",
+      rows: [
+        ["u", "Focus URL Input"], ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"],
+        ["gg/G", "First/last batch"], ["x", "Cancel active/remove pending"], ["Tab/Shift+Tab", "Change focus"],
+      ],
+    },
+  ];
+}
+
+function globalShortcutGroups(): ShortcutGroup[] {
+  return [
+    {
+      title: "GLOBAL PLAYBACK",
+      rows: [
+        ["Space", "Play/Pause"], ["n/p", "Next/Previous Track"], ["s", "Stop"],
+        ["h/l, ←/→", "Seek −/+ 5 seconds"], ["+/−", "Volume −/+ 5%"], ["r", "Repeat All"],
+        ["Z", "Randomize upcoming Queue"],
+      ],
+    },
+    {
+      title: "TOP-LEVEL TABS",
+      rows: [["[/]", "Previous/next tab"], ["?", "Open Help outside input"], ["Tab/Shift+Tab", "Move focus in tab"]],
+    },
+    {
+      title: "HELP NAVIGATION",
+      rows: [["j/k, ↑/↓", "Scroll one line"], ["PgUp/PgDn", "Scroll one page"], ["gg/G", "First/last line"]],
+    },
+    {
+      title: "APPLICATION",
+      rows: [["q", "Quit outside input/Help"], ["Ctrl-C", "Quit (confirm downloads)"], ["Enter/q/?/Esc", "Close Help only"]],
+    },
+    {
+      title: "INPUT CAPTURE",
+      rows: [["?", "Typed literally in text input"], ["Esc/Tab", "Leave input before Help"]],
+    },
+  ];
+}
+
+function shortcutGroupLines(groups: readonly ShortcutGroup[], width: number): string[] {
+  const keyWidth = Math.min(21, Math.max(12, Math.floor(width * 0.4)));
+  const lines: string[] = [];
+  groups.forEach((group, groupIndex) => {
+    if (groupIndex > 0) lines.push("");
+    lines.push(group.title);
+    for (const [keys, action] of group.rows) {
+      const actionWidth = Math.max(8, width - keyWidth - 2);
+      const wrapped = wrapHelpText(action, actionWidth);
+      lines.push(`${keys.slice(0, keyWidth).padEnd(keyWidth)}  ${wrapped[0] ?? ""}`.slice(0, width));
+      for (const continuation of wrapped.slice(1)) lines.push(`${"".padEnd(keyWidth)}  ${continuation}`.slice(0, width));
+    }
+  });
+  return lines;
+}
+
+function twoColumnHelpLines(leftGroups: readonly ShortcutGroup[], rightGroups: readonly ShortcutGroup[], width: number): string[] {
+  const gap = 3;
+  const leftWidth = Math.floor((width - gap) / 2);
+  const rightWidth = width - gap - leftWidth;
+  const left = shortcutGroupLines(leftGroups, leftWidth);
+  const right = shortcutGroupLines(rightGroups, rightWidth);
+  return Array.from({ length: Math.max(left.length, right.length) }, (_, index) =>
+    `${(left[index] ?? "").padEnd(leftWidth)}${" ".repeat(gap)}${right[index] ?? ""}`.trimEnd());
+}
+
+function wrapHelpText(value: string, width: number): string[] {
+  if (value.length <= width) return [value];
+  const words = value.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (line.length > 0 && line.length + word.length + 1 > width) {
+      lines.push(line);
+      line = word;
+    } else line = line.length > 0 ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function routeShortcutHelp(input: string, key: InputKey, coordinator: AppCoordinator): void {
+  const overlay = coordinator.uiState.overlays.at(-1);
+  if (!overlay) return;
+  const incomplete = selectedLibraryEntryIsIncomplete(coordinator);
+  const layout = shortcutHelpLayout(coordinator.uiState, incomplete);
+  let scroll = Math.min(overlay.scroll, layout.maxScroll);
+  if (input !== "g" && overlay.pendingG) coordinator.dispatchUi({ type: "setOverlayPendingG", pending: false });
+  if (input === "j" || key.downArrow) scroll += 1;
+  else if (input === "k" || key.upArrow) scroll -= 1;
+  else if (key.pageDown) scroll += layout.bodyHeight;
+  else if (key.pageUp) scroll -= layout.bodyHeight;
+  else if (input === "G") scroll = layout.maxScroll;
+  else if (input === "g") {
+    if (overlay.pendingG) scroll = 0;
+    coordinator.dispatchUi({ type: "setOverlayPendingG", pending: !overlay.pendingG });
+  }
+  coordinator.dispatchUi({ type: "setOverlayScroll", scroll: Math.max(0, Math.min(layout.maxScroll, scroll)) });
+}
+
+function clampShortcutHelpScroll(coordinator: AppCoordinator): void {
+  const overlay = coordinator.uiState.overlays.at(-1);
+  if (!overlay) return;
+  const layout = shortcutHelpLayout(coordinator.uiState, selectedLibraryEntryIsIncomplete(coordinator));
+  coordinator.dispatchUi({ type: "setOverlayScroll", scroll: Math.min(overlay.scroll, layout.maxScroll) });
+}
+
+function selectedLibraryEntryIsIncomplete(coordinator: AppCoordinator): boolean {
+  if (coordinator.uiState.activeTab !== "library") return false;
+  const results = libraryResults(coordinator.appState.providers["youtube-cache"], coordinator.uiState.library.query);
+  return results[coordinator.uiState.library.selectedIndex]?.kind === "incomplete";
+}
+
 function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const shortcuts: Array<[key: string, action: string]> = ui.activeTab === "playback"
     ? [["j/k", "Move"], ["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["?", "Help"]]
     : ui.activeTab === "library" && ui.library.inputFocused
-      ? [["Type", "Search"], ["Enter", "Results"], ["Esc", "Results"], ["Tab", "Focus"], ["?", "Help"]]
+      ? [["Type", "Search"], ["Enter", "Results"], ["Esc/Tab → ?", "Help"]]
       : ui.activeTab === "library" && incompleteSelected
         ? [["j/k", "Move"], ["d", "Clean"], ["/", "Search"], ["?", "Help"]]
         : ui.activeTab === "library"
           ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
           : ui.downloader.inputFocused
-            ? [["Type", "URL"], ["Enter", "Submit"], ["Esc", "Pipeline"], ["Tab", "Focus"], ["?", "Help"]]
+            ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
   return h(Box, { width: "100%", flexDirection: "row" }, () => [
     h(Text, { dimColor: true }, () => "──  "),
@@ -720,15 +947,6 @@ function tabLabel(active: UiState["activeTab"]): string {
   return active === "playback" ? "Playback" : active === "library" ? "Library" : "YouTube Downloader";
 }
 
-function contextualHelp(active: UiState["activeTab"], incompleteSelected = false): string {
-  if (active === "playback") return "j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · Enter Play Selected · Space Play/Pause · N Play Next · J/K Reorder · x Remove · C Clear · Z Randomize";
-  if (active === "library") return incompleteSelected
-    ? "/ Search · Tab/Shift+Tab Focus · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · d Clean"
-    : "/ Search · Tab/Shift+Tab Focus · Enter Results/Play Now · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · N Play Next · a Add · d Delete";
-  return "Tab/Shift+Tab Focus · Enter Submit · j/k, arrows, Ctrl+d/u, PgUp/PgDn, gg/G Move · x Cancel/Remove";
-}
-
-
 function publicationCause(reason: AppStateChangeReason): PublicationCause {
   return reason === "playback" ? "playback" : "state";
 }
@@ -749,3 +967,7 @@ type InputKey = {
   pageUp?: boolean;
   pageDown?: boolean;
 };
+
+function isCtrlC(input: string, key: InputKey): boolean {
+  return input === "\x03" || (key.ctrl === true && input === "c");
+}

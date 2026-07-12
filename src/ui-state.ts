@@ -25,6 +25,8 @@ export type UiStateAction =
   | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
   | { type: "openOverlay"; kind: "shortcut-help" }
+  | { type: "setOverlayScroll"; scroll: number }
+  | { type: "setOverlayPendingG"; pending: boolean }
   | { type: "dismissOverlay" }
   | { type: "requestConfirmation"; kind: import("./domain").ConfirmationKind; batchId?: number; target?: string }
   | { type: "setConfirmationChoice"; choice: "cancel" | "confirm" }
@@ -114,7 +116,23 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       };
     }
     case "openOverlay":
-      return { ...state, overlays: [...state.overlays, { kind: action.kind, focus: "search", query: "", scroll: 0 }] };
+      return { ...state, overlays: [...state.overlays, { kind: action.kind, focus: "search", query: "", scroll: 0, pendingG: false }] };
+    case "setOverlayScroll": {
+      const overlay = state.overlays.at(-1);
+      if (!overlay) return state;
+      return {
+        ...state,
+        overlays: [...state.overlays.slice(0, -1), { ...overlay, scroll: Math.max(0, action.scroll) }],
+      };
+    }
+    case "setOverlayPendingG": {
+      const overlay = state.overlays.at(-1);
+      if (!overlay) return state;
+      return {
+        ...state,
+        overlays: [...state.overlays.slice(0, -1), { ...overlay, pendingG: action.pending }],
+      };
+    }
     case "dismissOverlay":
       return { ...state, overlays: state.overlays.slice(0, -1) };
     case "requestConfirmation":

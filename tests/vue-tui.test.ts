@@ -207,6 +207,111 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
   });
 
+  test("renders tab-scoped Shortcut Help as a bounded modal and dismisses without hidden actions", async () => {
+    const track = cachedTrack("help-track", "Help Track");
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}), uiState: createInitialUiState(), queue, player: new NoopPlayer(),
+    });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 30 });
+
+    await terminal.stdin.write("?");
+    const playerHelp = terminal.lastFrame()!;
+    expect(playerHelp).toContain("Playback Shortcuts");
+    expect(playerHelp).toContain("QUEUE PANE");
+    expect(playerHelp).toContain("GLOBAL PLAYBACK");
+    expect(playerHelp).toContain("j/k or ↑/↓ Scroll · PgUp/PgDn Page · Enter/q/?/Esc Close");
+    expect(playerHelp).not.toContain("SEARCH INPUT");
+    expect(playerHelp.split("\n").every((line) => [...line].length <= 120)).toBe(true);
+    const modalBorder = playerHelp.match(/╭─{70,86}╮/)?.[0];
+    expect(modalBorder?.length).toBeLessThanOrEqual(88);
+
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+
+    for (const close of ["q", "?", "\x1b"] as const) {
+      await terminal.stdin.write("?");
+      await terminal.stdin.write(close);
+      expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+    }
+  });
+
+  test("keeps question marks in focused inputs and scopes Shortcut Help to Library and Downloads", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("\t");
+    await terminal.stdin.write("why?");
+    expect(coordinator.uiState.library.query).toBe("why?");
+    expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Library Shortcuts");
+    expect(terminal.lastFrame()).toContain("SEARCH INPUT");
+    expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
+    expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
+    await terminal.stdin.write("q");
+
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("https://youtu.be/watch?v=one?list=two");
+    expect(coordinator.uiState.downloader.urlInput).toContain("?list=two");
+    expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("YouTube Downloader Shortcuts");
+    expect(terminal.lastFrame()).toContain("URL INPUT");
+    expect(terminal.lastFrame()).toContain("DOWNLOAD PIPELINE");
+    expect(terminal.lastFrame()).not.toContain("LIBRARY RESULTS");
+  });
+
+  test("scrolls Shortcut Help locally, resets it on reopen, and reflows after resize", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 16 });
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
+    expect(terminal.lastFrame()).toContain("QUEUE PANE");
+    expect(terminal.lastFrame()).not.toContain("APPLICATION");
+
+    await terminal.stdin.write("G");
+    expect(terminal.lastFrame()).toContain("INPUT CAPTURE");
+    expect(terminal.lastFrame()).toContain("Playback Shortcuts");
+    expect(terminal.lastFrame()).toContain("Enter/q/?/Esc");
+    expect(terminal.lastFrame()).toContain("Close");
+    const bottomScroll = coordinator.uiState.overlays.at(-1)!.scroll;
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBeGreaterThan(0);
+    await terminal.stdin.write("g");
+    expect(coordinator.uiState.overlays.at(-1)!.scroll).toBe(0);
+    expect(bottomScroll).toBeGreaterThan(0);
+    await terminal.terminal.resize(100, 24);
+    await waitFor(() => coordinator.uiState.terminal.columns === 100);
+    expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 100)).toBe(true);
+    await terminal.stdin.write("?");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("QUEUE PANE");
+  });
+
+  test("keeps confirmations above Help", async () => {
+    const appState = createInitialAppState({});
+    const coordinator = new AppCoordinator({
+      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("C");
+    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
+  });
+
   test("keeps responsive state and suspends hidden actions while terminal is too small", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
