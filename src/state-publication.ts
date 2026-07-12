@@ -173,6 +173,10 @@ export class StatePublicationGate {
       this.publish(candidate, candidateFingerprint);
       return;
     }
+    if (cause === "input") {
+      this.publish(candidate, candidateFingerprint);
+      return;
+    }
     if (progressKind === "playback" && this.cadence.playback === null) return;
 
     this.schedule(progressKind);

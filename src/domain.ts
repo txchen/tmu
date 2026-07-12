@@ -106,6 +106,8 @@ export type LastQueueSnapshot = {
 
 export type PlaybackState = PlayerPlaybackState & {
   currentTrackIdentity: TrackIdentity | null;
+  /** True only for a Current Track restored from the Last Queue Snapshot before explicit Resume. */
+  restored?: boolean;
 };
 
 export type Provider = {

@@ -3,10 +3,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import { cleanup, render } from "@vue-tui/testing";
 import { createTmuApp } from "../src/app";
 import { AppCoordinator } from "../src/coordinator";
-import type { Provider, Track } from "../src/domain";
+import type { PlayerPlaybackState, Provider, Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
+import { StatePublicationGate } from "../src/state-publication";
 import { createTmuRoot } from "../src/vue-tui/component";
 import type { YouTubeCacheProvider } from "../src/youtube-cache";
 
@@ -45,6 +46,137 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.uiState.library.query).toBe("space?");
     await terminal.stdin.write("\x1b");
     expect(coordinator.uiState.library.inputFocused).toBe(false);
+  });
+
+  test("shows compact Current Track playback on every tab and hides it without Current", async () => {
+    const track = { ...cachedTrack("current", "A Very Long Current Track Title That Must Stay Compact"), durationSeconds: 245 };
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}), uiState: createInitialUiState(),
+      queue, player: new NoopPlayer(),
+    });
+    const hidden = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    expect(hidden.lastFrame()).not.toContain("NOW PLAYING");
+    coordinator.appState.queue = queue.snapshot();
+    coordinator.appState.playback = {
+      status: "playing", currentTrackIdentity: track.identity,
+      positionSeconds: 65, durationSeconds: 245,
+    };
+    coordinator.appState.volume = { percent: 73, ready: true };
+    coordinator.appState.queue.repeatAll = true;
+
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    for (const tab of ["playback", "library", "downloader"] as const) {
+      coordinator.dispatchUi({ type: "switchTab", tab });
+      const frame = terminal.lastFrame()!;
+      expect(frame).toContain("▶ PLAYING");
+      expect(frame).toContain("A Very Long Current Track");
+      expect(frame).toContain("1:05/4:05");
+      expect(frame).toContain("Vol 73%");
+      expect(frame).toContain("↻ ALL");
+      expect(frame.indexOf("NOW PLAYING")).toBeLessThan(frame.indexOf("? Help"));
+      expect(frame).not.toContain("Artist:");
+      expect(frame).not.toContain("Channel:");
+      expect(frame).not.toContain("Randomize");
+    }
+  });
+
+  test.each([
+    ["paused", "Ⅱ PAUSED"],
+    ["stopped", "■ STOPPED"],
+    ["error", "! ERROR"],
+  ] as const)("gives %s playback a non-color status cue", async (status, cue) => {
+    const track = cachedTrack("status", "Status Track");
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    if (status === "error") queue.markAvailability(track.identity, { status: "unavailable", reason: "cache missing" });
+    const appState = createInitialAppState({});
+    appState.queue = queue.snapshot();
+    appState.playback = { status, currentTrackIdentity: track.identity, positionSeconds: 42,
+      ...(status === "paused" ? { paused: true } : {}) };
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    expect(terminal.lastFrame()).toContain(cue);
+    expect(terminal.lastFrame()).toContain("0:42");
+    expect(terminal.lastFrame()).not.toContain("0:42/");
+  });
+
+  test("distinguishes restored resumable playback and truncates on narrow terminals", async () => {
+    const track = cachedTrack("restored", "Restored Track With A Title Far Too Long For A Narrow Terminal");
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    const appState = createInitialAppState({});
+    appState.queue = queue.snapshot();
+    appState.playback = { status: "paused", currentTrackIdentity: track.identity, positionSeconds: 42, restored: true };
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+    expect(terminal.lastFrame()).toContain("↻ RESUME");
+    expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 60)).toBe(true);
+  });
+
+  test("bounds passive progress publication while publishing user progress immediately", () => {
+    const appState = createInitialAppState({});
+    const uiState = createInitialUiState();
+    appState.playback = { status: "playing", currentTrackIdentity: null, positionSeconds: 1 };
+    let now = 0;
+    let scheduled: (() => void) | undefined;
+    const gate = new StatePublicationGate({
+      readState: () => ({ appState, uiState }),
+      cadence: { playbackCadenceMs: 5_000, downloadProgressMs: 1_000, providerProgressMs: 1_000 },
+      timers: {
+        now: () => now,
+        setTimeout: (callback) => { scheduled = callback; return callback; },
+        clearTimeout: (timer) => { if (scheduled === timer) scheduled = undefined; },
+      },
+    });
+    gate.publishInitial();
+
+    appState.playback.positionSeconds = 2;
+    gate.notify("playback");
+    expect(gate.snapshot?.appState.playback.positionSeconds).toBe(1);
+    now = 5_000;
+    scheduled?.();
+    expect(gate.snapshot?.appState.playback.positionSeconds).toBe(2);
+
+    appState.playback.positionSeconds = 7;
+    gate.notify("input");
+    expect(gate.snapshot?.appState.playback.positionSeconds).toBe(7);
+  });
+
+  test("renders passive progress on cadence and a user seek immediately", async () => {
+    const track = { ...cachedTrack("cadence-root", "Cadence Root Track"), durationSeconds: 100 };
+    const queue = new MemoryQueue();
+    queue.enqueue(track);
+    queue.startAt(0);
+    const appState = createInitialAppState({}, { config: { lowPower: { playbackProgressMs: 5_000 } } });
+    appState.queue = queue.snapshot();
+    appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 1, durationSeconds: 100 };
+    const player = new PublishingPlayer();
+    player.publish({ status: "playing", positionSeconds: 1, durationSeconds: 100 });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player });
+    let now = 0;
+    let scheduled: (() => void) | undefined;
+    const terminal = await render(createTmuRoot({
+      coordinator, noColor: true,
+      publicationTimers: {
+        now: () => now,
+        setTimeout: (callback) => { scheduled = callback; return callback; },
+        clearTimeout: (timer) => { if (scheduled === timer) scheduled = undefined; },
+      },
+    }), { columns: 100, rows: 24 });
+
+    player.publish({ status: "playing", positionSeconds: 2, durationSeconds: 100 });
+    expect(terminal.lastFrame()).toContain("0:01/1:40");
+    now = 5_000;
+    scheduled?.();
+    await waitFor(() => terminal.lastFrame()!.includes("0:02/1:40"));
+
+    await terminal.stdin.write("l");
+    expect(terminal.lastFrame()).toContain("0:07/1:40");
   });
 
   test("removes numeric tabs and command palette while help suspends actions", async () => {
@@ -506,4 +638,15 @@ function cachedTrack(stableId: string, title: string): Track {
     title,
     providerLabel: "YouTube Cache",
   };
+}
+
+class PublishingPlayer extends NoopPlayer {
+  publish(state: PlayerPlaybackState): void {
+    this.updateState(state);
+  }
+
+  override async seekBy(seconds: number): Promise<PlayerPlaybackState> {
+    this.publish({ ...this.playback, positionSeconds: (this.playback.positionSeconds ?? 0) + seconds });
+    return this.playback;
+  }
 }

@@ -52,7 +52,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     },
     lowPower: {
       playbackTickMs: 1000,
-      playbackProgressMs: null,
+      playbackProgressMs: 5000,
       downloadProgressThrottleMs: 1000,
       libraryProgressThrottleMs: 1000,
     },

@@ -306,6 +306,7 @@ export class AppCoordinator {
         status: "paused",
         positionSeconds: snapshot.positionSeconds ?? 0,
         currentTrackIdentity: current.track.identity,
+        restored: true,
       }
       : { status: "idle", currentTrackIdentity: null };
     this.selectQueueIndex(current ? this.queue.currentIndex : 0);

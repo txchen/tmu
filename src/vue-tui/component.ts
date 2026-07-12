@@ -6,6 +6,7 @@ import {
   StatePublicationGate,
   type PublicationCause,
   type PublicationSnapshot,
+  type PublicationTimers,
 } from "../state-publication";
 import { dispatchTerminalResize } from "./resize";
 import { isYouTubeCacheProvider } from "../youtube-cache";
@@ -20,6 +21,7 @@ export type TmuRootOptions = {
   coordinator: AppCoordinator;
   measureCellWidth?: (value: string) => number;
   noColor?: boolean;
+  publicationTimers?: Partial<PublicationTimers>;
 };
 
 export function createTmuRoot(options: TmuRootOptions) {
@@ -46,6 +48,7 @@ export function createTmuRoot(options: TmuRootOptions) {
           downloadProgressMs: cadence.downloadProgressThrottleMs,
           providerProgressMs: cadence.libraryProgressThrottleMs,
         },
+        timers: options.publicationTimers,
       });
       const snapshot = shallowRef(publication.publishInitial());
       const unsubscribePublication = publication.subscribe((next) => { snapshot.value = next; });
@@ -394,8 +397,49 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
         : downloaderView(snapshot, noColor),
     uiState.overlays.at(-1) ? h(Box, { borderStyle: "round", paddingX: 1 }, () =>
       h(Text, { bold: true }, () => `${tabLabel(uiState.activeTab)} Shortcuts · ${contextualHelp(uiState.activeTab)} · Global: Space Play/Pause · n/p Next/Previous · s Stop · h/l Seek · +/- Volume · r Repeat · [/] Tabs · Esc Close`)) : null,
+    nowPlayingBar(snapshot, noColor),
     h(Text, { dimColor: true }, () => footer(uiState)),
   ]);
+}
+
+function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
+  const { playback, queue, volume } = snapshot.appState;
+  if (!playback.currentTrackIdentity) return null;
+  const current = queue.entries.find((entry) =>
+    entry.track.identity.providerId === playback.currentTrackIdentity?.providerId
+    && entry.track.identity.stableId === playback.currentTrackIdentity.stableId);
+  if (!current) return null;
+  const unavailable = current.availability.status === "unavailable" || playback.status === "error";
+  const resumable = playback.status === "paused" && playback.restored === true;
+  const semantics = unavailable
+    ? { cue: "! ERROR", color: "red" }
+    : resumable
+      ? { cue: "↻ RESUME", color: "yellow" }
+      : playback.status === "playing"
+        ? { cue: "▶ PLAYING", color: "green" }
+        : playback.status === "paused"
+          ? { cue: "Ⅱ PAUSED", color: "yellow" }
+          : { cue: "■ STOPPED", color: "yellow" };
+  const elapsed = formatDuration(playback.positionSeconds ?? 0);
+  const duration = playback.durationSeconds ?? current.track.durationSeconds;
+  const progress = duration !== undefined && Number.isFinite(duration) && duration > 0
+    ? ` ${progressBar(playback.positionSeconds ?? 0, duration)} ${elapsed}/${formatDuration(duration)}`
+    : ` ${elapsed}`;
+  const volumeLabel = volume.ready ? `Vol ${volume.percent}%` : "Vol —";
+  const repeat = queue.repeatAll ? " · ↻ ALL" : "";
+  return h(Box, { width: "100%", flexDirection: "row" }, () => [
+    h(Text, {
+      bold: true, color: noColor ? undefined : semantics.color,
+    }, () => `──────── NOW PLAYING · ${semantics.cue} · `),
+    h(Text, { bold: true, wrap: "truncate-end", flexGrow: 1 }, () => current.track.title),
+    h(Text, { bold: true }, () => ` ·${progress} · ${volumeLabel}${repeat}`),
+  ]);
+}
+
+function progressBar(positionSeconds: number, durationSeconds: number): string {
+  const width = 10;
+  const filled = Math.max(0, Math.min(width, Math.round((positionSeconds / durationSeconds) * width)));
+  return `[${"━".repeat(filled)}${"─".repeat(width - filled)}]`;
 }
 
 function tabHeader(active: UiState["activeTab"], noColor: boolean) {
