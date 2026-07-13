@@ -17,7 +17,7 @@ The typed-query state of the Library tab, matching healthy cached Tracks and inc
 _Avoid_: Global Search, Provider Search, YouTube search
 
 **Track**:
-The canonical playable music item that Providers add to TMU's shared queue. Current Tracks come from the YouTube Cache.
+The canonical playable music item that Providers add to Playlists. Current Tracks come from the YouTube Cache.
 _Avoid_: song, media item, provider item
 
 **Track Title**:
@@ -29,7 +29,7 @@ The original title obtained from YouTube when a Track is downloaded, retained as
 _Avoid_: old name, original filename
 
 **Track Identity**:
-The durable `(providerId, stableId)` identity used for queue deduplication, restore, and Provider refresh. YouTube Cache Tracks use Provider ID `youtube-cache` and the YouTube video ID, never a title or URL.
+The durable `(providerId, stableId)` identity used for Playlist deduplication, restore, and Provider refresh. YouTube Cache Tracks use Provider ID `youtube-cache` and the YouTube video ID, never a title or URL.
 _Avoid_: stream URL identity, display title identity
 
 **Playback Locator**:
@@ -37,15 +37,15 @@ The runtime disk path TMU hands to the Player to start a cached Track.
 _Avoid_: track ID, provider ID
 
 **Player**:
-The TMU boundary that controls playback through mpv and reports current playback state, without owning Provider, Queue, or metadata behavior.
+The TMU boundary that controls playback through mpv and reports current playback state, without owning Provider, Playlist, or metadata behavior.
 _Avoid_: audio engine, provider player
 
 **App Coordinator**:
-The TMU boundary that turns UI intents into Provider, Queue, and Player workflows, such as resolving a queued Track and advancing playback.
+The TMU boundary that turns UI intents into Provider, Playlist, and Player workflows, such as resolving a Playlist Track and advancing playback.
 _Avoid_: UI controller, playback manager
 
 **App State**:
-The source of truth for Provider data, Queue contents, current playback state, download state, availability, and app-level errors.
+The source of truth for Provider data, Playlists, current playback state, download state, availability, and app-level errors.
 _Avoid_: UI state, view model
 
 **UI State**:
@@ -69,12 +69,12 @@ The atomic on-disk representation of one cached Track: one non-empty media file 
 _Avoid_: media file, database row, embedded tags, raw yt-dlp info JSON
 
 **Cache Health**:
-The health status shown directly on incomplete TMU-shaped Cache Entries in the Library list. An incomplete entry is visibly distinguished from a healthy Track, explains its reason in the selected-entry inspector, cannot use playback or Queue actions, and keys confirmed cleanup on its video ID or cache-file stem rather than display metadata. Cache Search includes it using whatever metadata is available, falling back to its stem. Recoverable entries may be repaired by resubmitting their URL in YouTube Downloader, while unrelated files are ignored and never deleted automatically.
+The health status shown directly on incomplete TMU-shaped Cache Entries in the Library list. An incomplete entry is visibly distinguished from a healthy Track, explains its reason in the selected-entry inspector, cannot use playback or Playlist actions, and keys confirmed cleanup on its video ID or cache-file stem rather than display metadata. Cache Search includes it using whatever metadata is available, falling back to its stem. Recoverable entries may be repaired by resubmitting their URL in YouTube Downloader, while unrelated files are ignored and never deleted automatically.
 _Avoid_: Track Availability, local-file import, automatic cleanup
 
 **Cache Deletion**:
-The explicitly confirmed, permanent removal of a Track's media and metadata from the YouTube Cache, recoverable only by downloading again. Any matching Queue entry remains visibly unavailable; deleting the playing Current Track first stops playback, retains it as Current, and resets its position.
-_Avoid_: remove from Queue, automatic cleanup, filesystem delete
+The explicitly confirmed, permanent removal of a Track's media and metadata from the YouTube Cache, recoverable only by downloading again. Any matching Playlist entry remains visibly unavailable; deleting the playing Current Track first stops playback, retains it as Current, and resets its position.
+_Avoid_: remove from Playlist, automatic cleanup, filesystem delete
 
 **Rename Track**:
 The Library action that assigns a non-empty Track Title to a healthy cached Track without changing its Track Identity, Source Title, media filename, Playback Locator, or playback state. The title change is persistent and immediately applies to every visible copy of the Track; incomplete Cache Entries cannot be renamed.
@@ -89,23 +89,35 @@ The sequential work created by one submitted YouTube URL, processing its Tracks 
 _Avoid_: Playlist, Music Collection, transaction
 
 **Download Pipeline**:
-The session-bound FIFO sequence of submitted Download Batches, with at most one active Track download across all batches. It may run alongside playback without changing playback state; cancelling the active batch continues to the next pending batch, and pending batches may be removed before they start without affecting the cache. Its queue, status, progress, and session summaries are shown in the YouTube Downloader rather than the Playback Tab. Quitting with work requires confirmation before cancelling all active and pending work. Summaries and failures are not persisted.
+The session-bound FIFO sequence of submitted Download Batches, with at most one active Track download across all batches. It may run alongside playback without changing playback state; cancelling the active batch continues to the next pending batch, and pending batches may be removed before they start without affecting the cache. Its sequence, status, progress, and session summaries are shown in the YouTube Downloader rather than the Playback Tab. Quitting with work requires confirmation before cancelling all active and pending work. Summaries and failures are not persisted.
 _Avoid_: Queue, parallel downloads, download playlist
 
 **Low-Power TUI**:
 The UI constraint that terminal rendering remains event-driven and bounded, with playback progress redrawn at a low default cadence of approximately five seconds rather than animated continuously; TMU Config may change the periodic progress cadence.
 _Avoid_: efficient UI, battery friendly UI
 
-**Queue-First MVP**:
-An MVP shape where every Provider feeds a single playback queue, and browsing/search exists only to add playable items to that queue.
-_Avoid_: library-browser-first MVP, media manager MVP
+**Playlist**:
+A durably identified, user-named, ordered collection of Tracks that directly owns its playback order, Current Track, saved position, stopped-or-resumable state, and Repeat All setting. A Track may belong to multiple Playlists but appears at most once per Playlist by Track Identity; names are trimmed, non-empty, unique after case-folding, and at most 16 Unicode characters.
+_Avoid_: Queue, collection, mix
 
-**Queue**:
-The ordered list of Tracks TMU is preparing to play or is currently playing, shared across every Provider in the Queue-First MVP. Reordering follows Track Identity: Queue selection follows the moved Track, and the Current Track remains Current without interrupting playback.
-_Avoid_: playlist, play queue per source
+**Active Playlist**:
+The Playlist currently visible, identified in the top bar, and targeted by playback and Library actions. Switching away from Playing or Paused saves a resumable position, while explicitly Stopped remains at `0:00`; switching restores the destination Playlist without autoplay, selects its Current Track or first Track, and resets scroll to reveal it.
+_Avoid_: selected playlist, current queue
+
+**Playlist Manager**:
+The global modal opened with `P` outside text entry for switching, creating, renaming, deleting, and persistently ordering Playlists. Opening always selects and reveals the Active Playlist; each row shows its Active marker, name, and Track count. Vim navigation and `Enter` switch, `c` creates at the end and immediately activates, `e` renames, `x` requests confirmed deletion, and `J`/`K` reorder. Create and rename enter text-edit mode where `Enter` submits, `Esc` returns, validation errors stay inline, and printable command characters become name text. A successful rename returns with that row selected; confirmed deletion stays open and selects the replacement row, or the previous row after deleting the last; `Enter` on the already Active Playlist only closes the manager without changing playback.
+_Avoid_: Playlist Switcher, playlist tab, playlist pane
+
+**Delete Playlist**:
+The confirmed removal of a Playlist and its Track memberships, identified by name and Track count in the confirmation, without changing the YouTube Cache. Deleting the Active Playlist stops playback and activates the next Playlist in manager order, or the previous one when it occupied the last row; the sole remaining Playlist cannot be deleted.
+_Avoid_: Clear Playlist, delete queue
+
+**Default Playlist**:
+The initial Playlist created by TMU, initially named `Default`, which receives any migrated legacy Queue snapshot. It may be renamed; TMU protects whichever Playlist is last from deletion rather than reserving this Playlist's identity or name.
+_Avoid_: default queue, system queue
 
 **Current Track**:
-The one Track in the Queue designated for playback. Queue selection is independent UI State rather than another playback status; global Play, Pause, and Resume always target the Current Track even when another row is selected. Only when no Current Track exists may Play start the selected row. The Last Queue Snapshot remembers the Current Track across relaunch so the user can explicitly resume it without autoplay. Removing the Current Track stops playback, clears the designation, and never advances automatically.
+The one Track in the Active Playlist designated for playback. Switching Playlists stops playback and makes the destination Playlist's remembered Current Track current without autoplay.
 _Avoid_: separate playing Track, selected Track as playback state
 
 **Resume**:
@@ -117,15 +129,15 @@ The playback action that halts the Player, keeps the Current Track, and resets i
 _Avoid_: clearing Current Track, preserving the stopped position
 
 **Playback Tab**:
-The default TUI surface opened by TMU's only launch form, `tmu`, with a focusable Queue Pane, an optional non-focusable Selected Track Preview, and a distinct Now Playing Bar at the bottom. At medium and wide widths the Queue and preview form an approximately 2:1 left/right split; at narrow widths the preview stacks below the Queue. Launch always starts on the Playback Tab and restores the Last Queue Snapshot without autoplay. The Playback Tab remains visible when the Queue is empty, keeps Queue Pane focus, shows no Current Track, and belongs to the same top-level tab set as Library and YouTube Downloader.
+The default TUI surface opened by TMU's only launch form, `tmu`, with a focusable Playlist Pane, an optional non-focusable Selected Track Preview, and a distinct Now Playing Bar at the bottom. At medium and wide widths the Playlist and preview form an approximately 2:1 left/right split; at narrow widths the preview stacks below the Playlist. Launch always starts on the Playback Tab and restores the Last Playlist Snapshot without autoplay. The Playback Tab remains visible when the Active Playlist is empty, keeps Playlist Pane focus, shows no Current Track, and belongs to the same top-level tab set as Library and YouTube Downloader.
 _Avoid_: dashboard, browse home, always-visible search
 
-**Queue Pane**:
-The focusable list in the Playback Tab, showing the ordered Queue entries together with their selection, current, and playback status. It is the Playback Tab's only focus target and occupies the larger portion of the layout when shown beside the Selected Track Preview.
-_Avoid_: library pane, playlist view, browser pane
+**Playlist Pane**:
+The focusable list in the Playback Tab, showing the Active Playlist's ordered Tracks together with their selection, current, and playback status. It is the Playback Tab's only focus target and occupies the larger portion of the layout when shown beside the Selected Track Preview.
+_Avoid_: Queue Pane, library pane, browser pane
 
 **Selected Track Preview**:
-A compact, non-focusable metadata area for the selected Queue Track. It appears to the right of the Queue Pane at medium and wide widths and below it at narrow widths. It is absent when no Track is selected and is independent of the Current Track and playback state.
+A compact, non-focusable metadata area for the selected Playlist Track. It appears to the right of the Playlist Pane at medium and wide widths and below it at narrow widths. It is absent when no Track is selected and is independent of the Current Track and playback state.
 _Avoid_: Playing Track Pane, Current Track details, focusable inspector
 
 **Now Playing Bar**:
@@ -133,15 +145,15 @@ The non-focusable area immediately above the contextual shortcut footer on every
 _Avoid_: Selected Track Preview, focusable playback pane, animated playback panel
 
 **Library**:
-The top-level tab for finding Cache Entries already present in the YouTube Cache. It is entirely local and uses Cache Search to produce one list containing healthy playable Tracks and visibly unhealthy incomplete Cache Entries. `Enter` on a healthy Track means Play Now, separate actions handle Play Next, Add to Queue, and confirmed Cache Deletion, while incomplete entries disable playback and Queue actions and allow confirmed cleanup. It does not show download queue or download progress.
+The top-level tab for finding Cache Entries already present in the YouTube Cache. It is entirely local and uses Cache Search to produce one list containing healthy playable Tracks and visibly unhealthy incomplete Cache Entries. Its Play Now, Play Next, and Add to Playlist actions target only the Active Playlist; adding to another Playlist requires switching first.
 _Avoid_: provider browser, local library, download status
 
 **YouTube Downloader**:
-The top-level tab for submitting YouTube or YouTube Music video and playlist URLs and observing the Download Pipeline. It owns download queue display, active download status, cancellation, pending-batch removal, and session summaries; accepted submissions clear the URL input after they create a Download Batch, while pre-batch validation failures or cancelled playlist confirmations keep it editable. Downloading never adds Tracks to the Queue by itself.
-_Avoid_: Library, Queue Home status, playback queue
+The top-level tab for submitting YouTube or YouTube Music video and playlist URLs and observing the Download Pipeline. It owns download pipeline display, active download status, cancellation, pending-batch removal, and session summaries; accepted submissions clear the URL input after they create a Download Batch, while pre-batch validation failures or cancelled playlist confirmations keep it editable. Downloading never adds Tracks to a Playlist by itself.
+_Avoid_: Library, Playlist status, playback list
 
 **Top-Level Tabs**:
-The primary TUI structure containing Playback, Library, and YouTube Downloader, labeled `Player`, `Library`, and `Downloads` in the compact top bar. `[` and `]` switch cyclically to the previous and next tab, including while ordinary tab text inputs are focused; literal brackets are therefore unavailable in those inputs, and there are no numeric tab shortcuts. A modal text editor such as Rename Track suspends tab switching and accepts brackets as content. Tab and Shift+Tab move focus only among panes within the active tab. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, and YouTube Downloader is for download submission and status. Global playback shortcuts continue to work across tabs except where a focused text input or modal intentionally captures keys.
+The primary TUI structure containing Playback, Library, and YouTube Downloader, labeled `Player`, `Library`, and `Downloads` in a compact top bar that also identifies the Active Playlist. `[` and `]` switch cyclically to the previous and next tab, including while ordinary tab text inputs are focused; literal brackets are therefore unavailable in those inputs, and there are no numeric tab shortcuts. A modal text editor such as Rename Track suspends tab switching and accepts brackets as content. Tab and Shift+Tab move focus only among panes within the active tab. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, and YouTube Downloader is for download submission and status. Global playback shortcuts continue to work across tabs except where a focused text input or modal intentionally captures keys.
 _Avoid_: overlay-first UI, provider tabs, hidden download status
 
 **Vim Navigation**:
@@ -153,41 +165,41 @@ TMU's keyboard-discovery layer: a small footer shows only the most relevant acti
 _Avoid_: permanent shortcut wall, undocumented keymap
 
 **Play Next**:
-The TUI action that moves or inserts a Track into the next Queue position without duplicates and never starts playback. The Current Track stays in place; an empty Queue receives the Track at its head.
+The TUI action that moves or inserts a Track into the next Active Playlist position without duplicates and never starts playback. The Current Track stays in place; an empty Playlist receives the Track at its head.
 _Avoid_: enqueue, add to end, play now, autoplay
 
-**Add to Queue**:
-The Library action that adds a cached Track to the end of the Queue only when it is not already queued, without starting playback, moving existing Queue entries, or changing the Current Track. It is distinct from downloading, which never queues Tracks by itself.
-_Avoid_: download to queue, Play Now, Play Next
+**Add to Playlist**:
+The Library action that adds a cached Track to the end of the Active Playlist only when it is not already present, without starting playback, moving an existing entry, or changing the Current Track. It is distinct from downloading, which never adds Tracks to a Playlist by itself.
+_Avoid_: Add to Queue, Play Now, Play Next
 
 **Play Now**:
-The TUI action that deduplicates a Track into the Queue, makes it Current, and starts it from the beginning immediately. A different former Current Track remains immediately before it so Previous returns to that Track; without a Current Track, it goes at the Queue head.
+The TUI action that deduplicates a Track into the Active Playlist, makes it Current, and starts it from the beginning immediately. A different former Current Track remains immediately before it so Previous returns to that Track; without a Current Track, it goes at the Playlist head.
 _Avoid_: autoplay, resume, play next
 
 **Play Selected**:
-The Playback Tab action that makes the selected existing Queue Track Current and starts it from the beginning without changing Queue order. Previous and Next Track then follow the selected Track's existing neighbors. Library uses Play Now instead because its Track may not yet be in the Queue.
-_Avoid_: Play Now, Resume, Play Next, queue reorder
+The Playback Tab action that makes the selected existing Playlist Track Current and starts it from the beginning without changing Playlist order. Previous and Next Track then follow the selected Track's existing neighbors. Library uses Play Now instead because its Track may not yet be in the Active Playlist.
+_Avoid_: Play Now, Resume, Play Next, Playlist reorder
 
-**Clear Queue**:
-The destructive TUI action that, after explicit confirmation, stops playback, clears the Current Track, and removes every Track from the Queue. Cancelling the confirmation leaves both Queue and playback unchanged.
+**Clear Playlist**:
+The destructive TUI action that, after explicit confirmation, stops playback, clears the Current Track, and removes every Track membership from the Active Playlist without changing the YouTube Cache. Cancelling the confirmation leaves both Playlist and playback unchanged.
 _Avoid_: unconfirmed clear, automatic advance after clear
 
-**Randomize Queue**:
-The one-shot Queue action that visibly randomizes every Track, including the Current Track. The Current Track keeps playing without interruption and remains Current at its new visible index; playback then follows the resulting visible order and Play Next remains literally next. Randomize Queue is not a playback mode: it has no enabled state, toggle, or status indicator, and invoking it again simply randomizes the entire Queue again.
+**Randomize Playlist**:
+The one-shot Playlist action that visibly randomizes every Track in the Active Playlist, including the Current Track. The Current Track keeps playing without interruption and remains Current at its new visible index; playback then follows the resulting visible order and Play Next remains literally next. Randomize Playlist is not a playback mode: it has no enabled state, toggle, or status indicator.
 _Avoid_: Shuffle mode, hidden random playback order
 
 **Next Track**:
-The playback action that starts the next playable Track in visible Queue order, skipping unavailable Tracks without removing them. Repeat All wraps through that visible order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Queue.
-_Avoid_: clearing Current Track at Queue end, silently removing unavailable Tracks
+The playback action that starts the next playable Track in visible Active Playlist order, skipping unavailable Tracks without removing them. Repeat All wraps through that visible order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Playlist.
+_Avoid_: clearing Current Track at Playlist end, silently removing unavailable Tracks
 
 **Previous Track**:
-The playback action that restarts the Current Track when playback is more than five seconds in; at five seconds or less it starts the preceding visible Queue Track. At the Queue head it restarts Current rather than clearing it.
-_Avoid_: always changing Queue rows, clearing Current at Queue head
+The playback action that restarts the Current Track when playback is more than five seconds in; at five seconds or less it starts the preceding visible Playlist Track. At the Playlist head it restarts Current rather than clearing it.
+_Avoid_: always changing Playlist rows, clearing Current at Playlist head
 
 **Track Availability**:
-The runtime-derived ability of a queued Track to resolve and play, shown visibly with a reason when its Cache Entry or a playback attempt fails. mpv playback failures mark the Track unavailable for the session so automatic advancement skips it instead of repeatedly retrying. Unavailable restored Tracks retain their Queue order and Current Track designation and may recover later after cache rescan; TMU never silently removes them. Direct Resume and Play Now fail on the requested Track without substitution unless a future explicit retry action is added.
+The session-wide, Track Identity-based ability of a Track to resolve and play, shown with a reason on every matching Playlist membership. mpv playback failures mark every copy unavailable so automatic advancement skips it consistently; unavailable restored Tracks retain their Playlist order and Current Track designation and may recover after cache rescan.
 _Avoid_: silently removed track, hidden playback error
 
-**Last Queue Snapshot**:
-The small persistence record TMU updates and restores automatically so Queue order, Track data, Current Track and position, repeat, and volume survive exit and relaunch. It excludes Track Availability, Queue selection, scroll, filters, active tab, and other UI State, and never becomes a general app database or media-library index. Restoration is all-or-nothing. Corrupt, unsupported, or partially invalid snapshot data is quarantined for recovery; TMU opens the Playback Tab with an empty Queue and a non-blocking warning, and does not replace it until the user makes a meaningful state change. Write failures leave playback and in-memory state working, remain visibly actionable, retry later, and never trap exit.
-_Avoid_: app database, library index
+**Last Playlist Snapshot**:
+The atomic persistence record containing every Playlist in user-defined order, each Playlist's playback state, and the Active Playlist identity. Only when it is absent does TMU migrate the legacy Queue snapshot into the Default Playlist; invalid data is quarantined rather than reviving legacy state, while write failures leave in-memory operation working, warn visibly, and retry later.
+_Avoid_: Last Queue Snapshot, app database, library index
