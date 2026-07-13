@@ -1,6 +1,6 @@
 # TMU
 
-TMU optionally shows a read-only Background Sounds tab on macOS 26.5 and newer. This is a best-effort integration with a private macOS framework: availability is checked lazily when the tab is first opened, failures stay isolated to the tab, and Apple may change the underlying interface in a future macOS release.
+TMU optionally shows a Background Sounds tab on macOS 26.5 and newer. This is a lazy, best-effort integration with a private macOS framework: the version check only makes the Mac a candidate, availability is checked when the tab is first opened, and failures stay isolated to the tab. Apple does not provide a compatibility guarantee for this private interface and may change it in a future macOS release.
 
 TMU is a lean terminal music player focused on downloading YouTube media, caching it on disk, and playing Tracks from that YouTube Cache.
 
@@ -9,7 +9,7 @@ TMU opens on Playback and provides three standard top-level tabs, plus the optio
 - Playback shows the Active Playlist and its Current Track.
 - Library searches healthy cached Tracks locally and provides Play Now, Play Next, Add to Playlist, opening on YouTube, Cache Deletion, and Cache Health cleanup.
 - YouTube Downloader submits video or playlist URLs to a session-only Download Pipeline without adding Tracks to a TMU Playlist.
-- Background Sounds reads authoritative enabled, sound, and volume state from macOS without affecting TMU playback.
+- Background Sounds reads and controls the authoritative enabled state, immediately usable sound, and independent volume without affecting TMU playback. macOS System Settings owns Background Sound downloads; download another sound there, then refresh TMU with `u`.
 
 TMU supports multiple persistent, user-named Playlists. Press uppercase `P` outside text entry to open the Playlist Manager, where you can switch (`Enter`), create (`c`), rename (`e`), delete (`x`), and reorder (`J`/`K`) Playlists. The top bar always identifies the Active Playlist; Library and playback actions target only that Playlist. Lowercase `p` remains Previous Track.
 

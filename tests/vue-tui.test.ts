@@ -61,6 +61,12 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Background Sounds Shortcuts");
     expect(terminal.lastFrame()).toContain("Refresh or retry macOS");
+    expect(terminal.lastFrame()).toContain("←/→");
+    expect(terminal.lastFrame()).toContain("Adjust focused sound or");
+    expect(terminal.lastFrame()).toContain("h/l");
+    expect(terminal.lastFrame()).not.toContain("h/l, ←/→");
+    expect(terminal.lastFrame()).toContain("+/−");
+    expect(terminal.lastFrame()).toContain("Repeat All");
     await terminal.stdin.write("?");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("playback");

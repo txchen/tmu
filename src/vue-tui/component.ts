@@ -1014,7 +1014,7 @@ function shortcutHelpLayout(ui: UiState, incompleteSelected = false) {
   const innerWidth = width - 2;
   const hintLines = wrapHelpText(HELP_HINT, innerWidth);
   const activeGroups = activeShortcutGroups(ui.activeTab, incompleteSelected);
-  const globalGroups = globalShortcutGroups();
+  const globalGroups = globalShortcutGroups(ui.activeTab);
   const lines = ui.terminal.tier === "narrow"
     ? shortcutGroupLines([...activeGroups, ...globalGroups], innerWidth)
     : twoColumnHelpLines(activeGroups, globalGroups, innerWidth);
@@ -1090,13 +1090,14 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
   ];
 }
 
-function globalShortcutGroups(): ShortcutGroup[] {
+function globalShortcutGroups(tab: UiState["activeTab"]): ShortcutGroup[] {
   return [
     {
       title: "GLOBAL PLAYBACK",
       rows: [
         ["Space", "Play/Pause"], ["n/p", "Next/Previous Track"], ["s", "Stop"],
-        ["h/l, ←/→", "Seek −/+ 5 seconds"], ["+/−", "Volume −/+ 5%"], ["r", "Repeat All"],
+        [tab === "background" ? "h/l" : "h/l, ←/→", "Seek −/+ 5 seconds"],
+        ["+/−", "Volume −/+ 5%"], ["r", "Repeat All"],
       ],
     },
     {

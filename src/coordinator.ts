@@ -216,6 +216,7 @@ export class AppCoordinator {
   private async runBackgroundSounds(operation: BackgroundSoundsOperation): Promise<void> {
     if (!this.backgroundSoundsControl || this.appState.backgroundSounds.status === "hidden" || this.tornDown) return;
     const task = async () => {
+      if (this.tornDown) return;
       const previous = this.appState.backgroundSounds;
       this.appState.backgroundSounds = "snapshot" in previous
         ? { status: "busy", snapshot: previous.snapshot }

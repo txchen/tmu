@@ -277,6 +277,29 @@ describe("Background Sounds session lifecycle", () => {
     expect(coordinator.appState.appErrors).toEqual([]);
   });
 
+  test("teardown drops queued Background Sounds work without performing a final write", async () => {
+    let readStarted!: () => void;
+    const started = new Promise<void>((resolve) => { readStarted = resolve; });
+    const control = {
+      ...mutableControl(snapshot),
+      read: vi.fn(async (signal?: AbortSignal) => new Promise<typeof snapshot>((_resolve, reject) => {
+        readStarted();
+        signal?.addEventListener("abort", () => reject(new BackgroundSoundsError("cancelled", "cancelled")), { once: true });
+      })),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    await coordinator.enterBackgroundSounds();
+
+    const refresh = coordinator.refreshBackgroundSounds();
+    await started;
+    const queuedWrite = coordinator.setBackgroundSoundsEnabled(true);
+    await coordinator.teardown();
+    await Promise.all([refresh, queuedWrite]);
+
+    expect(control.setEnabled).not.toHaveBeenCalled();
+    expect(coordinator.appState.appErrors).toEqual([]);
+  });
+
   test("serializes authoritative enabled and sound mutations without changing unrelated values", async () => {
     const ocean = { ...snapshot, sound: { id: "Ocean", label: "Ocean" }, sounds: [...snapshot.sounds, { id: "Ocean", label: "Ocean" }] };
     const enabled = { ...ocean, enabled: true };
