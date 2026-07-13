@@ -554,6 +554,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
       uiState.background.soundPicker,
       noColor,
       uiState.terminal.rows,
+      uiState.terminal.columns,
     ));
   }
 
@@ -718,7 +719,13 @@ async function routeBackground(input: string, key: InputKey, coordinator: AppCoo
   }
   else if (row === 1 && key.return) {
     const activeIndex = state.snapshot.sounds.findIndex((sound) => sound.id === state.snapshot.sound.id);
-    coordinator.dispatchUi({ type: "openBackgroundSoundPicker", activeIndex: Math.max(0, activeIndex) });
+    coordinator.dispatchUi({
+      type: "openBackgroundSoundPicker",
+      activeIndex: Math.max(0, activeIndex),
+      visibleCount: backgroundSoundPickerVisibleCount(
+        coordinator.uiState.terminal.rows, coordinator.uiState.terminal.columns, state.snapshot.sounds.length,
+      ),
+    });
   }
   else if (row === 2 && (key.leftArrow || key.rightArrow)) coordinator.adjustBackgroundSoundsVolume(key.leftArrow ? -1 : 1);
   return true;
@@ -739,7 +746,12 @@ async function routeBackgroundSoundPicker(input: string, key: InputKey, coordina
   else if (coordinator.uiState.pendingVimChord) coordinator.dispatchUi({ type: "setPendingVimChord", pending: false });
   if (jump.index !== undefined || delta !== 0 || key.home || key.end) {
     const index = jump.index ?? (key.home ? 0 : key.end ? sounds.length - 1 : picker.selectedIndex + delta);
-    coordinator.dispatchUi({ type: "selectBackgroundSound", index, count: sounds.length });
+    coordinator.dispatchUi({
+      type: "selectBackgroundSound", index, count: sounds.length,
+      visibleCount: backgroundSoundPickerVisibleCount(
+        coordinator.uiState.terminal.rows, coordinator.uiState.terminal.columns, sounds.length,
+      ),
+    });
     return;
   }
   if (key.return) {
@@ -754,32 +766,36 @@ function backgroundSoundPickerModal(
   picker: NonNullable<UiState["background"]["soundPicker"]>,
   noColor: boolean,
   terminalRows: number,
+  terminalColumns: number,
 ) {
-  const maximumRows = Math.max(1, terminalRows - 9);
-  const columnCount = Math.max(2, Math.ceil(sounds.length / maximumRows));
-  const rowsPerColumn = Math.ceil(sounds.length / columnCount);
-  const option = (index: number) => {
-    const sound = sounds[index];
-    const width = `${100 / columnCount}%`;
-    if (!sound) return h(Text, { width }, () => "");
+  const visibleCount = backgroundSoundPickerVisibleCount(terminalRows, terminalColumns, sounds.length);
+  const maximumScroll = Math.max(0, sounds.length - visibleCount);
+  const boundedScroll = Math.min(picker.scroll, maximumScroll);
+  const scroll = picker.selectedIndex < boundedScroll ? picker.selectedIndex
+    : picker.selectedIndex >= boundedScroll + visibleCount ? picker.selectedIndex - visibleCount + 1
+      : boundedScroll;
+  const rows = sounds.slice(scroll, scroll + visibleCount).map((sound, offset) => {
+    const index = scroll + offset;
     return h(Text, {
-      width,
+      width: "100%",
       inverse: index === picker.selectedIndex,
       color: index === picker.selectedIndex && !noColor ? "cyan" : undefined,
       wrap: "truncate-end",
     }, () => `${index === picker.selectedIndex ? "›" : " "} ${sound.label}`);
-  };
-  const rows = Array.from({ length: rowsPerColumn }, (_, row) => h(Box, {
-    flexDirection: "row", width: "100%",
-  }, () => Array.from({ length: columnCount }, (_, column) => option(row + column * rowsPerColumn))));
+  });
   return h(Box, {
     flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
-    paddingX: 2, width: "80%",
+    paddingX: 2, width: "50%",
   }, () => [
     h(Text, { bold: true }, () => "Choose Background Sound"),
     ...rows,
-    h(Text, { dimColor: true }, () => "j/k or ↑/↓ Move · Enter Choose · Esc Cancel"),
+    h(Text, { dimColor: true }, () => "j/k ↑/↓ · Enter · Esc"),
   ]);
+}
+
+function backgroundSoundPickerVisibleCount(terminalRows: number, terminalColumns: number, soundCount: number): number {
+  const chromeRows = terminalColumns < 70 ? 9 : 8;
+  return Math.max(1, Math.min(soundCount, terminalRows - chromeRows));
 }
 
 function activePlaylistName(appState: PublicationSnapshot["appState"]): string {

@@ -24,8 +24,8 @@ export type UiStateAction =
   | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
   | { type: "setBackgroundSelection"; index: number }
   | { type: "setBackgroundPendingVolume"; percent: number | null }
-  | { type: "openBackgroundSoundPicker"; activeIndex: number }
-  | { type: "selectBackgroundSound"; index: number; count: number }
+  | { type: "openBackgroundSoundPicker"; activeIndex: number; visibleCount: number }
+  | { type: "selectBackgroundSound"; index: number; count: number; visibleCount: number }
   | { type: "dismissBackgroundSoundPicker" }
   | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectPlaylistTrack"; index: number; identities: readonly TrackIdentity[] }
@@ -132,12 +132,18 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "openBackgroundSoundPicker":
       return { ...state, background: { ...state.background, soundPicker: {
         selectedIndex: action.activeIndex,
+        scroll: visibleScroll(0, action.activeIndex, action.visibleCount),
       } } };
     case "selectBackgroundSound": {
       if (!state.background.soundPicker) return state;
       const selectedIndex = clampIndex(action.index, action.count);
+      const maximumScroll = Math.max(0, action.count - action.visibleCount);
+      const currentScroll = Math.min(state.background.soundPicker.scroll, maximumScroll);
       return { ...state, background: { ...state.background, soundPicker: {
         selectedIndex,
+        scroll: action.visibleCount >= action.count
+          ? 0
+          : visibleScroll(currentScroll, selectedIndex, action.visibleCount),
       } } };
     }
     case "dismissBackgroundSoundPicker":
