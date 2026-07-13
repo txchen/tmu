@@ -60,6 +60,14 @@ _Avoid_: separate credentials store, secret database
 The command-line programs TMU orchestrates rather than reimplementing: `yt-dlp` for YouTube extraction/download and `mpv` for playback. TMU does not require `ffmpeg` globally; any extra tool need is reported only when the invoked `yt-dlp` operation requires it.
 _Avoid_: built-in downloader, built-in transcoder, media processing engine
 
+**Background Sound**:
+The macOS-managed ambient audio stream that may play alongside TMU music while remaining independent from Tracks, Playlists, and the Player. TMU may provide a control surface for its enabled state, sound type, and volume without persisting that state itself.
+_Avoid_: Track, background Track, TMU playback
+
+**Background Sounds Tab**:
+The optional macOS-only Top-Level Tab that controls Background Sound enabled state, immediately usable sound type, and independent volume. A candidate Mac may show the tab before control availability is confirmed; failures remain contained in the tab and never affect music playback.
+_Avoid_: Background Sounds Player, ambient Playlist, macOS settings mirror
+
 **YouTube Cache**:
 The fixed-location, TMU-managed library of audio files and metadata created by the YouTube URL Download Flow, and the canonical implementation/UI name replacing Offline YouTube Cache. YouTube and YouTube Music URLs resolve to the same cache identity when they share a video ID. A healthy existing Track is not redownloaded, refreshed, or changed to a different container; an incomplete entry is repairable, arbitrary user-copied audio is not imported, and cached Tracks are never removed automatically for age or size.
 _Avoid_: Offline YouTube Cache, local music folder, download folder, saved YouTube, reveal file
