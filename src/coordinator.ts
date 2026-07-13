@@ -6,13 +6,12 @@ import {
   sameIdentity,
   type AppIntent,
   type AppState,
-  type LastQueueSnapshot,
   type LastPlaylistSnapshot,
   type Player,
   type PlayerPlaybackState,
   type Provider,
-  type Queue,
-  type QueueEntry,
+  type PlaylistContent,
+  type PlaylistEntry,
   type Track,
   type UiState,
 } from "./domain";
@@ -35,6 +34,7 @@ import {
 } from "./preferences";
 import {
   InMemoryLastQueueSnapshotPersistence,
+  type LastQueueSnapshot,
   type LastQueueSnapshotPersistence,
 } from "./snapshot";
 import {
@@ -43,7 +43,7 @@ import {
   playlistCollectionFromSnapshot,
   type LastPlaylistSnapshotPersistence,
 } from "./playlist-snapshot";
-import { MemoryPlaylistCollection } from "./playlists";
+import { MemoryPlaylistCollection } from "./playlist-collection";
 import {
   executeYouTubeDownloadBatch,
   prepareYouTubeDownloadBatch,
@@ -62,10 +62,10 @@ export type AppStateChangeReason = "state" | "playback";
 export type AppCoordinatorOptions = {
   appState: AppState;
   uiState: UiState;
-  queue: Queue;
+  initialPlaylistContent: PlaylistContent;
   player: Player;
   refreshDependencyHealth?: DependencyHealthRefresh;
-  snapshotPersistence?: LastQueueSnapshotPersistence;
+  legacyQueueSnapshotPersistence?: LastQueueSnapshotPersistence;
   playlistSnapshotPersistence?: LastPlaylistSnapshotPersistence;
   appPreferencesPersistence?: AppPreferencesPersistence;
   dependencyRunner?: DependencyCommandRunner;
@@ -80,7 +80,7 @@ export class AppCoordinator {
   private readonly uiStateStore: UiStateStore;
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
-  private readonly snapshotPersistence: LastQueueSnapshotPersistence;
+  private readonly legacyQueueSnapshotPersistence: LastQueueSnapshotPersistence;
   private readonly playlistSnapshotPersistence: LastPlaylistSnapshotPersistence;
   private readonly playlists: MemoryPlaylistCollection;
   private readonly appPreferencesPersistence: AppPreferencesPersistence;
@@ -112,10 +112,10 @@ export class AppCoordinator {
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
-    this.playlists = new MemoryPlaylistCollection(options.queue);
+    this.playlists = new MemoryPlaylistCollection(options.initialPlaylistContent);
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
-    this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
+    this.legacyQueueSnapshotPersistence = options.legacyQueueSnapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
     this.playlistSnapshotPersistence = options.playlistSnapshotPersistence ?? new InMemoryLastPlaylistSnapshotPersistence();
     this.appPreferencesPersistence = options.appPreferencesPersistence
       ?? new InMemoryAppPreferencesPersistence();
@@ -132,7 +132,7 @@ export class AppCoordinator {
       this.maybeCheckpointLastPlaylistSnapshot(playback);
       if (reachedNaturalEnd || playbackFailed) void this.advanceAfterTerminalPlaybackEvent();
     });
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   get uiState(): Readonly<UiState> {
@@ -145,14 +145,14 @@ export class AppCoordinator {
     return snapshot;
   }
 
-  queueTrackIdentities() {
-    return this.queueIdentities();
+  playlistTrackIdentities() {
+    return this.playlistIdentities();
   }
 
   async start(): Promise<void> {
     const preferences = await this.restoreAppPreferences();
-    await this.restorePlaylistSnapshotOrMigrateQueue(preferences?.volume);
-    this.syncQueueState();
+    await this.restorePlaylistSnapshotOrMigratePlaylist(preferences?.volume);
+    this.syncPlaylistContentState();
     this.notifyStateChanged();
   }
 
@@ -169,14 +169,14 @@ export class AppCoordinator {
         case "playSelected":
           await this.playSelected(intent.identity);
           return;
-        case "addToQueue":
-          this.addToQueue(intent.target);
+        case "addToPlaylist":
+          this.addToPlaylist(intent.target);
           return;
-        case "removeQueueTrack":
-          await this.removeQueueTrack(intent.identity);
+        case "removePlaylistTrack":
+          await this.removePlaylistTrack(intent.identity);
           return;
-        case "moveQueueTrack":
-          this.moveQueueTrack(intent.identity, intent.delta);
+        case "movePlaylistTrack":
+          this.movePlaylistTrack(intent.identity, intent.delta);
           return;
         case "renameTrack":
           await this.renameTrack(intent.identity, intent.title);
@@ -200,8 +200,8 @@ export class AppCoordinator {
         case "playerOperation":
           await this.dispatchPlayerOperation(intent);
           return;
-        case "clearQueue":
-          await this.clearQueue();
+        case "clearPlaylist":
+          await this.clearPlaylist();
           return;
         case "createPlaylist":
           await this.createPlaylist(intent.name);
@@ -209,12 +209,12 @@ export class AppCoordinator {
         case "renamePlaylist":
           this.playlists.rename(intent.playlistId, intent.name);
           this.appState.lastEvent = `renamed Playlist to ${intent.name.trim()}`;
-          this.syncQueueState();
+          this.syncPlaylistContentState();
           return;
         case "movePlaylist":
           this.playlists.move(intent.playlistId, intent.delta);
           this.appState.lastEvent = "reordered Playlists";
-          this.syncQueueState();
+          this.syncPlaylistContentState();
           return;
         case "switchPlaylist":
           await this.switchPlaylist(intent.playlistId);
@@ -275,17 +275,17 @@ export class AppCoordinator {
     const record = await this.appPreferencesPersistence.load();
     this.recordPersistenceRecoveryMessages(this.appPreferencesPersistence);
 
-    if (record?.repeatAll !== undefined) this.queue.setRepeatAll(record.repeatAll);
+    if (record?.repeatAll !== undefined) this.activePlaylistContent.setRepeatAll(record.repeatAll);
     if (record?.volume !== undefined) this.appState.volume = { ...record.volume };
 
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     return record;
   }
 
   private async persistPlaybackPreferences(): Promise<void> {
-    const queue = this.queue.snapshot();
+    const playlist = this.activePlaylistContent.snapshot();
     await this.persistAppPreferences({
-      repeatAll: queue.repeatAll,
+      repeatAll: playlist.repeatAll,
       volume: this.appState.volume,
     });
   }
@@ -305,7 +305,7 @@ export class AppCoordinator {
     }
   }
 
-  private async restorePlaylistSnapshotOrMigrateQueue(preferredVolume?: AppPreferencesRecord["volume"]): Promise<void> {
+  private async restorePlaylistSnapshotOrMigratePlaylist(preferredVolume?: AppPreferencesRecord["volume"]): Promise<void> {
     const snapshot = await this.playlistSnapshotPersistence.load();
     this.recordPersistenceRecoveryMessages(this.playlistSnapshotPersistence);
     const quarantined = this.playlistSnapshotPersistence.wasLastLoadQuarantined?.() ?? false;
@@ -316,10 +316,10 @@ export class AppCoordinator {
     }
     if (quarantined) return;
 
-    const legacy = await this.snapshotPersistence.load();
-    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
+    const legacy = await this.legacyQueueSnapshotPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.legacyQueueSnapshotPersistence);
     if (!legacy) return;
-    await this.applyLastQueueSnapshot(legacy, preferredVolume);
+    await this.applyLegacyQueueSnapshot(legacy, preferredVolume);
     await this.saveLastPlaylistSnapshot({ meaningful: true });
   }
 
@@ -329,11 +329,11 @@ export class AppCoordinator {
     }
   }
 
-  private async applyLastQueueSnapshot(
+  private async applyLegacyQueueSnapshot(
     snapshot: LastQueueSnapshot,
     preferredVolume?: AppPreferencesRecord["volume"],
   ): Promise<void> {
-    this.queue.restore({
+    this.activePlaylistContent.restore({
       ...snapshot,
       entries: snapshot.entries.map((entry) => ({
         track: entry.track,
@@ -350,7 +350,7 @@ export class AppCoordinator {
     if (volume.ready) {
       await this.runPlayerCommand(() => this.player.setVolume(volume.percent));
     }
-    const current = this.queue.entries[this.queue.currentIndex];
+    const current = this.activePlaylistContent.entries[this.activePlaylistContent.currentIndex];
     this.appState.playback = current
       ? {
         status: "paused",
@@ -359,8 +359,8 @@ export class AppCoordinator {
         restored: true,
       }
       : { status: "idle", currentTrackIdentity: null };
-    this.selectQueueIndex(current ? this.queue.currentIndex : 0);
-    this.syncQueueState();
+    this.selectPlaylistIndex(current ? this.activePlaylistContent.currentIndex : 0);
+    this.syncPlaylistContentState();
   }
 
   private async applyLastPlaylistSnapshot(
@@ -373,7 +373,7 @@ export class AppCoordinator {
     this.appState.volume = { ...volume };
     if (volume.ready) await this.runPlayerCommand(() => this.player.setVolume(volume.percent));
     const state = this.playlists.snapshot().playlists.find((playlist) => playlist.id === snapshot.activePlaylistId)!;
-    const current = this.queue.entries[this.queue.currentIndex];
+    const current = this.activePlaylistContent.entries[this.activePlaylistContent.currentIndex];
     this.appState.playback = current && state.playbackStatus === "resumable"
       ? {
         status: "paused",
@@ -384,37 +384,37 @@ export class AppCoordinator {
       : current
         ? { status: "stopped", positionSeconds: 0, currentTrackIdentity: current.track.identity }
         : { status: "idle", currentTrackIdentity: null };
-    this.selectQueueIndex(current ? this.queue.currentIndex : 0);
-    this.syncQueueState();
+    this.selectPlaylistIndex(current ? this.activePlaylistContent.currentIndex : 0);
+    this.syncPlaylistContentState();
   }
 
   private async playNextTarget(track: Track): Promise<void> {
-    const block = this.queue.playNext([track]);
+    const block = this.activePlaylistContent.playNext([track]);
     for (const entry of block) {
       if (entry.availability.status === "unknown") this.markSelectedYouTubeCacheAvailability(entry);
     }
     this.appState.lastEvent = `accepted Play Next for ${block.length} Track${block.length === 1 ? "" : "s"}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private async playNowTarget(track: Track): Promise<void> {
-    const entry = this.queue.playNow([track]);
-    const queuedEntry = this.queue.entries.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
-    if (queuedEntry?.availability.status === "unknown") {
-      this.markSelectedYouTubeCacheAvailability(queuedEntry);
+    const entry = this.activePlaylistContent.playNow([track]);
+    const playlistEntry = this.activePlaylistContent.entries.find((candidate) => sameIdentity(candidate.track.identity, track.identity));
+    if (playlistEntry?.availability.status === "unknown") {
+      this.markSelectedYouTubeCacheAvailability(playlistEntry);
     }
-    await this.startQueueEntryFromBeginning(entry);
+    await this.startPlaylistEntryFromBeginning(entry);
   }
 
   private async playSelected(identity: Track["identity"]): Promise<void> {
-    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
-    await this.startQueueEntryFromBeginning(this.queue.startAt(index));
+    const index = this.activePlaylistContent.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    await this.startPlaylistEntryFromBeginning(this.activePlaylistContent.startAt(index));
   }
 
-  private async startQueueEntryFromBeginning(entry: QueueEntry | undefined): Promise<void> {
+  private async startPlaylistEntryFromBeginning(entry: PlaylistEntry | undefined): Promise<void> {
     if (!entry) {
-      this.appState.lastEvent = "Track is not in Queue";
-      this.syncQueueState();
+      this.appState.lastEvent = "Track is not in Playlist";
+      this.syncPlaylistContentState();
       return;
     }
     this.appState.playback = {
@@ -422,41 +422,41 @@ export class AppCoordinator {
       currentTrackIdentity: entry.track.identity,
       positionSeconds: 0,
     };
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     if (this.blockPlaybackActionIfUnavailable()) return;
     if (entry.availability.status === "unavailable") {
       this.markUnavailable(entry, entry.availability.reason);
       return;
     }
-    await this.playQueueEntry(entry);
+    await this.playPlaylistEntry(entry);
   }
 
-  private addToQueue(track: Track): void {
-    const previousLength = this.queue.entries.length;
-    const entry = this.queue.enqueue(track);
+  private addToPlaylist(track: Track): void {
+    const previousLength = this.activePlaylistContent.entries.length;
+    const entry = this.activePlaylistContent.add(track);
     if (entry.availability.status === "unknown") this.markSelectedYouTubeCacheAvailability(entry);
-    const inserted = this.queue.entries.length > previousLength;
-    this.appState.lastEvent = inserted ? `added ${track.title} to Queue` : `${track.title} is already in Queue`;
-    this.syncQueueState();
+    const inserted = this.activePlaylistContent.entries.length > previousLength;
+    this.appState.lastEvent = inserted ? `added ${track.title} to Playlist` : `${track.title} is already in Playlist`;
+    this.syncPlaylistContentState();
   }
 
-  private async removeQueueTrack(identity: Track["identity"]): Promise<void> {
-    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
-    await this.removeQueueEntry(index, "Track is not in Queue");
+  private async removePlaylistTrack(identity: Track["identity"]): Promise<void> {
+    const index = this.activePlaylistContent.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    await this.removePlaylistEntry(index, "Track is not in Playlist");
   }
 
-  private moveQueueTrack(identity: Track["identity"], delta: number): void {
-    const fromIndex = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
-    const toIndex = clampIndex(fromIndex + delta, this.queue.entries.length);
-    const moved = fromIndex < 0 ? undefined : this.queue.move(fromIndex, toIndex);
+  private movePlaylistTrack(identity: Track["identity"], delta: number): void {
+    const fromIndex = this.activePlaylistContent.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    const toIndex = clampIndex(fromIndex + delta, this.activePlaylistContent.entries.length);
+    const moved = fromIndex < 0 ? undefined : this.activePlaylistContent.move(fromIndex, toIndex);
     if (!moved) {
-      this.appState.lastEvent = "Track is not in Queue";
-      this.syncQueueState();
+      this.appState.lastEvent = "Track is not in Playlist";
+      this.syncPlaylistContentState();
       return;
     }
-    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
+    this.uiStateStore.dispatch({ type: "syncPlaylist", identities: this.playlistIdentities() });
     this.appState.lastEvent = `moved ${moved.track.title}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private async renameTrack(identity: Track["identity"], title: string): Promise<void> {
@@ -464,7 +464,7 @@ export class AppCoordinator {
     if (!isYouTubeCacheProvider(provider)) throw new Error("YouTube Cache is unavailable");
     const renamed = await provider.renameTrack(identity, title);
     this.playlists.updateTrack(renamed);
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     this.recordOperationFeedback("success", `Renamed to “${renamed.title}”`);
   }
 
@@ -477,7 +477,7 @@ export class AppCoordinator {
         return;
       case "next-track": await this.nextTrack(); return;
       case "previous-track": await this.previousTrack(); return;
-      case "randomize-queue": this.randomizeQueue(); return;
+      case "randomize-playlist": this.randomizePlaylist(); return;
       case "toggle-repeat-all": await this.toggleRepeatAll(); return;
       case "seek": await this.seekBy(intent.seconds); return;
       case "adjust-volume":
@@ -593,7 +593,7 @@ export class AppCoordinator {
       status: "unavailable",
       reason: `YouTube Cache entry was deleted: ${confirmation.stem}`,
     });
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     this.recordOperationFeedback("success", `permanently deleted YouTube Cache entry ${confirmation.stem}`);
   }
 
@@ -602,13 +602,13 @@ export class AppCoordinator {
     this.recordOperationFeedback("warning", "Cache operation cancelled");
   }
 
-  private async startSelectedQueueEntry(): Promise<void> {
+  private async startSelectedPlaylistEntry(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    const entry = this.queue.startAt(this.uiState.selectedQueueIndex);
+    const entry = this.activePlaylistContent.startAt(this.uiState.selectedPlaylistIndex);
     if (!entry) {
-      this.appState.lastEvent = "Queue is empty";
-      this.syncQueueState();
+      this.appState.lastEvent = "Playlist is empty";
+      this.syncPlaylistContentState();
       return;
     }
 
@@ -617,64 +617,64 @@ export class AppCoordinator {
       return;
     }
 
-    await this.playQueueEntry(entry);
+    await this.playPlaylistEntry(entry);
   }
 
-  private async removeSelectedQueueEntry(): Promise<void> {
-    await this.removeQueueEntry(this.uiState.selectedQueueIndex, "Queue is empty");
+  private async removeSelectedPlaylistEntry(): Promise<void> {
+    await this.removePlaylistEntry(this.uiState.selectedPlaylistIndex, "Playlist is empty");
   }
 
-  private async removeQueueEntry(index: number, missingEvent: string): Promise<void> {
-    const entry = this.queue.entries[index];
+  private async removePlaylistEntry(index: number, missingEvent: string): Promise<void> {
+    const entry = this.activePlaylistContent.entries[index];
     if (!entry) {
       this.appState.lastEvent = missingEvent;
-      this.syncQueueState();
+      this.syncPlaylistContentState();
       return;
     }
 
     const removingCurrent = sameIdentity(entry.track.identity, this.appState.playback.currentTrackIdentity);
     if (removingCurrent && !await this.runPlayerCommand(() => this.player.stop())) return;
-    const removed = this.queue.remove(index);
+    const removed = this.activePlaylistContent.remove(index);
     if (!removed) return;
 
     if (removingCurrent) this.appState.playback = { status: "idle", currentTrackIdentity: null };
-    this.uiStateStore.dispatch({ type: "syncQueue", identities: this.queueIdentities() });
+    this.uiStateStore.dispatch({ type: "syncPlaylist", identities: this.playlistIdentities() });
     this.appState.lastEvent = `removed ${removed.track.title}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
-  private moveSelectedQueueEntry(delta: number): void {
-    const fromIndex = this.uiState.selectedQueueIndex;
-    const toIndex = clampIndex(fromIndex + delta, this.queue.entries.length);
-    const moved = this.queue.move(fromIndex, toIndex);
+  private moveSelectedPlaylistEntry(delta: number): void {
+    const fromIndex = this.uiState.selectedPlaylistIndex;
+    const toIndex = clampIndex(fromIndex + delta, this.activePlaylistContent.entries.length);
+    const moved = this.activePlaylistContent.move(fromIndex, toIndex);
     if (!moved) {
-      this.appState.lastEvent = "Queue is empty";
-      this.syncQueueState();
+      this.appState.lastEvent = "Playlist is empty";
+      this.syncPlaylistContentState();
       return;
     }
 
-    this.selectQueueIndex(toIndex);
+    this.selectPlaylistIndex(toIndex);
     this.appState.lastEvent = `moved ${moved.track.title}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
-  private async clearQueue(): Promise<void> {
+  private async clearPlaylist(): Promise<void> {
     if (!await this.runPlayerCommand(() => this.player.stop())) return;
-    this.queue.clear();
+    this.activePlaylistContent.clear();
     this.appState.playback = {
       status: "idle",
       currentTrackIdentity: null,
     };
-    this.uiStateStore.dispatch({ type: "syncQueue", identities: [] });
-    this.recordOperationFeedback("success", "cleared Queue");
-    this.syncQueueState();
+    this.uiStateStore.dispatch({ type: "syncPlaylist", identities: [] });
+    this.recordOperationFeedback("success", "cleared Playlist");
+    this.syncPlaylistContentState();
   }
 
   private async createPlaylist(name: string): Promise<void> {
     const playlist = this.playlists.append(name);
     if (!await this.switchPlaylist(playlist.id)) {
       this.playlists.removeInactive(playlist.id);
-      this.syncQueueState();
+      this.syncPlaylistContentState();
       throw new Error(this.appState.lastEvent);
     }
     this.appState.lastEvent = `created Playlist ${name.trim()}`;
@@ -695,7 +695,7 @@ export class AppCoordinator {
       if (!await this.switchPlaylist(replacementId)) return;
     }
     this.playlists.removeInactive(playlistId);
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     const remaining = this.playlists.snapshot().playlists;
     const replacementIndex = Math.min(deletedIndex, remaining.length - 1);
     this.uiStateStore.dispatch({ type: "selectPlaylist", index: replacementIndex, count: remaining.length });
@@ -711,37 +711,37 @@ export class AppCoordinator {
     });
     if (!await this.runPlayerCommand(() => this.player.stop())) return false;
     const destination = this.playlists.activate(playlistId);
-    const current = this.queue.entries[this.queue.currentIndex];
+    const current = this.activePlaylistContent.entries[this.activePlaylistContent.currentIndex];
     this.appState.playback = current && destination.playbackStatus === "resumable"
       ? { status: "paused", positionSeconds: destination.positionSeconds, currentTrackIdentity: current.track.identity, restored: true }
       : current
         ? { status: "stopped", positionSeconds: 0, currentTrackIdentity: current.track.identity }
         : { status: "idle", currentTrackIdentity: null };
     this.uiStateStore.dispatch({
-      type: "resetQueueSelection", index: current ? this.queue.currentIndex : 0, identities: this.queueIdentities(),
+      type: "resetPlaylistSelection", index: current ? this.activePlaylistContent.currentIndex : 0, identities: this.playlistIdentities(),
     });
     this.appState.lastEvent = `switched to Playlist ${destination.name}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     return true;
   }
 
   private async nextTrack(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    if (this.queue.entries.length === 0) {
-      this.appState.lastEvent = "end of Queue";
-      this.syncQueueState();
+    if (this.activePlaylistContent.entries.length === 0) {
+      this.appState.lastEvent = "end of Playlist";
+      this.syncPlaylistContentState();
       return;
     }
 
     const originalIdentity = this.appState.playback.currentTrackIdentity;
     let skippedUnavailable = false;
-    for (let attempts = 0; attempts < this.queue.entries.length; attempts += 1) {
-      const entry = this.queue.next();
+    for (let attempts = 0; attempts < this.activePlaylistContent.entries.length; attempts += 1) {
+      const entry = this.activePlaylistContent.next();
       if (!entry) {
         await this.restoreAndStopCurrentTrack(originalIdentity);
-        this.appState.lastEvent = skippedUnavailable ? "no available Tracks to play" : "end of Queue";
-        this.syncQueueState();
+        this.appState.lastEvent = skippedUnavailable ? "no available Tracks to play" : "end of Playlist";
+        this.syncPlaylistContentState();
         return;
       }
 
@@ -750,10 +750,10 @@ export class AppCoordinator {
         continue;
       }
 
-      const started = await this.playQueueEntry(entry);
+      const started = await this.playPlaylistEntry(entry);
       if (started) return;
 
-      const currentEntry = this.queue.entries[this.queue.currentIndex];
+      const currentEntry = this.activePlaylistContent.entries[this.activePlaylistContent.currentIndex];
       if (currentEntry?.availability.status === "unavailable") {
         skippedUnavailable = true;
         continue;
@@ -763,7 +763,7 @@ export class AppCoordinator {
 
     await this.restoreAndStopCurrentTrack(originalIdentity);
     this.appState.lastEvent = "no available Tracks to play";
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private async advanceAfterTerminalPlaybackEvent(): Promise<void> {
@@ -780,10 +780,10 @@ export class AppCoordinator {
   private async previousTrack(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    const current = this.currentQueueEntry();
+    const current = this.currentPlaylistEntry();
     if (!current) {
-      this.appState.lastEvent = "start of Queue";
-      this.syncQueueState();
+      this.appState.lastEvent = "start of Playlist";
+      this.syncPlaylistContentState();
       return;
     }
 
@@ -797,25 +797,25 @@ export class AppCoordinator {
       return;
     }
 
-    const entry = this.queue.previous();
+    const entry = this.activePlaylistContent.previous();
     if (!entry) {
-      await this.playQueueEntry(current);
+      await this.playPlaylistEntry(current);
       return;
     }
 
-    await this.playQueueEntry(entry);
+    await this.playPlaylistEntry(entry);
   }
 
-  private randomizeQueue(): void {
-    this.queue.randomize();
-    this.appState.lastEvent = "randomized Queue";
-    this.syncQueueState();
+  private randomizePlaylist(): void {
+    this.activePlaylistContent.randomize();
+    this.appState.lastEvent = "randomized Playlist";
+    this.syncPlaylistContentState();
   }
 
   private async toggleRepeatAll(): Promise<void> {
-    this.queue.setRepeatAll(!this.queue.snapshot().repeatAll);
-    this.appState.lastEvent = this.queue.snapshot().repeatAll ? "repeat all on" : "repeat all off";
-    this.syncQueueState();
+    this.activePlaylistContent.setRepeatAll(!this.activePlaylistContent.snapshot().repeatAll);
+    this.appState.lastEvent = this.activePlaylistContent.snapshot().repeatAll ? "repeat all on" : "repeat all off";
+    this.syncPlaylistContentState();
     await this.persistPlaybackPreferences();
   }
 
@@ -881,7 +881,7 @@ export class AppCoordinator {
   }
 
   private currentLastPlaylistSnapshot(): LastPlaylistSnapshot {
-    const hasCurrent = this.queue.currentIndex >= 0;
+    const hasCurrent = this.activePlaylistContent.currentIndex >= 0;
     const position = hasCurrent ? this.appState.playback.positionSeconds ?? 0 : 0;
     const resumable = hasCurrent
       && this.appState.playback.status !== "stopped"
@@ -930,7 +930,7 @@ export class AppCoordinator {
     }
   }
 
-  private async playQueueEntry(entry: QueueEntry, startSeconds = 0): Promise<boolean> {
+  private async playPlaylistEntry(entry: PlaylistEntry, startSeconds = 0): Promise<boolean> {
     await this.refreshHelperDependency("mpv");
     if (this.blockPlaybackActionIfUnavailable()) return false;
 
@@ -966,7 +966,7 @@ export class AppCoordinator {
       currentTrackIdentity: entry.track.identity,
     };
     this.appState.lastEvent = `started ${entry.track.title}`;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
     return true;
   }
   private async prepareSubmittedDownload(id: number, url: string): Promise<void> {
@@ -1005,7 +1005,7 @@ export class AppCoordinator {
       return;
     }
 
-    this.enqueueDownloadBatch(id, prepared.batch, url);
+    this.scheduleDownloadBatch(id, prepared.batch, url);
   }
 
   private async runPreparedDownloadBatch(id: number, batch: YouTubeDownloadBatch, signal: AbortSignal): Promise<void> {
@@ -1042,7 +1042,7 @@ export class AppCoordinator {
     }
     this.pendingPlaylistConfirmation = null;
     delete this.appState.downloads.confirmation;
-    this.enqueueDownloadBatch(pending.id, pending.prepared.confirm(), pending.sourceUrl);
+    this.scheduleDownloadBatch(pending.id, pending.prepared.confirm(), pending.sourceUrl);
     pending.settle();
     this.recordOperationFeedback("success", "created confirmed playlist Download Batch in the Download Pipeline");
   }
@@ -1060,7 +1060,7 @@ export class AppCoordinator {
     this.recordOperationFeedback("warning", "playlist Download Batch cancelled before start");
   }
 
-  private enqueueDownloadBatch(id: number, batch: YouTubeDownloadBatch, submittedInput: string): void {
+  private scheduleDownloadBatch(id: number, batch: YouTubeDownloadBatch, submittedInput: string): void {
     this.pendingDownloadBatches.push({ id, batch });
     this.pendingDownloadBatches.sort((left, right) => left.id - right.id);
     this.syncDownloadPipelineState();
@@ -1189,7 +1189,7 @@ export class AppCoordinator {
     this.notifyStateChanged();
   }
 
-  private markSelectedYouTubeCacheAvailability(entry: QueueEntry): void {
+  private markSelectedYouTubeCacheAvailability(entry: PlaylistEntry): void {
     const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
     if (!isYouTubeCacheProvider(provider)) return;
     if (entry.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) return;
@@ -1208,7 +1208,7 @@ export class AppCoordinator {
   private async togglePlayPause(): Promise<void> {
     if (this.blockPlaybackActionIfUnavailable()) return;
 
-    const current = this.currentQueueEntry();
+    const current = this.currentPlaylistEntry();
     if (!current) {
       this.appState.lastEvent = "nothing is playing";
       return;
@@ -1224,9 +1224,9 @@ export class AppCoordinator {
       const resumePosition = this.appState.playback.status === "stopped"
         ? 0
         : this.appState.playback.positionSeconds;
-      this.queue.startAt(this.queue.entries.indexOf(current));
+      this.activePlaylistContent.startAt(this.activePlaylistContent.entries.indexOf(current));
       const startSeconds = typeof resumePosition === "number" && resumePosition > 0 ? resumePosition : 0;
-      const started = await this.playQueueEntry(current, startSeconds);
+      const started = await this.playPlaylistEntry(current, startSeconds);
       if (started && startSeconds > 0) this.appState.lastEvent = `resumed ${current.track.title}`;
       return;
     }
@@ -1237,10 +1237,10 @@ export class AppCoordinator {
     this.appState.lastEvent = this.appState.playback.status === "paused" ? "paused" : "resumed";
   }
 
-  private currentQueueEntry(): QueueEntry | undefined {
+  private currentPlaylistEntry(): PlaylistEntry | undefined {
     const identity = this.appState.playback.currentTrackIdentity;
     return identity
-      ? this.queue.entries.find((entry) => sameIdentity(entry.track.identity, identity))
+      ? this.activePlaylistContent.entries.find((entry) => sameIdentity(entry.track.identity, identity))
       : undefined;
   }
 
@@ -1260,13 +1260,13 @@ export class AppCoordinator {
 
   private async restoreAndStopCurrentTrack(identity: Track["identity"] | null): Promise<void> {
     if (!identity) return;
-    const index = this.queue.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
-    if (index >= 0) this.queue.startAt(index);
+    const index = this.activePlaylistContent.entries.findIndex((entry) => sameIdentity(entry.track.identity, identity));
+    if (index >= 0) this.activePlaylistContent.startAt(index);
     this.appState.playback.currentTrackIdentity = identity;
-    await this.stopAndRetainCurrentTrack("end of Queue");
+    await this.stopAndRetainCurrentTrack("end of Playlist");
   }
 
-  private markUnavailable(entry: QueueEntry, reason: string): void {
+  private markUnavailable(entry: PlaylistEntry, reason: string): void {
     this.playlists.markAvailability(entry.track.identity, { status: "unavailable", reason });
     this.appState.playback = {
       status: "error",
@@ -1275,16 +1275,16 @@ export class AppCoordinator {
     };
     this.appState.appErrors.push(reason);
     this.appState.lastEvent = reason;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private recordCurrentTrackPlaybackFailure(message = "mpv playback failed"): void {
-    const current = this.currentQueueEntry();
+    const current = this.currentPlaylistEntry();
     if (!current) return;
     this.playlists.markAvailability(current.track.identity, { status: "unavailable", reason: message });
     this.appState.appErrors.push(message);
     this.appState.lastEvent = message;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private recordPlayerLoadCommandFailure(message: string): void {
@@ -1295,7 +1295,7 @@ export class AppCoordinator {
     };
     this.appState.appErrors.push(message);
     this.appState.lastEvent = message;
-    this.syncQueueState();
+    this.syncPlaylistContentState();
   }
 
   private blockPlaybackActionIfUnavailable(): boolean {
@@ -1349,26 +1349,26 @@ export class AppCoordinator {
     };
   }
 
-  private syncQueueState(): void {
-    this.appState.queue = this.queue.snapshot();
+  private syncPlaylistContentState(): void {
+    this.appState.activePlaylistContent = this.activePlaylistContent.snapshot();
     this.appState.playlists = this.playlists.snapshot();
   }
 
-  private get queue(): Queue {
-    return this.playlists.activeQueue;
+  private get activePlaylistContent(): PlaylistContent {
+    return this.playlists.activePlaylistContent;
   }
 
-  private selectQueueIndex(index: number): void {
-    const selectedQueueIndex = clampIndex(index, this.queue.entries.length);
+  private selectPlaylistIndex(index: number): void {
+    const selectedPlaylistIndex = clampIndex(index, this.activePlaylistContent.entries.length);
     this.uiStateStore.dispatch({
-      type: "syncQueue",
-      identities: this.queueIdentities(),
-      preferredIdentity: this.queue.entries[selectedQueueIndex]?.track.identity ?? null,
+      type: "syncPlaylist",
+      identities: this.playlistIdentities(),
+      preferredIdentity: this.activePlaylistContent.entries[selectedPlaylistIndex]?.track.identity ?? null,
     });
   }
 
-  private queueIdentities() {
-    return this.queue.entries.map((entry) => entry.track.identity);
+  private playlistIdentities() {
+    return this.activePlaylistContent.entries.map((entry) => entry.track.identity);
   }
 
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {

@@ -4,14 +4,16 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   createTmuRuntime,
+  MemoryPlaylistContent,
+  type DependencyCommandRunner,
+  type Track,
+} from "../src/index";
+import {
   createLastQueueSnapshot,
   FileLastQueueSnapshotPersistence,
   InMemoryLastQueueSnapshotPersistence,
-  MemoryQueue,
-  type DependencyCommandRunner,
   type LastQueueSnapshot,
-  type Track,
-} from "../src/index";
+} from "../src/snapshot";
 
 function snapshot(): LastQueueSnapshot {
   return {
@@ -75,18 +77,18 @@ describe("Last Queue Snapshot persistence", () => {
   test("serializes only durable Track Identity and display metadata", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-snapshot-"));
     const file = join(dir, "last-queue.json");
-    const queue = new MemoryQueue();
+    const playlist = new MemoryPlaylistContent();
     const trackWithRuntimeField = {
       identity: { providerId: "youtube-cache", stableId: "song-secret" },
       title: "Cached Secret",
       providerLabel: "YouTube Cache",
       playbackLocator: { kind: "url", url: "https://example.test/auth-token" },
     } as Track & { playbackLocator: { kind: "url"; url: string } };
-    queue.enqueue(trackWithRuntimeField);
+    playlist.add(trackWithRuntimeField);
     const persistence = new FileLastQueueSnapshotPersistence(file);
 
     try {
-      await persistence.save(createLastQueueSnapshot(queue.snapshot(), { percent: 50, ready: true }));
+      await persistence.save(createLastQueueSnapshot(playlist.snapshot(), { percent: 50, ready: true }));
       const raw = await readFile(file, "utf8");
       const loaded = await persistence.load();
 
@@ -162,10 +164,11 @@ describe("Last Queue Snapshot persistence", () => {
     }
   });
 
-  test("runtime uses file-backed Last Queue Snapshot persistence across app instances", async () => {
+  test("runtime uses file-backed Last Playlist Snapshot persistence across app instances", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-snapshot-"));
     const configPath = join(dir, "config.json");
     const snapshotPath = join(dir, "last-queue.json");
+    const playlistSnapshotPath = join(dir, "last-playlists.json");
     const preferencesPath = join(dir, "preferences.json");
     const runner: DependencyCommandRunner = async ({ helper }) => ({
       exitCode: 0,
@@ -179,6 +182,7 @@ describe("Last Queue Snapshot persistence", () => {
       await writeFile(configPath, JSON.stringify({
         persistence: {
           lastQueueSnapshotPath: snapshotPath,
+          lastPlaylistSnapshotPath: playlistSnapshotPath,
           appPreferencesPath: preferencesPath,
         },
       }));
@@ -197,7 +201,7 @@ describe("Last Queue Snapshot persistence", () => {
       second = await createTmuRuntime({ configPath, dependencyRunner: runner });
       await second.coordinator.start();
 
-      expect(second.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Song A");
+      expect(second.coordinator.appState.activePlaylistContent.entries[0]?.track.title).toBe("Cached Song A");
       expect(second.coordinator.appState.volume).toEqual({ percent: 61, ready: true });
     } finally {
       await first?.coordinator.teardown();
@@ -234,10 +238,11 @@ describe("Last Queue Snapshot persistence", () => {
     }
   });
 
-  test("runtime opens on Playback and restores the full Last Queue Snapshot without autoplay", async () => {
+  test("runtime opens on Playback and migrates the full legacy Queue snapshot without autoplay", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-full-restore-"));
     const configPath = join(dir, "config.json");
     const snapshotPath = join(dir, "last-queue.json");
+    const playlistSnapshotPath = join(dir, "last-playlists.json");
     const preferencesPath = join(dir, "preferences.json");
     const runner: DependencyCommandRunner = async ({ helper }) => ({
       exitCode: 0, stdout: `${helper} 1.0\n`, stderr: "",
@@ -245,7 +250,7 @@ describe("Last Queue Snapshot persistence", () => {
     let runtime: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
     try {
       await writeFile(configPath, JSON.stringify({
-        persistence: { lastQueueSnapshotPath: snapshotPath, appPreferencesPath: preferencesPath },
+        persistence: { lastQueueSnapshotPath: snapshotPath, lastPlaylistSnapshotPath: playlistSnapshotPath, appPreferencesPath: preferencesPath },
       }));
       await new FileLastQueueSnapshotPersistence(snapshotPath).save({ ...snapshot(), repeatAll: true });
 
@@ -253,8 +258,8 @@ describe("Last Queue Snapshot persistence", () => {
       await runtime.coordinator.start();
 
       expect(runtime.coordinator.uiState.activeTab).toBe("playback");
-      expect(runtime.coordinator.appState.queue).toMatchObject({ currentIndex: 0, repeatAll: true });
-      expect(runtime.coordinator.appState.queue.entries[0]?.track.title).toBe("Cached Track");
+      expect(runtime.coordinator.appState.activePlaylistContent).toMatchObject({ currentIndex: 0, repeatAll: true });
+      expect(runtime.coordinator.appState.activePlaylistContent.entries[0]?.track.title).toBe("Cached Track");
       expect(runtime.coordinator.appState.playback).toMatchObject({
         status: "paused", positionSeconds: 42, currentTrackIdentity: snapshot().entries[0]?.track.identity,
       });
@@ -265,15 +270,16 @@ describe("Last Queue Snapshot persistence", () => {
     }
   });
 
-  test("stored volume preference takes precedence over the queue snapshot volume", async () => {
+  test("stored volume preference takes precedence over the legacy Queue snapshot volume", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-runtime-volume-preference-"));
     const configPath = join(dir, "config.json");
     const snapshotPath = join(dir, "last-queue.json");
+    const playlistSnapshotPath = join(dir, "last-playlists.json");
     const preferencesPath = join(dir, "preferences.json");
     let runtime: Awaited<ReturnType<typeof createTmuRuntime>> | undefined;
     try {
       await writeFile(configPath, JSON.stringify({
-        persistence: { lastQueueSnapshotPath: snapshotPath, appPreferencesPath: preferencesPath },
+        persistence: { lastQueueSnapshotPath: snapshotPath, lastPlaylistSnapshotPath: playlistSnapshotPath, appPreferencesPath: preferencesPath },
       }));
       await new FileLastQueueSnapshotPersistence(snapshotPath).save({
         ...snapshot(), volume: { percent: 100, ready: false },

@@ -1,7 +1,18 @@
 import { readFile, readdir, rename } from "node:fs/promises";
 import { basename, dirname } from "node:path";
-import { YOUTUBE_CACHE_PROVIDER_ID, type LastQueueSnapshot, type LastQueueSnapshotEntry, type QueueState, type SnapshotTrack, type Track, type VolumeState } from "./domain";
+import { YOUTUBE_CACHE_PROVIDER_ID, type PlaylistContentState, type SnapshotTrack, type Track, type VolumeState } from "./domain";
 import { JsonRecoveryMessages, writeJsonAtomically } from "./json-persistence";
+
+export type LastQueueSnapshotEntry = { track: SnapshotTrack };
+
+export type LastQueueSnapshot = {
+  version: 1;
+  entries: LastQueueSnapshotEntry[];
+  currentIndex: number;
+  repeatAll: boolean;
+  volume: VolumeState;
+  positionSeconds?: number;
+};
 
 export type LastQueueSnapshotPersistence = {
   load(): Promise<LastQueueSnapshot | null>;
@@ -72,11 +83,11 @@ export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersis
     try {
       await rename(this.path, quarantinePath);
       this.recoveryMessages.push(
-        `Last Queue Snapshot was ${reason}; moved it to ${quarantinePath}. Make a Queue or playback-setting change to replace it.`,
+        `Legacy Queue snapshot was ${reason}; moved it to ${quarantinePath}. Make a Playlist or playback-setting change to replace it.`,
       );
     } catch (error) {
       this.recoveryMessages.push(
-        `Last Queue Snapshot was ${reason}, but could not be quarantined: ${errorMessage(error)}`,
+        `Legacy Queue snapshot was ${reason}, but could not be quarantined: ${errorMessage(error)}`,
       );
     }
   }
@@ -92,7 +103,7 @@ export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersis
 }
 
 export function createLastQueueSnapshot(
-  queue: Pick<QueueState, "entries" | "currentIndex" | "repeatAll">,
+  queue: Pick<PlaylistContentState, "entries" | "currentIndex" | "repeatAll">,
   volume: VolumeState,
   positionSeconds: number | null | undefined = 0,
 ): LastQueueSnapshot {

@@ -9,6 +9,6 @@ export function dispatchTerminalResize(
     type: "resize",
     columns,
     rows,
-    queueIdentities: coordinator.queueTrackIdentities(),
+    playlistIdentities: coordinator.playlistTrackIdentities(),
   });
 }

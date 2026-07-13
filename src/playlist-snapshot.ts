@@ -13,7 +13,7 @@ import {
   type VolumeState,
 } from "./domain";
 import { JsonRecoveryMessages, writeJsonAtomically } from "./json-persistence";
-import { playlistNameKey } from "./playlists";
+import { playlistNameKey } from "./playlist-collection";
 
 export type LastPlaylistSnapshotPersistence = {
   load(): Promise<LastPlaylistSnapshot | null>;

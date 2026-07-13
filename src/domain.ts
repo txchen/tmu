@@ -5,7 +5,7 @@ export type ResponsiveTier = "wide" | "medium" | "narrow" | "terminal-too-small"
 export const YOUTUBE_CACHE_PROVIDER_ID = "youtube-cache" as const;
 export type ProviderId = typeof YOUTUBE_CACHE_PROVIDER_ID;
 export type ConfirmationKind =
-  | "clear-queue"
+  | "clear-playlist"
   | "delete-playlist"
   | "cancel-download"
   | "remove-pending-download"
@@ -45,20 +45,20 @@ export type Track = {
   durationSeconds?: number;
 };
 
-export type QueueEntry = {
+export type PlaylistEntry = {
   track: Track;
   availability: TrackAvailability;
 };
 
-export type QueueState = {
-  entries: QueueEntry[];
+export type PlaylistContentState = {
+  entries: PlaylistEntry[];
   currentIndex: number;
   repeatAll: boolean;
 };
 
 export type PlaylistPlaybackStatus = "stopped" | "resumable";
 
-export type PlaylistState = QueueState & {
+export type PlaylistState = PlaylistContentState & {
   id: string;
   name: string;
   positionSeconds: number;
@@ -128,23 +128,9 @@ export type SnapshotTrack = {
   durationSeconds?: number;
 };
 
-export type LastQueueSnapshotEntry = {
-  track: SnapshotTrack;
-};
-
-export type LastQueueSnapshot = {
-  version: 1;
-  entries: LastQueueSnapshotEntry[];
-  currentIndex: number;
-  repeatAll: boolean;
-  volume: VolumeState;
-  /** Last resumable position for Current Track. Missing in legacy version-1 files means zero. */
-  positionSeconds?: number;
-};
-
 export type PlaybackState = PlayerPlaybackState & {
   currentTrackIdentity: TrackIdentity | null;
-  /** True only for a Current Track restored from the Last Queue Snapshot before explicit Resume. */
+  /** True only for a Current Track restored from persistence before explicit Resume. */
   restored?: boolean;
 };
 
@@ -169,24 +155,24 @@ export type Player = {
   onPlaybackStateChange(listener: (state: PlayerPlaybackState) => void): () => void;
 };
 
-export type Queue = {
-  readonly entries: readonly QueueEntry[];
+export type PlaylistContent = {
+  readonly entries: readonly PlaylistEntry[];
   readonly currentIndex: number;
-  enqueue(track: Track): QueueEntry;
-  playNext(tracks: readonly Track[]): readonly QueueEntry[];
-  playNow(tracks: readonly Track[]): QueueEntry | undefined;
-  remove(index: number): QueueEntry | undefined;
-  move(fromIndex: number, toIndex: number): QueueEntry | undefined;
+  add(track: Track): PlaylistEntry;
+  playNext(tracks: readonly Track[]): readonly PlaylistEntry[];
+  playNow(tracks: readonly Track[]): PlaylistEntry | undefined;
+  remove(index: number): PlaylistEntry | undefined;
+  move(fromIndex: number, toIndex: number): PlaylistEntry | undefined;
   clear(): void;
-  startAt(index: number): QueueEntry | undefined;
-  next(): QueueEntry | undefined;
-  previous(): QueueEntry | undefined;
+  startAt(index: number): PlaylistEntry | undefined;
+  next(): PlaylistEntry | undefined;
+  previous(): PlaylistEntry | undefined;
   randomize(): void;
   setRepeatAll(enabled: boolean): void;
   markAvailability(identity: TrackIdentity, availability: TrackAvailability): void;
-  updateTrack(track: Track): QueueEntry | undefined;
-  snapshot(): QueueState;
-  restore(snapshot: QueueState): void;
+  updateTrack(track: Track): PlaylistEntry | undefined;
+  snapshot(): PlaylistContentState;
+  restore(snapshot: PlaylistContentState): void;
 };
 
 export type AppState = {
@@ -195,7 +181,7 @@ export type AppState = {
   configSource: "defaults" | "file";
   dependencyHealth: DependencyHealthState;
   providers: Record<string, Provider>;
-  queue: QueueState;
+  activePlaylistContent: PlaylistContentState;
   playlists: PlaylistCollectionState;
   playback: PlaybackState;
   volume: VolumeState;
@@ -243,10 +229,10 @@ export type AppState = {
 
 export type UiState = {
   activeTab: "playback" | "library" | "downloader";
-  selectedQueueIndex: number;
-  queueScroll: number;
+  selectedPlaylistIndex: number;
+  playlistScroll: number;
   overlays: readonly PickerOverlay[];
-  selectedQueueIdentity: TrackIdentity | null;
+  selectedPlaylistIdentity: TrackIdentity | null;
   library: {
     query: string;
     inputFocused: boolean;
@@ -301,11 +287,11 @@ export type AppIntent =
   | { type: "playNext"; target: Track }
   | { type: "playNow"; target: Track }
   | { type: "playSelected"; identity: TrackIdentity }
-  | { type: "addToQueue"; target: Track }
-  | { type: "removeQueueTrack"; identity: TrackIdentity }
-  | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
+  | { type: "addToPlaylist"; target: Track }
+  | { type: "removePlaylistTrack"; identity: TrackIdentity }
+  | { type: "movePlaylistTrack"; identity: TrackIdentity; delta: number }
   | { type: "renameTrack"; identity: TrackIdentity; title: string }
-  | { type: "clearQueue" }
+  | { type: "clearPlaylist" }
   | { type: "createPlaylist"; name: string }
   | { type: "renamePlaylist"; playlistId: string; name: string }
   | { type: "movePlaylist"; playlistId: string; delta: -1 | 1 }
@@ -326,7 +312,7 @@ export type AppIntent =
       | "stop"
       | "next-track"
       | "previous-track"
-      | "randomize-queue"
+      | "randomize-playlist"
       | "toggle-repeat-all"
       | "quit";
   }

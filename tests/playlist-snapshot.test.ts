@@ -5,13 +5,14 @@ import { describe, expect, test } from "vitest";
 import {
   FileLastPlaylistSnapshotPersistence,
   MemoryPlaylistCollection,
-  MemoryQueue,
+  MemoryPlaylistContent,
   createLastPlaylistSnapshot,
   createTmuApp,
   playlistCollectionFromSnapshot,
-  type LastQueueSnapshot,
+  type LastPlaylistSnapshot,
   type Track,
 } from "../src/index";
+import type { LastQueueSnapshot } from "../src/snapshot";
 
 const amber: Track = {
   identity: { providerId: "youtube-cache", stableId: "amber" },
@@ -21,7 +22,7 @@ const amber: Track = {
 
 describe("Last Playlist Snapshot persistence", () => {
   test("a fresh collection has exactly one opaque Active Playlist named Default", () => {
-    const collection = new MemoryPlaylistCollection(new MemoryQueue());
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
 
     expect(collection.snapshot().playlists).toHaveLength(1);
     expect(collection.snapshot().activePlaylistId).toBe(collection.snapshot().playlists[0]?.id);
@@ -30,11 +31,11 @@ describe("Last Playlist Snapshot persistence", () => {
   });
 
   test("normalizes shared Tracks while keeping membership unique per Playlist", async () => {
-    const collection = new MemoryPlaylistCollection(new MemoryQueue());
-    collection.activeQueue.enqueue(amber);
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    collection.activePlaylistContent.add(amber);
     const second = collection.append("Study");
-    second.queue.enqueue(amber);
-    second.queue.enqueue({ ...amber, title: "Duplicate metadata" });
+    second.content.add(amber);
+    second.content.add({ ...amber, title: "Duplicate metadata" });
 
     const snapshot = createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true });
 
@@ -46,21 +47,21 @@ describe("Last Playlist Snapshot persistence", () => {
   });
 
   test("omits Track records after their final Playlist membership is removed", () => {
-    const collection = new MemoryPlaylistCollection(new MemoryQueue());
-    collection.activeQueue.enqueue(amber);
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    collection.activePlaylistContent.add(amber);
     const second = collection.append("Study");
-    second.queue.enqueue(amber);
-    collection.activeQueue.clear();
+    second.content.add(amber);
+    collection.activePlaylistContent.clear();
 
     expect(createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true }).tracks).toEqual([amber]);
 
-    second.queue.clear();
+    second.content.clear();
     expect(createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true }).tracks).toEqual([]);
   });
 
   test("does not persist session Track Availability", () => {
-    const collection = new MemoryPlaylistCollection(new MemoryQueue());
-    collection.activeQueue.enqueue(amber);
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    collection.activePlaylistContent.add(amber);
     collection.markAvailability(amber.identity, { status: "unavailable", reason: "mpv playback failed" });
 
     const restored = playlistCollectionFromSnapshot(
@@ -72,9 +73,9 @@ describe("Last Playlist Snapshot persistence", () => {
 
   test("restores a complete snapshot without autoplay", async () => {
     const persistence = new FileLastPlaylistSnapshotPersistence("unused");
-    const source = new MemoryPlaylistCollection(new MemoryQueue());
-    source.activeQueue.enqueue(amber);
-    source.activeQueue.startAt(0);
+    const source = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    source.activePlaylistContent.add(amber);
+    source.activePlaylistContent.startAt(0);
     source.updateActivePlayback({ positionSeconds: 27, playbackStatus: "resumable" });
     const saved = createLastPlaylistSnapshot(source.snapshot(), { percent: 72, ready: true });
     persistence.load = async () => saved;
@@ -101,7 +102,7 @@ describe("Last Playlist Snapshot persistence", () => {
     let saved: unknown;
     const { coordinator } = createTmuApp({
       playlistSnapshotPersistence: { load: async () => null, save: async (value) => { saved = value; } },
-      snapshotPersistence: { load: async () => legacy, save: async () => undefined },
+      legacyQueueSnapshotPersistence: { load: async () => legacy, save: async () => undefined },
     });
 
     await coordinator.start();
@@ -123,11 +124,11 @@ describe("Last Playlist Snapshot persistence", () => {
     try {
       const { coordinator } = createTmuApp({
         playlistSnapshotPersistence: persistence,
-        snapshotPersistence: { load: async () => legacy, save: async () => undefined },
+        legacyQueueSnapshotPersistence: { load: async () => legacy, save: async () => undefined },
       });
       await coordinator.start();
 
-      expect(coordinator.appState.queue.entries).toEqual([]);
+      expect(coordinator.appState.activePlaylistContent.entries).toEqual([]);
       expect(coordinator.appState.appErrors.join("\n")).toContain("Last Playlist Snapshot");
       expect((await readdir(dir)).some((name) => name.startsWith("last-playlists.json.corrupt-"))).toBe(true);
     } finally {
@@ -139,8 +140,8 @@ describe("Last Playlist Snapshot persistence", () => {
     const dir = await mkdtemp(join(tmpdir(), "tmu-playlist-save-"));
     const path = join(dir, "state", "last-playlists.json");
     const persistence = new FileLastPlaylistSnapshotPersistence(path);
-    const collection = new MemoryPlaylistCollection(new MemoryQueue());
-    collection.activeQueue.enqueue(amber);
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    collection.activePlaylistContent.add(amber);
     try {
       await persistence.save(createLastPlaylistSnapshot(collection.snapshot(), { percent: 50, ready: true }));
       const raw = await readFile(path, "utf8");
@@ -163,18 +164,18 @@ describe("Last Playlist Snapshot persistence", () => {
           saved.push(snapshot);
         },
       },
-      snapshotPersistence: { load: async () => null, save: async () => undefined },
+      legacyQueueSnapshotPersistence: { load: async () => null, save: async () => undefined },
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "addToQueue", target: amber });
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([amber]);
+    await coordinator.dispatch({ type: "addToPlaylist", target: amber });
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track)).toEqual([amber]);
     expect(coordinator.appState.appErrors.at(-1)).toContain("Will retry");
 
     await coordinator.dispatch({ type: "playerOperation", operation: "toggle-repeat-all" });
     expect(attempts).toBe(2);
     expect(saved).toHaveLength(1);
-    expect(coordinator.appState.queue.repeatAll).toBe(true);
+    expect(coordinator.appState.activePlaylistContent.repeatAll).toBe(true);
   });
 
   test("retries a failed Playlist snapshot save on quit", async () => {
@@ -187,11 +188,11 @@ describe("Last Playlist Snapshot persistence", () => {
           if (attempts === 1) throw new Error("temporarily read-only");
         },
       },
-      snapshotPersistence: { load: async () => null, save: async () => undefined },
+      legacyQueueSnapshotPersistence: { load: async () => null, save: async () => undefined },
     });
 
     await coordinator.start();
-    await coordinator.dispatch({ type: "addToQueue", target: amber });
+    await coordinator.dispatch({ type: "addToPlaylist", target: amber });
     await coordinator.teardown();
 
     expect(attempts).toBe(2);

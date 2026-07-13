@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { createTmuApp } from "../src/app";
-import { createLastQueueSnapshot } from "../src/snapshot";
+import { createLastPlaylistSnapshot } from "../src/playlist-snapshot";
 import type { Provider } from "../src/domain";
 
 describe("narrow Provider domain", () => {
@@ -37,26 +37,25 @@ describe("narrow Provider domain", () => {
     });
   });
 
-  test("Last Queue Snapshot does not persist runtime Track Availability", () => {
-    const snapshot = createLastQueueSnapshot({
-      entries: [{
-        track: {
+  test("Last Playlist Snapshot does not persist runtime Track Availability", () => {
+    const snapshot = createLastPlaylistSnapshot({
+      activePlaylistId: "00000000-0000-4000-8000-000000000001",
+      playlists: [{
+        id: "00000000-0000-4000-8000-000000000001",
+        name: "Default",
+        entries: [{ track: {
           identity: { providerId: "youtube-cache", stableId: "abc123" },
           title: "Cached Track",
           providerLabel: "YouTube Cache",
-        },
-        availability: { status: "unavailable", reason: "cache entry missing" },
+        }, availability: { status: "unavailable", reason: "cache entry missing" } }],
+        currentIndex: 0, repeatAll: false, positionSeconds: 0, playbackStatus: "stopped",
       }],
-      currentIndex: 0,
-      repeatAll: false,
     }, { percent: 80, ready: true });
 
-    expect(snapshot.entries).toEqual([{
-      track: {
+    expect(snapshot.tracks).toEqual([{
         identity: { providerId: "youtube-cache", stableId: "abc123" },
         title: "Cached Track",
         providerLabel: "YouTube Cache",
-      },
     }]);
   });
 });

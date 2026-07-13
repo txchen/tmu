@@ -6,7 +6,7 @@ import { AppCoordinator } from "../src/coordinator";
 import type { PlayerPlaybackState, Provider, Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { InMemoryLastPlaylistSnapshotPersistence } from "../src/playlist-snapshot";
-import { MemoryQueue } from "../src/queue";
+import { MemoryPlaylistContent } from "../src/playlist-content";
 import { createInitialAppState, createInitialUiState } from "../src/state";
 import { StatePublicationGate } from "../src/state-publication";
 import { createTmuRoot } from "../src/vue-tui/component";
@@ -54,12 +54,12 @@ describe("TMU top-level surface smoke", () => {
     const first = createTmuApp({ player, playlistSnapshotPersistence: persistence });
     await first.coordinator.start();
     const defaultId = first.coordinator.appState.playlists.activePlaylistId;
-    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("shared", "Shared") });
+    await first.coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("shared", "Shared") });
     await first.coordinator.dispatch({ type: "createPlaylist", name: "Middle" });
-    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("middle", "Middle Track") });
+    await first.coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("middle", "Middle Track") });
     const middleId = first.coordinator.appState.playlists.activePlaylistId;
     await first.coordinator.dispatch({ type: "createPlaylist", name: "Last" });
-    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("shared", "Shared") });
+    await first.coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("shared", "Shared") });
     const lastId = first.coordinator.appState.playlists.activePlaylistId;
     const terminal = await render(createTmuRoot({ coordinator: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
 
@@ -83,7 +83,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("y");
     expect(first.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Last"]);
     expect(first.coordinator.appState.playlists.activePlaylistId).toBe(lastId);
-    expect(first.coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Shared"]);
+    expect(first.coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["Shared"]);
     expect(first.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0, mode: "browse" });
     expect(player.stopCount).toBe(stopsBeforeActiveDelete + 1);
 
@@ -92,7 +92,7 @@ describe("TMU top-level surface smoke", () => {
     await restored.coordinator.start();
     expect(restored.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Last"]);
     expect(restored.coordinator.appState.playlists.activePlaylistId).toBe(lastId);
-    expect(restored.coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["shared"]);
+    expect(restored.coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId)).toEqual(["shared"]);
     expect(restored.coordinator.appState.playback.status).not.toBe("playing");
     expect(restoredPlayer.stopCount).toBe(0);
     expect(defaultId).not.toBe(middleId);
@@ -117,11 +117,11 @@ describe("TMU top-level surface smoke", () => {
   test("deleting an Active middle row activates the next Playlist", async () => {
     const player = new StopCountingPlayer();
     const { coordinator } = createTmuApp({ player });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("default", "Default Track") });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("default", "Default Track") });
     await coordinator.dispatch({ type: "createPlaylist", name: "Middle" });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("middle", "Middle Track") });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("middle", "Middle Track") });
     await coordinator.dispatch({ type: "createPlaylist", name: "Last" });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("last", "Last Track") });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("last", "Last Track") });
     const middleId = coordinator.appState.playlists.playlists[1]!.id;
     const lastId = coordinator.appState.playlists.playlists[2]!.id;
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: middleId });
@@ -157,10 +157,10 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "createPlaylist", name: "Disposable" });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
@@ -305,7 +305,7 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "createPlaylist", name: "界界界界界界界界界界界界界界界界" });
     const activeId = coordinator.appState.playlists.activePlaylistId;
@@ -313,20 +313,20 @@ describe("TMU top-level surface smoke", () => {
     coordinator.dispatchUi({ type: "switchTab", tab: "library" });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
     await terminal.stdin.write("a");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Active Only"]);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["Active Only"]);
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
-    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.activePlaylistContent.entries).toEqual([]);
     expect(coordinator.appState.playlists.playlists.find((playlist) => playlist.id === activeId)?.entries).toHaveLength(1);
     expect(terminal.lastFrame()!.split("\n").every((line) => Array.from(line).length <= 60)).toBe(true);
   });
 
   test("shows and dismisses an error recorded before the TUI mounts", async () => {
     const { coordinator } = createTmuApp();
-    coordinator.appState.appErrors.push("Could not restore Last Queue Snapshot");
+    coordinator.appState.appErrors.push("Could not restore Last Playlist Snapshot");
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
-    expect(terminal.lastFrame()).toContain("× ERROR · Could not restore Last Queue Snapshot");
+    expect(terminal.lastFrame()).toContain("× ERROR · Could not restore Last Playlist Snapshot");
     await terminal.stdin.write("\x1b");
-    expect(terminal.lastFrame()).not.toContain("Could not restore Last Queue Snapshot");
+    expect(terminal.lastFrame()).not.toContain("Could not restore Last Playlist Snapshot");
   });
 
   test("renders the keyboard-first shell and routes global brackets through focused inputs", async () => {
@@ -336,7 +336,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Player");
     expect(terminal.lastFrame()).toContain("Library");
     expect(terminal.lastFrame()).toContain("Downloads");
-    expect(terminal.lastFrame()).toContain("Queue is empty — open Library to add Tracks.");
+    expect(terminal.lastFrame()).toContain("Playlist is empty — open Library to add Tracks.");
     expect(terminal.lastFrame()).toContain("──  j/k Move · Space Play/Pause · Enter Play Selected · n/p Next/Prev · ? Help");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
@@ -357,22 +357,22 @@ describe("TMU top-level surface smoke", () => {
 
   test("shows compact Current Track playback on every tab and hides it without Current", async () => {
     const track = { ...cachedTrack("current", "A Very Long Current Track Title That Must Stay Compact"), durationSeconds: 245 };
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.startAt(0);
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({}), uiState: createInitialUiState(),
-      queue, player: new NoopPlayer(),
+      initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
     const hidden = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
     expect(hidden.lastFrame()).not.toContain("▶ PLAYING");
-    coordinator.appState.queue = queue.snapshot();
+    coordinator.appState.activePlaylistContent = playlist.snapshot();
     coordinator.appState.playback = {
       status: "playing", currentTrackIdentity: track.identity,
       positionSeconds: 65, durationSeconds: 245,
     };
     coordinator.appState.volume = { percent: 73, ready: true };
-    coordinator.appState.queue.repeatAll = true;
+    coordinator.appState.activePlaylistContent.repeatAll = true;
 
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
     for (const tab of ["playback", "library", "downloader"] as const) {
@@ -396,20 +396,20 @@ describe("TMU top-level surface smoke", () => {
     ["paused", "Ⅱ PAUSED", "Ⅱ"],
     ["stopped", "■ STOPPED", "■"],
     ["error", "! ERROR", "⚠"],
-  ] as const)("gives %s playback a non-color status cue", async (status, cue, queueCue) => {
+  ] as const)("gives %s playback a non-color status cue", async (status, cue, playlistCue) => {
     const track = cachedTrack("status", "Status Track");
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
-    if (status === "error") queue.markAvailability(track.identity, { status: "unavailable", reason: "cache missing" });
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.startAt(0);
+    if (status === "error") playlist.markAvailability(track.identity, { status: "unavailable", reason: "cache missing" });
     const appState = createInitialAppState({});
-    appState.queue = queue.snapshot();
+    appState.activePlaylistContent = playlist.snapshot();
     appState.playback = { status, currentTrackIdentity: track.identity, positionSeconds: 42,
       ...(status === "paused" ? { paused: true } : {}) };
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer() });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
     expect(terminal.lastFrame()).toContain(cue);
-    expect(terminal.lastFrame()).toContain(`${queueCue} Status Track`);
+    expect(terminal.lastFrame()).toContain(`${playlistCue} Status Track`);
     expect(terminal.lastFrame()).not.toContain("CURRENT");
     expect(terminal.lastFrame()).toContain("0:42");
     expect(terminal.lastFrame()).not.toContain("0:42/");
@@ -417,13 +417,13 @@ describe("TMU top-level surface smoke", () => {
 
   test("distinguishes restored resumable playback and truncates on narrow terminals", async () => {
     const track = cachedTrack("restored", "Restored Track With A Title Far Too Long For A Narrow Terminal");
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.startAt(0);
     const appState = createInitialAppState({});
-    appState.queue = queue.snapshot();
+    appState.activePlaylistContent = playlist.snapshot();
     appState.playback = { status: "paused", currentTrackIdentity: track.identity, positionSeconds: 42, restored: true };
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer() });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
     expect(terminal.lastFrame()).toContain("↻ RESUME");
     expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 60)).toBe(true);
@@ -460,15 +460,15 @@ describe("TMU top-level surface smoke", () => {
 
   test("renders passive progress on cadence and a user seek immediately", async () => {
     const track = { ...cachedTrack("cadence-root", "Cadence Root Track"), durationSeconds: 100 };
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.startAt(0);
     const appState = createInitialAppState({}, { config: { lowPower: { playbackProgressMs: 5_000 } } });
-    appState.queue = queue.snapshot();
+    appState.activePlaylistContent = playlist.snapshot();
     appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 1, durationSeconds: 100 };
     const player = new PublishingPlayer();
     player.publish({ status: "playing", positionSeconds: 1, durationSeconds: 100 });
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player });
     let now = 0;
     let scheduled: (() => void) | undefined;
     const terminal = await render(createTmuRoot({
@@ -517,18 +517,19 @@ describe("TMU top-level surface smoke", () => {
 
   test("renders tab-scoped Shortcut Help as a bounded modal and dismisses without hidden actions", async () => {
     const track = cachedTrack("help-track", "Help Track");
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState({}), uiState: createInitialUiState(), queue, player: new NoopPlayer(),
+      appState: createInitialAppState({}), uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 30 });
 
     await terminal.stdin.write("?");
     const playerHelp = terminal.lastFrame()!;
     expect(playerHelp).toContain("Playback Shortcuts");
-    expect(playerHelp).toContain("QUEUE PANE");
-    expect(playerHelp).toContain("Randomize entire Queue");
+    expect(playerHelp).toContain("PLAYLIST PANE");
+    expect(playerHelp).toContain("Randomize entire");
+    expect(playerHelp).toContain("Playlist");
     expect(playerHelp).toContain("GLOBAL PLAYBACK");
     expect(playerHelp).toContain("j/k or ↑/↓ Scroll · PgUp/PgDn Page · Enter/q/?/Esc Close");
     expect(playerHelp).not.toContain("SEARCH INPUT");
@@ -539,7 +540,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("playback");
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
     expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
 
     for (const close of ["q", "?", "\x1b"] as const) {
@@ -573,15 +574,15 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Type");
     expect(terminal.lastFrame()).not.toContain("Type (including ?)");
     expect(terminal.lastFrame()).toContain("Backspace/Delete");
-    expect(terminal.lastFrame()).not.toContain("QUEUE PANE");
-    expect(terminal.lastFrame()).not.toContain("Randomize entire Queue");
+    expect(terminal.lastFrame()).not.toContain("PLAYLIST PANE");
+    expect(terminal.lastFrame()).not.toContain("Randomize entire Playlist");
     expect(terminal.lastFrame()).not.toContain("DOWNLOAD PIPELINE");
     if (rows < 30) await terminal.stdin.write("\x1b[6~");
     expect(terminal.lastFrame()).toContain("LIBRARY RESULTS");
     expect(terminal.lastFrame()).toContain("Play Now");
     expect(terminal.lastFrame()).toContain("Play Next");
     if (rows < 30) await terminal.stdin.write("\x1b[6~");
-    expect(terminal.lastFrame()).toContain("Add to Queue");
+    expect(terminal.lastFrame()).toContain("Add to Playlist");
     expect(terminal.lastFrame()).toContain("Open on YouTube");
     expect(terminal.lastFrame()).toContain("Delete Track (confirm)");
     expect(terminal.lastFrame()).not.toContain("Play Selected");
@@ -634,7 +635,7 @@ describe("TMU top-level surface smoke", () => {
     }
     expect(top).not.toContain("Play Selected");
     expect(top).not.toContain("Play Now");
-    expect(top).not.toContain("Randomize entire Queue");
+    expect(top).not.toContain("Randomize entire Playlist");
 
     if (rows < 30) {
       await terminal.stdin.write("\x1b[6~");
@@ -662,7 +663,7 @@ describe("TMU top-level surface smoke", () => {
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 16 });
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Playback Shortcuts");
-    expect(terminal.lastFrame()).toContain("QUEUE PANE");
+    expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
     expect(terminal.lastFrame()).not.toContain("APPLICATION");
 
     await terminal.stdin.write("G");
@@ -693,29 +694,29 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 100)).toBe(true);
     await terminal.stdin.write("?");
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("QUEUE PANE");
+    expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
   });
 
   test("preserves Player state while complete Shortcut Help handles input and resize", async () => {
     const { coordinator } = createTmuApp();
     for (let index = 0; index < 12; index++) {
-      await coordinator.dispatch({ type: "addToQueue", target: cachedTrack(`help-${index}`, `Help Track ${index}`) });
+      await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack(`help-${index}`, `Help Track ${index}`) });
     }
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 20 });
     await terminal.stdin.write("G");
     const before = {
       activeTab: coordinator.uiState.activeTab,
-      selectedQueueIndex: coordinator.uiState.selectedQueueIndex,
-      selectedQueueIdentity: coordinator.uiState.selectedQueueIdentity,
-      queueScroll: coordinator.uiState.queueScroll,
-      queue: coordinator.appState.queue,
+      selectedPlaylistIndex: coordinator.uiState.selectedPlaylistIndex,
+      selectedPlaylistIdentity: coordinator.uiState.selectedPlaylistIdentity,
+      playlistScroll: coordinator.uiState.playlistScroll,
+      playlist: coordinator.appState.activePlaylistContent,
       playback: coordinator.appState.playback,
     };
 
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("j/k Move · Space Play/Pause · Enter Play Selected");
-    expect(terminal.lastFrame()).toContain("QUEUE PANE");
-    expect(terminal.lastFrame()).toContain("Randomize entire Queue");
+    expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
+    expect(terminal.lastFrame()).toContain("Randomize entire Playlist");
     await terminal.stdin.write("\x1b[6~");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Ctrl-C");
@@ -731,10 +732,10 @@ describe("TMU top-level surface smoke", () => {
 
     expect({
       activeTab: coordinator.uiState.activeTab,
-      selectedQueueIndex: coordinator.uiState.selectedQueueIndex,
-      selectedQueueIdentity: coordinator.uiState.selectedQueueIdentity,
-      queueScroll: coordinator.uiState.queueScroll,
-      queue: coordinator.appState.queue,
+      selectedPlaylistIndex: coordinator.uiState.selectedPlaylistIndex,
+      selectedPlaylistIdentity: coordinator.uiState.selectedPlaylistIdentity,
+      playlistScroll: coordinator.uiState.playlistScroll,
+      playlist: coordinator.appState.activePlaylistContent,
       playback: coordinator.appState.playback,
     }).toEqual(before);
     expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
@@ -743,10 +744,10 @@ describe("TMU top-level surface smoke", () => {
   test("keeps the normal Ctrl-C download quit confirmation above Downloads Shortcut Help", async () => {
     const appState = createInitialAppState({});
     const coordinator = new AppCoordinator({
-      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+      appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
       prepareDownloadBatch: async () => ({
         kind: "confirmation-required",
-        confirmation: { title: "Help Queue", itemCount: 2 },
+        confirmation: { title: "Help Playlist", itemCount: 2 },
         confirm: () => ({ sourceUrl: "https://youtube.com/playlist?list=help", kind: "playlist", entries: [] }),
         cancel: () => ({ kind: "cancelled" }),
       }),
@@ -772,14 +773,14 @@ describe("TMU top-level surface smoke", () => {
   test("keeps confirmations above Help", async () => {
     const appState = createInitialAppState({});
     const coordinator = new AppCoordinator({
-      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer(),
+      appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("C");
-    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("Clear Playlist?");
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("Clear Playlist?");
     expect(terminal.lastFrame()).not.toContain("Playback Shortcuts");
   });
 
@@ -797,18 +798,18 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Player");
   });
 
-  test("moves and keeps long Queue selections visible with shared Vim navigation", async () => {
+  test("moves and keeps long Playlist selections visible with shared Vim navigation", async () => {
     const { coordinator } = createTmuApp();
-    for (let index = 0; index < 12; index++) await coordinator.dispatch({ type: "addToQueue", target: cachedTrack(`track-${index}`, `Track ${index}`) });
+    for (let index = 0; index < 12; index++) await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack(`track-${index}`, `Track ${index}`) });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
     await terminal.stdin.write("G");
-    expect(coordinator.uiState.selectedQueueIndex).toBe(11);
+    expect(coordinator.uiState.selectedPlaylistIndex).toBe(11);
     expect(terminal.lastFrame()).toContain("› ! Track 11");
     await terminal.stdin.write("g");
     await terminal.stdin.write("g");
-    expect(coordinator.uiState.selectedQueueIndex).toBe(0);
+    expect(coordinator.uiState.selectedPlaylistIndex).toBe(0);
     await terminal.stdin.write("\x1b[6~");
-    expect(coordinator.uiState.selectedQueueIndex).toBeGreaterThan(0);
+    expect(coordinator.uiState.selectedPlaylistIndex).toBeGreaterThan(0);
   });
   test("opens on Playback and reaches Library and YouTube Downloader while retaining tab-local input", async () => {
     const { coordinator } = createTmuApp();
@@ -839,7 +840,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Library Shortcuts");
   });
 
-  test("keeps core Playback queue actions available after provider narrowing", async () => {
+  test("keeps core Playback playlist actions available after provider narrowing", async () => {
     const first = cachedTrack("first", "First");
     const second = cachedTrack("second", "Second");
     const provider: Provider = {
@@ -852,7 +853,7 @@ describe("TMU top-level surface smoke", () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }),
       uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
+      initialPlaylistContent: new MemoryPlaylistContent(),
       player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNext", target: first });
@@ -860,7 +861,7 @@ describe("TMU top-level surface smoke", () => {
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
 
     await terminal.stdin.write("?");
@@ -874,12 +875,12 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("[");
 
     await terminal.stdin.write("C");
-    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("Clear Playlist?");
     expect(terminal.lastFrame()).toContain("› Cancel ‹");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("playback");
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.entries).toHaveLength(2);
+    expect(coordinator.appState.activePlaylistContent.entries).toHaveLength(2);
     await terminal.stdin.write("C");
     await terminal.stdin.write("\t");
     expect(terminal.lastFrame()).toContain("› Clear ‹");
@@ -888,7 +889,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b[C");
     expect(terminal.lastFrame()).toContain("› Clear ‹");
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.activePlaylistContent.entries).toEqual([]);
     expect(terminal.lastFrame()).toContain("✓ SUCCESS");
     await sleep(2_600);
     expect(terminal.lastFrame()).not.toContain("✓ SUCCESS");
@@ -896,21 +897,21 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["first"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
 
     await terminal.stdin.write("j");
     await terminal.stdin.write("N");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["second", "first"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
 
     await terminal.stdin.write("\r");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(second.identity);
   });
 
-  test("renders the responsive Player Queue and complete selected cache metadata", async () => {
+  test("renders the responsive Player Playlist and complete selected cache metadata", async () => {
     const first = { ...cachedTrack("first", "First"), durationSeconds: 65 };
     const second = { ...cachedTrack("second", "Selected Song"), artist: "The Channel", durationSeconds: 245 };
     const provider: YouTubeCacheProvider = {
@@ -935,16 +936,16 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
-    await coordinator.dispatch({ type: "addToQueue", target: first });
-    await coordinator.dispatch({ type: "addToQueue", target: second });
-    coordinator.dispatchUi({ type: "selectQueue", index: 1, identities: coordinator.queueTrackIdentities() });
+    await coordinator.dispatch({ type: "addToPlaylist", target: first });
+    await coordinator.dispatch({ type: "addToPlaylist", target: second });
+    coordinator.dispatchUi({ type: "selectPlaylistTrack", index: 1, identities: coordinator.playlistTrackIdentities() });
     await coordinator.dispatch({ type: "playSelected", identity: first.identity });
 
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 28 });
     let frame = terminal.lastFrame()!;
-    expect(frame).toContain("Queue · 2 Tracks · 2/2");
+    expect(frame).toContain("Playlist · 2 Tracks · 2/2");
     expect(frame).toContain("▶ First · 1:05");
     expect(frame).not.toContain("CURRENT");
     expect(frame).toContain("Selected Song · 4:05");
@@ -954,13 +955,13 @@ describe("TMU top-level surface smoke", () => {
     expect(frame).toContain("Format: opus");
     expect(frame).toContain("Size: 1.5 MiB");
     expect(frame).toContain("Video ID: second");
-    const wideQueueLine = frame.split("\n").findIndex((line) => line.includes("Queue ·"));
+    const widePlaylistLine = frame.split("\n").findIndex((line) => line.includes("Playlist ·"));
     const widePreviewLine = frame.split("\n").findIndex((line) => line.includes("Selected Track"));
-    expect(widePreviewLine).toBe(wideQueueLine);
+    expect(widePreviewLine).toBe(widePlaylistLine);
 
     await terminal.terminal.resize(100, 28);
     frame = terminal.lastFrame()!;
-    const mediumTitleLine = frame.split("\n").find((line) => line.includes("Queue ·") && line.includes("Selected Track"))!;
+    const mediumTitleLine = frame.split("\n").find((line) => line.includes("Playlist ·") && line.includes("Selected Track"))!;
     const borders = [...mediumTitleLine].flatMap((character, index) => character === "│" ? [index] : []);
     expect(borders).toHaveLength(4);
     expect((borders[1]! - borders[0]!) / (borders[3]! - borders[2]!)).toBeGreaterThan(1.6);
@@ -983,7 +984,7 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     coordinator.dispatchUi({ type: "switchTab", tab: "library" });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 24 });
@@ -998,15 +999,15 @@ describe("TMU top-level surface smoke", () => {
     expect(inspectorLeft()).toBe(initialInspectorLeft);
   });
 
-  test("keeps Queue selection independent while Player shortcuts edit exact visible order", async () => {
+  test("keeps Playlist selection independent while Player shortcuts edit exact visible order", async () => {
     const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C")];
     const provider: Provider = {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks, searchTracks: () => tracks,
       resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
     };
     const coordinator = new AppCoordinator({ appState: createInitialAppState({ "youtube-cache": provider }),
-      uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer() });
-    for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
+      uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
+    for (const track of tracks) await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
 
@@ -1014,46 +1015,46 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("› · B");
     expect(terminal.lastFrame()).toContain("▶ A");
     await terminal.stdin.write(" ");
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(1);
     await terminal.stdin.write("J");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B"]);
-    expect(coordinator.uiState.selectedQueueIdentity).toEqual(tracks[1]!.identity);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["A", "C", "B"]);
+    expect(coordinator.uiState.selectedPlaylistIdentity).toEqual(tracks[1]!.identity);
     await terminal.stdin.write("K");
     await terminal.stdin.write("N");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["A", "B", "C"]);
     await terminal.stdin.write("x");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
     expect(coordinator.appState.playback).toMatchObject({ status: "idle", currentTrackIdentity: null });
     await terminal.stdin.write(" ");
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
     await terminal.stdin.write("C");
-    expect(terminal.lastFrame()).toContain("Clear Queue?");
+    expect(terminal.lastFrame()).toContain("Clear Playlist?");
     await terminal.stdin.write("\r");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["A", "C"]);
   });
 
-  test("Z randomizes the entire Queue only from the Player Queue Pane", async () => {
+  test("Z randomizes the entire Playlist only from the Player Playlist Pane", async () => {
     const tracks = [cachedTrack("a", "A"), cachedTrack("b", "B"), cachedTrack("c", "C"), cachedTrack("d", "D")];
     for (const tab of ["library", "downloader", "playback"] as const) {
       const provider: Provider = { id: "youtube-cache", label: "YouTube Cache", listTracks: () => tracks,
         searchTracks: () => tracks, resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/test.opus" }) };
       const coordinator = new AppCoordinator({ appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-        queue: new MemoryQueue({ random: () => 0 }), player: new NoopPlayer() });
-      for (const track of tracks) await coordinator.dispatch({ type: "addToQueue", target: track });
+        initialPlaylistContent: new MemoryPlaylistContent({ random: () => 0 }), player: new NoopPlayer() });
+      for (const track of tracks) await coordinator.dispatch({ type: "addToPlaylist", target: track });
       await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
       coordinator.dispatchUi({ type: "switchTab", tab });
       const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
 
       await terminal.stdin.write("Z");
 
-      const titles = coordinator.appState.queue.entries.map((entry) => entry.track.title);
+      const titles = coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title);
       expect(titles).toEqual(tab === "playback" ? ["B", "C", "D", "A"] : ["A", "B", "C", "D"]);
       if (tab === "playback") {
-        expect(coordinator.appState.queue.currentIndex).toBe(3);
+        expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(3);
         expect(coordinator.appState.playback).toMatchObject({ status: "playing", currentTrackIdentity: tracks[0]!.identity });
         expect(terminal.lastFrame()!.indexOf("· B")).toBeLessThan(terminal.lastFrame()!.indexOf("▶ A"));
         expect(terminal.lastFrame()).not.toContain("Shuffle");
@@ -1094,12 +1095,12 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNow", target: track });
     const defaultId = coordinator.appState.playlists.activePlaylistId;
     await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
     await coordinator.dispatch({ type: "playSelected", identity: track.identity });
     const opened: string[] = [];
@@ -1131,14 +1132,14 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Entry");
     expect(terminal.lastFrame()).not.toContain("Play Now");
     expect(terminal.lastFrame()).not.toContain("Play Next");
-    expect(terminal.lastFrame()).not.toContain("Add to Queue");
+    expect(terminal.lastFrame()).not.toContain("Add to Playlist");
     await terminal.stdin.write("q");
     expect(coordinator.uiState.library).toEqual(beforeHelp);
     await terminal.terminal.resize(100, 24);
     await waitFor(() => coordinator.uiState.terminal.columns === 100);
     expect(coordinator.uiState.terminal.tier).toBe("medium");
     await terminal.stdin.write("a");
-    expect(coordinator.appState.queue.entries).toHaveLength(1);
+    expect(coordinator.appState.activePlaylistContent.entries).toHaveLength(1);
     await terminal.stdin.write("d");
     expect(terminal.lastFrame()).toContain("Clean incomplete entry “Broken First”?");
     await terminal.stdin.write("n");
@@ -1177,7 +1178,7 @@ describe("TMU top-level surface smoke", () => {
     const opened: string[] = [];
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({
       coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
@@ -1195,12 +1196,12 @@ describe("TMU top-level surface smoke", () => {
 
   test("YouTube Downloader exposes pending removal, active cancellation, and session summaries", async () => {
     const { coordinator: base } = createTmuApp();
-    const queue = new MemoryQueue();
-    queue.enqueue(cachedTrack("already-queued", "Already Queued"));
-    const queueBefore = queue.snapshot();
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(cachedTrack("already-Playlist", "Already Playlist"));
+    const playlistBefore = playlist.snapshot();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState(base.appState.providers), uiState: createInitialUiState(),
-      queue, player: new NoopPlayer(),
+      initialPlaylistContent: playlist, player: new NoopPlayer(),
       prepareDownloadBatch: async (url) => ({
         kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [{
           kind: "track", url,
@@ -1264,7 +1265,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("y");
     await waitFor(() => coordinator.appState.downloads.summaries.length === 1);
     expect(terminal.lastFrame()).toContain("COMPLETED #1 · 0 downloaded · 0 cached · 0 failed · 1 cancelled");
-    expect(coordinator.appState.queue).toEqual(queueBefore);
+    expect(coordinator.appState.activePlaylistContent).toEqual(playlistBefore);
   });
 
   test("Download Pipeline shows selected failure detail, position, empty guidance, and preserves input focus cycling", async () => {
@@ -1280,7 +1281,7 @@ describe("TMU top-level surface smoke", () => {
     }];
     const uiState = createInitialUiState();
     uiState.activeTab = "downloader";
-    const coordinator = new AppCoordinator({ appState, uiState, queue: new MemoryQueue(), player: new NoopPlayer() });
+    const coordinator = new AppCoordinator({ appState, uiState, initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 90, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("Pipeline · 1 batch · 1/1");
@@ -1321,7 +1322,7 @@ describe("TMU top-level surface smoke", () => {
     const uiState = createInitialUiState();
     uiState.activeTab = "downloader";
     uiState.downloader.inputFocused = false;
-    const coordinator = new AppCoordinator({ appState, uiState, queue: new MemoryQueue(), player: new NoopPlayer() });
+    const coordinator = new AppCoordinator({ appState, uiState, initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
 
     expect(terminal.lastFrame()).toContain("ACTIVE #4 · 4/12 · [███████░░░] 67%");
@@ -1338,7 +1339,7 @@ describe("TMU top-level surface smoke", () => {
     const batch = { sourceUrl: url, kind: "playlist" as const, entries: [] };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
       prepareDownloadBatch: async (input) => input.includes("invalid")
         ? { kind: "rejected", message: "YouTube Downloader rejects non-YouTube URLs" }
         : {
@@ -1375,16 +1376,16 @@ describe("TMU top-level surface smoke", () => {
 
   test("Playback keeps unavailable Tracks visible with their reason", async () => {
     const track = cachedTrack("broken-track", "Broken Track");
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.markAvailability(track.identity, { status: "unavailable", reason: "mpv playback failed: corrupt stream" });
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.markAvailability(track.identity, { status: "unavailable", reason: "mpv playback failed: corrupt stream" });
     const provider: Provider = {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue, player: new NoopPlayer(),
+      initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
     expect(terminal.lastFrame()).toContain("! Broken Track · —:—");
@@ -1392,7 +1393,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("failed: corrupt stream");
   });
 
-  test("Library Cache Search finds a cached Track and places it in Queue", async () => {
+  test("Library Cache Search finds a cached Track and places it in Playlist", async () => {
     const first = cachedTrack("first", "First Track");
     const second = cachedTrack("second", "Second Track");
     const provider: Provider = {
@@ -1402,7 +1403,7 @@ describe("TMU top-level surface smoke", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new NoopPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("]");
@@ -1412,10 +1413,10 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).not.toContain("✓ First Track");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("a");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId)).toEqual(["second"]);
   });
 
-  test("renames the selected Library Track in a modal and updates Queue and Now Playing", async () => {
+  test("renames the selected Library Track in a modal and updates Playlist and Now Playing", async () => {
     let track = cachedTrack("rename00001", "Bad Name");
     const provider: YouTubeCacheProvider = {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => [track], searchTracks: () => [track],
@@ -1442,11 +1443,11 @@ describe("TMU top-level surface smoke", () => {
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
     const appState = createInitialAppState({ "youtube-cache": provider });
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer() });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
     const defaultId = coordinator.appState.playlists.activePlaylistId;
     await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
     await coordinator.dispatch({ type: "playSelected", identity: track.identity });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
@@ -1463,7 +1464,7 @@ describe("TMU top-level surface smoke", () => {
     await waitFor(() => terminal.lastFrame()!.includes("Renamed to “Clear Name”"));
 
     expect(coordinator.uiState.renameDialog).toBeNull();
-    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Name");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.track.title).toBe("Clear Name");
     expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.track.title))
       .toEqual(["Clear Name", "Clear Name"]);
     expect(terminal.lastFrame()).toContain("✓ Clear Name");
@@ -1477,7 +1478,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b[C");
     await terminal.stdin.write("\x7f");
     await terminal.stdin.write("\r");
-    await waitFor(() => coordinator.appState.queue.entries[0]?.track.title === "AB");
+    await waitFor(() => coordinator.appState.activePlaylistContent.entries[0]?.track.title === "AB");
 
     await terminal.stdin.write("e");
     await terminal.stdin.write("\x7f".repeat("AB".length));
@@ -1489,7 +1490,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\r");
     await waitFor(() => terminal.lastFrame()!.includes("Error: cache is read-only"));
     expect(coordinator.uiState.renameDialog?.value).toBe("Cannot Save");
-    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("AB");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.track.title).toBe("AB");
     await terminal.stdin.write("\x1b");
     expect(coordinator.uiState.renameDialog).toBeNull();
   });

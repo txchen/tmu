@@ -266,7 +266,7 @@ function fingerprint(snapshot: PublicationSnapshot): SemanticFingerprint {
   const withoutProviderProgress = {
     ...appState,
     providers: providersWithoutDisplayMetadata(appState.providers),
-    queue: queueWithoutDisplayMetadata(appState.queue),
+    activePlaylistContent: playlistWithoutDisplayMetadata(appState.activePlaylistContent),
     lastEvent: undefined,
   };
 
@@ -279,7 +279,7 @@ function fingerprint(snapshot: PublicationSnapshot): SemanticFingerprint {
     withoutProviderProgress: JSON.stringify({ appState: withoutProviderProgress, uiState }),
     providerProgress: JSON.stringify({
       providers: providerDisplayMetadata(appState.providers),
-      queue: queueDisplayMetadata(appState.queue),
+      activePlaylistContent: playlistDisplayMetadata(appState.activePlaylistContent),
       lastEvent: appState.lastEvent,
     }),
   };
@@ -318,18 +318,18 @@ function providerDisplayMetadata(providers: AppStateSnapshot["providers"]) {
   ]));
 }
 
-function queueWithoutDisplayMetadata(queue: AppStateSnapshot["queue"]) {
+function playlistWithoutDisplayMetadata(playlist: AppStateSnapshot["activePlaylistContent"]) {
   return {
-    ...queue,
-    entries: queue.entries.map((entry) => ({
+    ...playlist,
+    entries: playlist.entries.map((entry) => ({
       identity: entry.track.identity,
       availability: entry.availability,
     })),
   };
 }
 
-function queueDisplayMetadata(queue: AppStateSnapshot["queue"]) {
-  return queue.entries.map(({ track }) => {
+function playlistDisplayMetadata(playlist: AppStateSnapshot["activePlaylistContent"]) {
+  return playlist.entries.map(({ track }) => {
     const { identity: _identity, ...display } = track;
     return display;
   });

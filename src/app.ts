@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { NodeMpvProcessAdapter, MpvPlayer, NoopPlayer } from "./player";
 import { createDefaultProviders } from "./providers";
-import { MemoryQueue } from "./queue";
+import { MemoryPlaylistContent } from "./playlist-content";
 import { createInitialAppState, createInitialUiState } from "./state";
 import { createDefaultTmuConfig, loadTmuConfig, type TmuConfig, type TmuConfigInput } from "./config";
 import type { DependencyHealthRefresh } from "./coordinator";
@@ -25,7 +25,7 @@ export type TmuAppOptions = {
   configSource?: "defaults" | "file";
   dependencyHealth?: DependencyHealthState;
   refreshDependencyHealth?: DependencyHealthRefresh;
-  snapshotPersistence?: LastQueueSnapshotPersistence;
+  legacyQueueSnapshotPersistence?: LastQueueSnapshotPersistence;
   playlistSnapshotPersistence?: LastPlaylistSnapshotPersistence;
   appPreferencesPersistence?: AppPreferencesPersistence;
   player?: Player;
@@ -54,10 +54,10 @@ export function createTmuApp(options: TmuAppOptions = {}): {
       dependencyHealth,
     }),
     uiState: createInitialUiState(),
-    queue: new MemoryQueue(),
+    initialPlaylistContent: new MemoryPlaylistContent(),
     player: options.player ?? new NoopPlayer(),
     refreshDependencyHealth: options.refreshDependencyHealth,
-    snapshotPersistence: options.snapshotPersistence,
+    legacyQueueSnapshotPersistence: options.legacyQueueSnapshotPersistence,
     playlistSnapshotPersistence: options.playlistSnapshotPersistence,
     appPreferencesPersistence: options.appPreferencesPersistence,
     dependencyRunner: options.dependencyRunner,
@@ -93,7 +93,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       configSource: loaded.source,
       dependencyHealth,
       player,
-      snapshotPersistence: new FileLastQueueSnapshotPersistence(loaded.config.persistence.lastQueueSnapshotPath),
+      legacyQueueSnapshotPersistence: new FileLastQueueSnapshotPersistence(loaded.config.persistence.lastQueueSnapshotPath),
       playlistSnapshotPersistence: new FileLastPlaylistSnapshotPersistence(loaded.config.persistence.lastPlaylistSnapshotPath),
       appPreferencesPersistence: new FileAppPreferencesPersistence(loaded.config.persistence.appPreferencesPath),
       refreshDependencyHealth: (helper, currentHealth) =>

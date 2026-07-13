@@ -42,9 +42,9 @@ export function activeConfirmation(coordinator: AppCoordinator): ConfirmationDes
       consequence: `${playlist.entries.length} ${playlist.entries.length === 1 ? "Track" : "Tracks"} will be removed from this Playlist. YouTube Cache files will not be changed.`,
     };
   }
-  if (pending.kind === "clear-queue") return {
-    kind: pending.kind, title: "Clear Queue?", confirmLabel: "Clear",
-    consequence: "All Queue entries will be removed and playback will stop.",
+  if (pending.kind === "clear-playlist") return {
+    kind: pending.kind, title: "Clear Playlist?", confirmLabel: "Clear",
+    consequence: "All Playlist entries will be removed and playback will stop.",
   };
   if (pending.kind === "cancel-download") return {
     ...pending, title: `Cancel ${pending.target ?? "active Download Batch"}?`, confirmLabel: "Cancel download",
@@ -75,7 +75,7 @@ export async function activateConfirmation(
     case "delete-playlist":
       if (confirmed && confirmation.target) await coordinator.dispatch({ type: "deletePlaylist", playlistId: confirmation.target });
       return;
-    case "clear-queue": if (confirmed) await coordinator.dispatch({ type: "clearQueue" }); return;
+    case "clear-playlist": if (confirmed) await coordinator.dispatch({ type: "clearPlaylist" }); return;
     case "cancel-download":
       if (confirmed) await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
       return;

@@ -46,8 +46,8 @@ export function createTmuRoot(options: TmuRootOptions) {
     setup() {
       const { coordinator } = options;
       coordinator.dispatchUi({
-        type: "syncQueue",
-        identities: coordinator.queueTrackIdentities(),
+        type: "syncPlaylist",
+        identities: coordinator.playlistTrackIdentities(),
       });
       const existingError = coordinator.appState.appErrors.at(-1);
       if (existingError && !coordinator.uiState.notification) {
@@ -353,41 +353,41 @@ async function routePlayback(
   key: InputKey,
   coordinator: AppCoordinator,
 ): Promise<void> {
-  const identities = coordinator.queueTrackIdentities();
-  const jump = listJump(input, key, chordPending(coordinator.uiState), identities.length, coordinator.uiState.selectedQueueIndex);
+  const identities = coordinator.playlistTrackIdentities();
+  const jump = listJump(input, key, chordPending(coordinator.uiState), identities.length, coordinator.uiState.selectedPlaylistIndex);
   if (jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
   if (jump.index !== undefined) {
-    coordinator.dispatchUi({ type: "selectQueue", index: jump.index, identities });
+    coordinator.dispatchUi({ type: "selectPlaylistTrack", index: jump.index, identities });
   } else if (input === "j" || key.downArrow) {
     coordinator.dispatchUi({
-      type: "selectQueue",
-      index: coordinator.uiState.selectedQueueIndex + 1,
+      type: "selectPlaylistTrack",
+      index: coordinator.uiState.selectedPlaylistIndex + 1,
       identities,
     });
   } else if (input === "k" || key.upArrow) {
     coordinator.dispatchUi({
-      type: "selectQueue",
-      index: coordinator.uiState.selectedQueueIndex - 1,
+      type: "selectPlaylistTrack",
+      index: coordinator.uiState.selectedPlaylistIndex - 1,
       identities,
     });
   } else if (key.return) {
-    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    const selected = coordinator.appState.activePlaylistContent.entries[coordinator.uiState.selectedPlaylistIndex];
     if (selected) await coordinator.dispatch({ type: "playSelected", identity: selected.track.identity });
   } else if (input === "N") {
-    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    const selected = coordinator.appState.activePlaylistContent.entries[coordinator.uiState.selectedPlaylistIndex];
     if (selected) await coordinator.dispatch({ type: "playNext", target: selected.track });
   } else if (input === "x") {
-    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
-    if (selected) await coordinator.dispatch({ type: "removeQueueTrack", identity: selected.track.identity });
+    const selected = coordinator.appState.activePlaylistContent.entries[coordinator.uiState.selectedPlaylistIndex];
+    if (selected) await coordinator.dispatch({ type: "removePlaylistTrack", identity: selected.track.identity });
   } else if (input === "J" || input === "K") {
-    const selected = coordinator.appState.queue.entries[coordinator.uiState.selectedQueueIndex];
+    const selected = coordinator.appState.activePlaylistContent.entries[coordinator.uiState.selectedPlaylistIndex];
     if (selected) await coordinator.dispatch({
-      type: "moveQueueTrack",
+      type: "movePlaylistTrack",
       identity: selected.track.identity,
       delta: input === "J" ? 1 : -1,
     });
-  } else if (input === "C") coordinator.dispatchUi({ type: "requestConfirmation", kind: "clear-queue" });
-  else if (input === "Z") await coordinator.dispatch({ type: "playerOperation", operation: "randomize-queue" });
+  } else if (input === "C") coordinator.dispatchUi({ type: "requestConfirmation", kind: "clear-playlist" });
+  else if (input === "Z") await coordinator.dispatch({ type: "playerOperation", operation: "randomize-playlist" });
 }
 
 async function routeLibrary(
@@ -421,7 +421,7 @@ async function routeLibrary(
   } else if (!coordinator.uiState.library.inputFocused && (input === "N" || input === "a")) {
     const result = results[coordinator.uiState.library.selectedIndex];
     if (result?.kind === "track") await coordinator.dispatch({
-      type: input === "N" ? "playNext" : "addToQueue",
+      type: input === "N" ? "playNext" : "addToPlaylist",
       target: result.track,
     });
   } else if (!coordinator.uiState.library.inputFocused && input === "d") {
@@ -573,9 +573,9 @@ function modalScreen(snapshot: PublicationSnapshot, noColor: boolean, content: R
 }
 
 function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
-  const { playback, queue, volume } = snapshot.appState;
+  const { playback, activePlaylistContent, volume } = snapshot.appState;
   if (!playback.currentTrackIdentity) return null;
-  const current = queue.entries.find((entry) =>
+  const current = activePlaylistContent.entries.find((entry) =>
     entry.track.identity.providerId === playback.currentTrackIdentity?.providerId
     && entry.track.identity.stableId === playback.currentTrackIdentity.stableId);
   if (!current) return null;
@@ -596,7 +596,7 @@ function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
     ? ` ${progressBar(playback.positionSeconds ?? 0, duration)} ${elapsed}/${formatDuration(duration)}`
     : ` ${elapsed}`;
   const volumeLabel = volume.ready ? `Vol ${volume.percent}%` : "Vol —";
-  const repeat = queue.repeatAll ? " · ↻ ALL" : "";
+  const repeat = activePlaylistContent.repeatAll ? " · ↻ ALL" : "";
   return h(Box, { width: "100%", flexDirection: "row" }, () => [
     h(Text, {
       bold: true, color: noColor ? undefined : semantics.color, flexShrink: 0,
@@ -654,12 +654,12 @@ function playbackView(
   noColor: boolean,
 ) {
   const { uiState } = snapshot;
-  const entries = snapshot.appState.queue.entries;
-  const currentIndex = snapshot.appState.queue.currentIndex;
+  const entries = snapshot.appState.activePlaylistContent.entries;
+  const currentIndex = snapshot.appState.activePlaylistContent.currentIndex;
   const lines = entries.length === 0
-    ? ["Queue is empty — open Library to add Tracks."]
+    ? ["Playlist is empty — open Library to add Tracks."]
     : entries.map((entry, index) => {
-      const selected = index === uiState.selectedQueueIndex ? "›" : " ";
+      const selected = index === uiState.selectedPlaylistIndex ? "›" : " ";
       const status = entry.availability.status === "unavailable"
         ? index === currentIndex ? "⚠" : "!"
         : index === currentIndex
@@ -667,16 +667,16 @@ function playbackView(
           : "·";
       return `${selected} ${status} ${entry.track.title} · ${formatDuration(entry.track.durationSeconds)}`;
     });
-  const position = entries.length ? uiState.selectedQueueIndex + 1 : 0;
-  const queue = h(Box, {
+  const position = entries.length ? uiState.selectedPlaylistIndex + 1 : 0;
+  const playlist = h(Box, {
     flexDirection: "column", flexGrow: 2, width: uiState.terminal.tier === "narrow" ? "100%" : "66%",
     borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 1,
   }, () => [
-    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Queue · ${entries.length} Track${entries.length === 1 ? "" : "s"} · ${position}/${entries.length}`),
-    ...lines.slice(uiState.queueScroll, uiState.queueScroll + 10).map((line, index) => h(Text, { wrap: "truncate-end", inverse: entries.length > 0 && index + uiState.queueScroll === uiState.selectedQueueIndex }, () => line)),
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Playlist · ${entries.length} Track${entries.length === 1 ? "" : "s"} · ${position}/${entries.length}`),
+    ...lines.slice(uiState.playlistScroll, uiState.playlistScroll + 10).map((line, index) => h(Text, { wrap: "truncate-end", inverse: entries.length > 0 && index + uiState.playlistScroll === uiState.selectedPlaylistIndex }, () => line)),
   ]);
-  const selected = entries[uiState.selectedQueueIndex];
-  if (!selected) return queue;
+  const selected = entries[uiState.selectedPlaylistIndex];
+  if (!selected) return playlist;
   const provider = coordinator.appState.providers[selected.track.identity.providerId];
   const cacheEntry = isYouTubeCacheProvider(provider) ? provider.findByIdentity(selected.track.identity) : undefined;
   const metadata = cacheEntry?.metadata;
@@ -701,7 +701,7 @@ function playbackView(
       ? [h(Text, { color: noColor ? undefined : "red" }, () => `Unavailable: ${unavailableReason}`)]
       : []),
   ]);
-  return h(Box, { flexDirection: uiState.terminal.tier === "narrow" ? "column" : "row", gap: 1, flexGrow: 1 }, () => [queue, preview]);
+  return h(Box, { flexDirection: uiState.terminal.tier === "narrow" ? "column" : "row", gap: 1, flexGrow: 1 }, () => [playlist, preview]);
 }
 
 function formatDuration(seconds: number | undefined): string {
@@ -957,12 +957,12 @@ function shortcutHelpLayout(ui: UiState, incompleteSelected = false) {
 
 function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boolean): ShortcutGroup[] {
   if (tab === "playback") return [{
-    title: "QUEUE PANE",
+    title: "PLAYLIST PANE",
     rows: [
       ["j/k, ↑/↓", "Move selection"], ["Ctrl+d/u, PgUp/PgDn", "Move by page"], ["gg/G", "First/last Track"],
       ["Enter", "Play Selected"], ["N", "Play Next"], ["J/K", "Move Track down/up"],
-      ["x", "Remove Track"], ["C", "Clear Queue (confirm)"],
-      ["Z", "Randomize entire Queue"],
+      ["x", "Remove Track"], ["C", "Clear Playlist (confirm)"],
+      ["Z", "Randomize entire Playlist"],
     ],
   }];
   if (tab === "library") return [
@@ -980,7 +980,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
         ["gg/G", "First/last result"],
         ...(incompleteSelected
           ? [["d", "Clean incomplete Cache Entry"]] as Array<readonly [string, string]>
-          : [["Enter", "Play Now"], ["N", "Play Next"], ["O", "Open on YouTube"], ["e", "Rename Track"], ["a", "Add to Queue"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
+          : [["Enter", "Play Now"], ["N", "Play Next"], ["O", "Open on YouTube"], ["e", "Rename Track"], ["a", "Add to Playlist"], ["d", "Delete Track (confirm)"]] as Array<readonly [string, string]>),
         ["Tab/Shift+Tab", "Change focus"],
       ],
     },

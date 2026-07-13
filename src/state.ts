@@ -34,7 +34,7 @@ export function createInitialAppState(
     configSource: options.configSource ?? "defaults",
     dependencyHealth: options.dependencyHealth ?? createDefaultDependencyHealth(),
     providers,
-    queue: {
+    activePlaylistContent: {
       entries: [],
       currentIndex: -1,
       repeatAll: false,

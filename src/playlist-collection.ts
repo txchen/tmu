@@ -1,17 +1,17 @@
-import { MemoryQueue } from "./queue";
+import { MemoryPlaylistContent } from "./playlist-content";
 import {
   identityKey,
   type PlaylistCollectionState,
   type PlaylistPlaybackStatus,
   type PlaylistState,
-  type Queue,
+  type PlaylistContent,
   type Track,
 } from "./domain";
 
 type PlaylistRecord = {
   id: string;
   name: string;
-  queue: Queue;
+  content: PlaylistContent;
   positionSeconds: number;
   playbackStatus: PlaylistPlaybackStatus;
 };
@@ -20,13 +20,13 @@ export class MemoryPlaylistCollection {
   private records: PlaylistRecord[];
   private activeId: string;
 
-  constructor(initialQueue: Queue, id = crypto.randomUUID()) {
-    this.records = [{ id, name: "Default", queue: initialQueue, positionSeconds: 0, playbackStatus: "stopped" }];
+  constructor(initialContent: PlaylistContent, id = crypto.randomUUID()) {
+    this.records = [{ id, name: "Default", content: initialContent, positionSeconds: 0, playbackStatus: "stopped" }];
     this.activeId = id;
   }
 
-  get activeQueue(): Queue {
-    return this.active.queue;
+  get activePlaylistContent(): PlaylistContent {
+    return this.active.content;
   }
 
   get activePlaylistId(): string {
@@ -37,10 +37,10 @@ export class MemoryPlaylistCollection {
     return { positionSeconds: this.active.positionSeconds, playbackStatus: this.active.playbackStatus };
   }
 
-  append(name: string, id = crypto.randomUUID()): { id: string; queue: Queue } {
+  append(name: string, id = crypto.randomUUID()): { id: string; content: PlaylistContent } {
     const normalizedName = validatePlaylistName(name, this.records.map((record) => record.name));
     if (this.records.some((playlist) => playlist.id === id)) throw new Error(`Playlist UUID is already in use: ${id}`);
-    const record = { id, name: normalizedName, queue: new MemoryQueue(), positionSeconds: 0, playbackStatus: "stopped" as const };
+    const record = { id, name: normalizedName, content: new MemoryPlaylistContent(), positionSeconds: 0, playbackStatus: "stopped" as const };
     this.records.push(record);
     return record;
   }
@@ -70,7 +70,7 @@ export class MemoryPlaylistCollection {
     const record = this.records.find((playlist) => playlist.id === id);
     if (!record) throw new Error(`Playlist is missing: ${id}`);
     this.activeId = id;
-    return { id: record.id, name: record.name, ...record.queue.snapshot(), positionSeconds: record.positionSeconds, playbackStatus: record.playbackStatus };
+    return { id: record.id, name: record.name, ...record.content.snapshot(), positionSeconds: record.positionSeconds, playbackStatus: record.playbackStatus };
   }
 
   updateActivePlayback(update: { positionSeconds: number; playbackStatus: PlaylistPlaybackStatus }): void {
@@ -79,20 +79,20 @@ export class MemoryPlaylistCollection {
   }
 
   updateTrack(track: PlaylistState["entries"][number]["track"]): void {
-    for (const record of this.records) record.queue.updateTrack(track);
+    for (const record of this.records) record.content.updateTrack(track);
   }
 
   markAvailability(
     identity: PlaylistState["entries"][number]["track"]["identity"],
     availability: PlaylistState["entries"][number]["availability"],
   ): void {
-    for (const record of this.records) record.queue.markAvailability(identity, availability);
+    for (const record of this.records) record.content.markAvailability(identity, availability);
   }
 
   canonicalTracks(): readonly Track[] {
     const tracks = new Map<string, Track>();
     for (const record of this.records) {
-      for (const entry of record.queue.entries) {
+      for (const entry of record.content.entries) {
         const key = identityKey(entry.track.identity);
         if (!tracks.has(key)) tracks.set(key, entry.track);
       }
@@ -106,7 +106,7 @@ export class MemoryPlaylistCollection {
       playlists: this.records.map((record): PlaylistState => ({
         id: record.id,
         name: record.name,
-        ...record.queue.snapshot(),
+        ...record.content.snapshot(),
         positionSeconds: record.positionSeconds,
         playbackStatus: record.playbackStatus,
       })),
@@ -116,17 +116,17 @@ export class MemoryPlaylistCollection {
   restore(state: PlaylistCollectionState): void {
     const activeState = state.playlists.find((playlist) => playlist.id === state.activePlaylistId);
     if (!activeState) throw new Error("Active Playlist is missing");
-    const activeQueue = this.activeQueue;
-    activeQueue.restore(activeState);
-    this.records = state.playlists.map((playlist) => {
-      const queue = playlist.id === state.activePlaylistId ? activeQueue : new MemoryQueue();
-      if (queue !== activeQueue) queue.restore(playlist);
+    const activePlaylistContent = this.activePlaylistContent;
+    activePlaylistContent.restore(activeState);
+    this.records = state.playlists.map((statePlaylist) => {
+      const content = statePlaylist.id === state.activePlaylistId ? activePlaylistContent : new MemoryPlaylistContent();
+      if (content !== activePlaylistContent) content.restore(statePlaylist);
       return {
-        id: playlist.id,
-        name: playlist.name,
-        queue,
-        positionSeconds: normalizePosition(playlist.positionSeconds),
-        playbackStatus: playlist.playbackStatus,
+        id: statePlaylist.id,
+        name: statePlaylist.name,
+        content,
+        positionSeconds: normalizePosition(statePlaylist.positionSeconds),
+        playbackStatus: statePlaylist.playbackStatus,
       };
     });
     this.activeId = state.activePlaylistId;

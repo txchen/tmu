@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { AppCoordinator } from "../src/coordinator";
 import { PlaybackFailure, type PlaybackLocator, type PlayerLoadOptions, type PlayerPlaybackState, type Provider, type Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
-import { MemoryQueue } from "../src/queue";
+import { MemoryPlaylistContent } from "../src/playlist-content";
 import { InMemoryLastPlaylistSnapshotPersistence } from "../src/playlist-snapshot";
 import { createInitialAppState, createInitialUiState } from "../src/state";
 import type { YouTubeCacheProvider } from "../src/youtube-cache";
@@ -84,7 +84,7 @@ function harness() {
   const coordinator = new AppCoordinator({
     appState: createInitialAppState({ "youtube-cache": provider }),
     uiState: createInitialUiState(),
-    queue: new MemoryQueue(),
+    initialPlaylistContent: new MemoryPlaylistContent(),
     player,
   });
   return { coordinator, player };
@@ -110,12 +110,12 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new RecordingPlayer(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(),
     });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
     const defaultId = coordinator.appState.playlists.activePlaylistId;
     await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
-    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "addToPlaylist", target: track });
 
     await coordinator.dispatch({ type: "renameTrack", identity: track.identity, title: "Canonical Title" });
 
@@ -129,7 +129,7 @@ describe("AppCoordinator with the narrow Provider", () => {
       .toEqual([["cached-track"], ["cached-track"]]);
 
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
-    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability.status).toBe("unavailable");
   });
 
   test("shares playback failure Availability so traversal skips the identity in another Playlist", async () => {
@@ -141,14 +141,14 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
-    await coordinator.dispatch({ type: "addToQueue", target: next });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToPlaylist", target: next });
     const defaultId = coordinator.appState.playlists.activePlaylistId;
     await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
-    await coordinator.dispatch({ type: "addToQueue", target: next });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToPlaylist", target: next });
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
     await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
 
@@ -158,7 +158,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
     await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
 
-    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability.status).toBe("unavailable");
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(next.identity);
   });
 
@@ -179,19 +179,19 @@ describe("AppCoordinator with the narrow Provider", () => {
     const player = new PlaybackFailingPlayer();
     const first = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player, playlistSnapshotPersistence: persistence,
+      initialPlaylistContent: new MemoryPlaylistContent(), player, playlistSnapshotPersistence: persistence,
     });
-    await first.dispatch({ type: "addToQueue", target: cachedTrack });
+    await first.dispatch({ type: "addToPlaylist", target: cachedTrack });
     await first.dispatch({ type: "createPlaylist", name: "Study" });
-    await first.dispatch({ type: "addToQueue", target: cachedTrack });
+    await first.dispatch({ type: "addToPlaylist", target: cachedTrack });
     await first.dispatch({ type: "playSelected", identity: cachedTrack.identity });
     player.failPlayback("mpv playback failed: corrupt stream");
-    await waitFor(() => first.appState.queue.entries[0]?.availability.status === "unavailable");
+    await waitFor(() => first.appState.activePlaylistContent.entries[0]?.availability.status === "unavailable");
     await first.teardown();
 
     const restored = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new RecordingPlayer(), playlistSnapshotPersistence: persistence,
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(), playlistSnapshotPersistence: persistence,
     });
     await restored.start();
 
@@ -201,22 +201,22 @@ describe("AppCoordinator with the narrow Provider", () => {
 
   test("creates and switches independent Playlist playback contexts without autoplay", async () => {
     const { coordinator, player } = harness();
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
     await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
     player.publishForTest({ status: "playing", positionSeconds: 42 });
 
     await coordinator.dispatch({ type: "createPlaylist", name: " Study " });
 
     expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study"]);
-    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.activePlaylistContent.entries).toEqual([]);
     expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
     expect(player.loaded).toHaveLength(1);
 
-    await coordinator.dispatch({ type: "addToQueue", target: { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "study" } } });
+    await coordinator.dispatch({ type: "addToPlaylist", target: { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "study" } } });
     const defaultId = coordinator.appState.playlists.playlists[0]!.id;
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["cached-track"]);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId)).toEqual(["cached-track"]);
     expect(coordinator.appState.playback).toMatchObject({ status: "paused", positionSeconds: 42, restored: true });
     expect(player.loaded).toHaveLength(1);
     expect(coordinator.appState.playlists.playlists[1]!.entries[0]!.track.identity.stableId).toBe("study");
@@ -240,7 +240,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     ["stopped", 99, "stopped", 0],
   ] as const)("switching away from %s preserves the intended Playlist resume state", async (status, positionSeconds, playbackStatus, savedPosition) => {
     const { coordinator } = harness();
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
     await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
     coordinator.appState.playback = { status, positionSeconds, currentTrackIdentity: cachedTrack.identity };
     await coordinator.dispatch({ type: "createPlaylist", name: "Other" });
@@ -250,7 +250,7 @@ describe("AppCoordinator with the narrow Provider", () => {
   test("restores the created Active Playlist after restart without autoplay", async () => {
     const persistence = new InMemoryLastPlaylistSnapshotPersistence();
     const first = new AppCoordinator({
-      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(),
+      appState: createInitialAppState({}), uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(),
       player: new RecordingPlayer(), playlistSnapshotPersistence: persistence,
     });
     await first.dispatch({ type: "createPlaylist", name: "Road" });
@@ -258,7 +258,7 @@ describe("AppCoordinator with the narrow Provider", () => {
 
     const player = new RecordingPlayer();
     const restored = new AppCoordinator({
-      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(),
+      appState: createInitialAppState({}), uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(),
       player, playlistSnapshotPersistence: persistence,
     });
     await restored.start();
@@ -271,14 +271,14 @@ describe("AppCoordinator with the narrow Provider", () => {
 
   test("does not retain a newly created Playlist when switching cannot stop the Player", async () => {
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(), player: new StopFailingPlayer(),
+      appState: createInitialAppState({}), uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new StopFailingPlayer(),
     });
     await expect(coordinator.dispatch({ type: "createPlaylist", name: "Unsafe" })).rejects.toThrow("mpv stop failed");
     expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default"]);
     expect(coordinator.appState.playlists.activePlaylistId).toBe(coordinator.appState.playlists.playlists[0]!.id);
   });
 
-  test("Rename Track updates every queued copy without interrupting playback", async () => {
+  test("Rename Track updates every Playlist copy without interrupting playback", async () => {
     let track = cachedTrack;
     const provider: YouTubeCacheProvider = {
       id: "youtube-cache", label: "YouTube Cache",
@@ -289,50 +289,50 @@ describe("AppCoordinator with the narrow Provider", () => {
       renameTrack: async (_identity, title) => (track = { ...track, title }),
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
+    const playlist = new MemoryPlaylistContent();
+    playlist.add(track);
+    playlist.startAt(0);
     const player = new RecordingPlayer();
     const appState = createInitialAppState({ "youtube-cache": provider });
     appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 42 };
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player });
     const playbackBefore = structuredClone(coordinator.appState.playback);
 
     await coordinator.dispatch({ type: "renameTrack", identity: track.identity, title: "Clear Track Name" });
 
-    expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Track Name");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.track.title).toBe("Clear Track Name");
     expect(coordinator.appState.playback).toEqual(playbackBefore);
     expect(player.loaded).toEqual([]);
     expect(coordinator.appState.lastEvent).toBe("Renamed to “Clear Track Name”");
   });
 
-  test("Randomize Queue reorders every Track while preserving Current identity", async () => {
-    const queue = new MemoryQueue({ random: () => 0 });
+  test("Randomize Playlist reorders every Track while preserving Current identity", async () => {
+    const playlist = new MemoryPlaylistContent({ random: () => 0 });
     const coordinator = new AppCoordinator({ appState: createInitialAppState({}), uiState: createInitialUiState(),
-      queue, player: new NoopPlayer() });
+      initialPlaylistContent: playlist, player: new NoopPlayer() });
     const tracks = [cachedTrack, ...["b", "c", "d"].map((id) => ({
       ...cachedTrack, identity: { ...cachedTrack.identity, stableId: id }, title: id.toUpperCase(),
     }))];
-    for (const target of tracks) await coordinator.dispatch({ type: "addToQueue", target });
+    for (const target of tracks) await coordinator.dispatch({ type: "addToPlaylist", target });
     await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
     const playbackBefore = coordinator.appState.playback;
 
-    await coordinator.dispatch({ type: "playerOperation", operation: "randomize-queue" });
+    await coordinator.dispatch({ type: "playerOperation", operation: "randomize-playlist" });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["b", "c", "d", "cached-track"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(3);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(3);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
-    expect(coordinator.appState.lastEvent).toBe("randomized Queue");
+    expect(coordinator.appState.lastEvent).toBe("randomized Playlist");
   });
 
-  test("Play Next queues a cached Track without starting playback", async () => {
+  test("Play Next playlists a cached Track without starting playback", async () => {
     const { coordinator, player } = harness();
 
     await coordinator.dispatch({ type: "playNext", target: cachedTrack });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track)).toEqual([cachedTrack]);
-    expect(coordinator.appState.queue.currentIndex).toBe(-1);
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track)).toEqual([cachedTrack]);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(-1);
     expect(player.loaded).toEqual([]);
   });
 
@@ -341,25 +341,25 @@ describe("AppCoordinator with the narrow Provider", () => {
 
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
 
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
     expect(player.loaded).toEqual([{ kind: "file", path: "/cache/cached-track.opus" }]);
   });
 
-  test("Play Selected starts an existing Queue Track from the beginning without changing Queue order", async () => {
+  test("Play Selected starts an existing Playlist Track from the beginning without changing Playlist order", async () => {
     const { coordinator, player } = harness();
     const first = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "first" }, title: "First" };
     const selected = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "selected" }, title: "Selected" };
     const last = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "last" }, title: "Last" };
     for (const track of [first, selected, last]) {
-      await coordinator.dispatch({ type: "addToQueue", target: track });
+      await coordinator.dispatch({ type: "addToPlaylist", target: track });
     }
 
     await coordinator.dispatch({ type: "playSelected", identity: selected.identity });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["first", "selected", "last"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(1);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(1);
     expect(coordinator.appState.playback).toMatchObject({
       currentTrackIdentity: selected.identity,
       positionSeconds: 0,
@@ -367,7 +367,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(player.loaded.at(-1)).toEqual({ kind: "file", path: "/cache/cached-track.opus" });
   });
 
-  test("Add to Queue appends once without moving Current or starting playback", async () => {
+  test("Add to Playlist appends once without moving Current or starting playback", async () => {
     const { coordinator, player } = harness();
     const later: Track = {
       identity: { providerId: "youtube-cache", stableId: "later-track" },
@@ -377,12 +377,12 @@ describe("AppCoordinator with the narrow Provider", () => {
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
     const loadsAfterPlayNow = player.loaded.length;
 
-    await coordinator.dispatch({ type: "addToQueue", target: later });
-    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToPlaylist", target: later });
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["cached-track", "later-track"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(player.loaded).toHaveLength(loadsAfterPlayNow);
   });
 
@@ -398,20 +398,20 @@ describe("AppCoordinator with the narrow Provider", () => {
       title: "Last Track",
       providerLabel: "YouTube Cache",
     };
-    await coordinator.dispatch({ type: "addToQueue", target: later });
-    await coordinator.dispatch({ type: "addToQueue", target: last });
+    await coordinator.dispatch({ type: "addToPlaylist", target: later });
+    await coordinator.dispatch({ type: "addToPlaylist", target: last });
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
     const loadsAfterPlayNow = player.loaded.length;
 
     await coordinator.dispatch({ type: "playNext", target: last });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["cached-track", "last-track", "later-track"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(player.loaded).toHaveLength(loadsAfterPlayNow);
   });
 
-  test("playlist submission requires confirmation and Download Batch execution never changes Queue or playback", async () => {
+  test("playlist submission requires confirmation and Download Batch execution never changes Playlist or playback", async () => {
     const provider: Provider = {
       id: "youtube-cache",
       label: "YouTube Cache",
@@ -429,7 +429,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }),
       uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
+      initialPlaylistContent: new MemoryPlaylistContent(),
       player,
       prepareDownloadBatch: async (url) => url.includes("playlist") ? ({
           kind: "confirmation-required",
@@ -446,7 +446,7 @@ describe("AppCoordinator with the narrow Provider", () => {
       },
     });
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
-    const queueBefore = structuredClone(coordinator.appState.queue);
+    const playlistBefore = structuredClone(coordinator.appState.activePlaylistContent);
     const playbackBefore = structuredClone(coordinator.appState.playback);
     const loadsBefore = player.loaded.length;
 
@@ -461,7 +461,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.downloads.acceptedSubmission).toEqual({
       id: 1, input: "https://youtube.com/watch?v=One00000001",
     });
-    expect(coordinator.appState.queue).toEqual(queueBefore);
+    expect(coordinator.appState.activePlaylistContent).toEqual(playlistBefore);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
 
     coordinator.dispatchUi({ type: "setDownloaderInput", value: "https://youtube.com/playlist?list=PL1" });
@@ -484,7 +484,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.downloads.summary).toEqual({
       downloaded: 2, alreadyCached: 1, failed: 1, cancelled: 0,
     });
-    expect(coordinator.appState.queue).toEqual(queueBefore);
+    expect(coordinator.appState.activePlaylistContent).toEqual(playlistBefore);
     expect(coordinator.appState.playback).toEqual(playbackBefore);
     expect(player.loaded).toHaveLength(loadsBefore);
   });
@@ -501,7 +501,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const appState = createInitialAppState(coordinator.appState.providers);
     const next = new AppCoordinator({
-      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new RecordingPlayer(),
+      appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(),
       prepareDownloadBatch: async (url) => url === rejectedUrl
         ? { kind: "rejected", message: "YouTube Downloader rejects non-YouTube URLs" }
         : prepared,
@@ -531,7 +531,7 @@ describe("AppCoordinator with the narrow Provider", () => {
         resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
       } }),
       uiState: createInitialUiState(),
-      queue: new MemoryQueue(),
+      initialPlaylistContent: new MemoryPlaylistContent(),
       player,
       prepareDownloadBatch: async (url) => ({
         kind: "ready",
@@ -572,7 +572,7 @@ describe("AppCoordinator with the narrow Provider", () => {
         id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
         resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
       } }),
-      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player,
       prepareDownloadBatch: async (url) => ({ kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] } }),
       executeDownloadBatch: async (_batch, options) => {
         await waitFor(() => options.signal?.aborted === true);
@@ -600,7 +600,7 @@ describe("AppCoordinator with the narrow Provider", () => {
         id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
         resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
       } }),
-      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player,
       prepareDownloadBatch: async (_url, options) => {
         await waitFor(() => options.signal?.aborted === true);
         preflightAborted = true;
@@ -630,7 +630,7 @@ describe("AppCoordinator with the narrow Provider", () => {
       resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
     } });
     const coordinator = new AppCoordinator({
-      appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player,
       refreshDependencyHealth: async (_helper, current) => {
         refreshStarted = true;
         await refreshGate;
@@ -652,7 +652,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(player.teardownCount).toBe(1);
   });
 
-  test("confirmed Cache Deletion recomputes playback state and retains the Current Queue entry unavailable", async () => {
+  test("confirmed Cache Deletion recomputes playback state and retains the Current Playlist entry unavailable", async () => {
     let deleted = false;
     const provider: YouTubeCacheProvider = {
       id: "youtube-cache", label: "YouTube Cache",
@@ -684,7 +684,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }),
-      uiState: createInitialUiState(), queue: new MemoryQueue(), player,
+      uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
     await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: cachedTrack.identity });
     expect(coordinator.appState.cacheConfirmation).toMatchObject({
@@ -695,14 +695,14 @@ describe("AppCoordinator with the narrow Provider", () => {
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
     await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
     expect(deleted).toBe(true);
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
-    expect(coordinator.appState.queue.entries[0]?.availability).toMatchObject({ status: "unavailable" });
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability).toMatchObject({ status: "unavailable" });
     expect(coordinator.appState.playback).toMatchObject({
       status: "stopped", positionSeconds: 0, currentTrackIdentity: cachedTrack.identity,
     });
   });
 
-  test("direct Play Now fails on the requested unavailable Track without substituting another Queue Track", async () => {
+  test("direct Play Now fails on the requested unavailable Track without substituting another Playlist Track", async () => {
     const bad = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "bad-track" }, title: "Bad" };
     const good = { ...cachedTrack, identity: { providerId: "youtube-cache", stableId: "good-track" }, title: "Good" };
     const player = new SelectivelyFailingPlayer();
@@ -712,14 +712,14 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
-    await coordinator.dispatch({ type: "addToQueue", target: good });
+    await coordinator.dispatch({ type: "addToPlaylist", target: good });
     await coordinator.dispatch({ type: "playNow", target: bad });
 
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["bad-track", "good-track"]);
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
-    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId)).toEqual(["bad-track", "good-track"]);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability).toEqual({
       status: "unavailable", reason: "mpv could not play cached file",
     });
     expect(player.loaded).toEqual([]);
@@ -736,16 +736,16 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
-    for (const track of [first, bad, good]) await coordinator.dispatch({ type: "addToQueue", target: track });
+    for (const track of [first, bad, good]) await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "playNow", target: first });
     await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
 
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(good.identity);
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["first-track", "bad-track", "good-track"]);
-    expect(coordinator.appState.queue.entries[1]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.activePlaylistContent.entries[1]?.availability.status).toBe("unavailable");
   });
 
   test("asynchronous mpv failure marks Current unavailable and direct Resume does not retry or substitute", async () => {
@@ -756,7 +756,7 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
     const loadsBeforeFailure = player.loaded.length;
@@ -764,10 +764,10 @@ describe("AppCoordinator with the narrow Provider", () => {
     player.failPlayback("mpv playback failed: corrupt stream");
     await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
 
-    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability).toEqual({
       status: "unavailable", reason: "mpv playback failed: corrupt stream",
     });
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(player.loaded).toHaveLength(loadsBeforeFailure);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
   });
@@ -781,16 +781,16 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
-    await coordinator.dispatch({ type: "addToQueue", target: next });
+    await coordinator.dispatch({ type: "addToPlaylist", target: next });
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
 
     player.failPlayback("mpv playback failed: corrupt stream");
     await waitFor(() => coordinator.appState.playback.currentTrackIdentity?.stableId === "next-track");
 
-    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
-    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId))
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.identity.stableId))
       .toEqual(["cached-track", "next-track"]);
   });
 
@@ -802,15 +802,15 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
     });
     await coordinator.dispatch({ type: "playNow", target: cachedTrack });
 
-    expect(coordinator.appState.queue.entries[0]?.availability.status).not.toBe("unavailable");
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability.status).not.toBe("unavailable");
     expect(coordinator.appState.playback).toMatchObject({ status: "error", message: "mpv IPC socket disconnected" });
   });
 
-  test("restored Queue availability is rescanned from the current YouTube Cache", async () => {
+  test("restored Playlist availability is rescanned from the current YouTube Cache", async () => {
     const provider: YouTubeCacheProvider = {
       id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
       resolvePlaybackLocator: async () => { throw new Error("missing"); }, refresh: () => undefined,
@@ -820,8 +820,8 @@ describe("AppCoordinator with the narrow Provider", () => {
     };
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player: new RecordingPlayer(),
-      snapshotPersistence: {
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(),
+      legacyQueueSnapshotPersistence: {
         load: async () => ({
           version: 1,
           entries: [{ track: cachedTrack }],
@@ -835,10 +835,10 @@ describe("AppCoordinator with the narrow Provider", () => {
     });
     await coordinator.start();
 
-    expect(coordinator.appState.queue.entries[0]?.availability).toEqual({
+    expect(coordinator.appState.activePlaylistContent.entries[0]?.availability).toEqual({
       status: "unavailable", reason: "YouTube Cache entry is missing: cached-track",
     });
-    expect(coordinator.appState.queue.currentIndex).toBe(0);
+    expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
     expect(coordinator.appState.playback.currentTrackIdentity).toEqual(cachedTrack.identity);
   });
 
@@ -850,8 +850,8 @@ describe("AppCoordinator with the narrow Provider", () => {
     const player = new SeekFailingPlayer();
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
-      queue: new MemoryQueue(), player,
-      snapshotPersistence: {
+      initialPlaylistContent: new MemoryPlaylistContent(), player,
+      legacyQueueSnapshotPersistence: {
         load: async () => ({
           version: 1, entries: [{ track: cachedTrack }], currentIndex: 0, repeatAll: false,
           volume: { percent: 100, ready: false }, positionSeconds: 42,
