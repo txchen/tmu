@@ -55,6 +55,38 @@ export type QueueState = {
   repeatAll: boolean;
 };
 
+export type PlaylistPlaybackStatus = "stopped" | "resumable";
+
+export type PlaylistState = QueueState & {
+  id: string;
+  name: string;
+  positionSeconds: number;
+  playbackStatus: PlaylistPlaybackStatus;
+};
+
+export type PlaylistCollectionState = {
+  playlists: PlaylistState[];
+  activePlaylistId: string;
+};
+
+export type LastPlaylistSnapshotPlaylist = {
+  id: string;
+  name: string;
+  trackIdentities: TrackIdentity[];
+  currentTrackIdentity: TrackIdentity | null;
+  positionSeconds: number;
+  playbackStatus: PlaylistPlaybackStatus;
+  repeatAll: boolean;
+};
+
+export type LastPlaylistSnapshot = {
+  version: 1;
+  activePlaylistId: string;
+  playlists: LastPlaylistSnapshotPlaylist[];
+  tracks: SnapshotTrack[];
+  volume: VolumeState;
+};
+
 export type VolumeState = {
   percent: number;
   ready: boolean;
@@ -163,6 +195,7 @@ export type AppState = {
   dependencyHealth: DependencyHealthState;
   providers: Record<string, Provider>;
   queue: QueueState;
+  playlists: PlaylistCollectionState;
   playback: PlaybackState;
   volume: VolumeState;
   downloads: {

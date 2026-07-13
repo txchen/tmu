@@ -22,6 +22,7 @@ export type TmuConfig = {
   };
   persistence: {
     lastQueueSnapshotPath: string;
+    lastPlaylistSnapshotPath: string;
     appPreferencesPath: string;
   };
 };
@@ -64,6 +65,7 @@ export function createDefaultTmuConfig(overrides: TmuConfigInput = {}): TmuConfi
     },
     persistence: {
       lastQueueSnapshotPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "last-queue.json"),
+      lastPlaylistSnapshotPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "last-playlists.json"),
       appPreferencesPath: join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "tmu", "preferences.json"),
     },
   };
@@ -138,10 +140,20 @@ function mergeConfig(base: TmuConfig, overrides: TmuConfigInput): TmuConfig {
 
 function normalizeConfigInput(input: TmuConfigInput): TmuConfigInput {
   const maybeYoutube = input.youtube as (TmuConfig["youtube"] & { cookies_from_browser?: string }) | undefined;
-  if (!maybeYoutube?.cookies_from_browser) return input;
+  const persistence = input.persistence;
+  const normalizedPersistence = persistence?.lastQueueSnapshotPath && !persistence.lastPlaylistSnapshotPath
+    ? {
+      ...persistence,
+      lastPlaylistSnapshotPath: join(dirname(persistence.lastQueueSnapshotPath), "last-playlists.json"),
+    }
+    : persistence;
+  if (!maybeYoutube?.cookies_from_browser) {
+    return normalizedPersistence === persistence ? input : { ...input, persistence: normalizedPersistence };
+  }
 
   return {
     ...input,
+    persistence: normalizedPersistence,
     youtube: {
       ...input.youtube,
       cookiesFromBrowser: maybeYoutube.cookiesFromBrowser ?? maybeYoutube.cookies_from_browser,

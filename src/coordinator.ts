@@ -7,6 +7,7 @@ import {
   type AppIntent,
   type AppState,
   type LastQueueSnapshot,
+  type LastPlaylistSnapshot,
   type Player,
   type PlayerPlaybackState,
   type Provider,
@@ -34,9 +35,15 @@ import {
 } from "./preferences";
 import {
   InMemoryLastQueueSnapshotPersistence,
-  createLastQueueSnapshot,
   type LastQueueSnapshotPersistence,
 } from "./snapshot";
+import {
+  InMemoryLastPlaylistSnapshotPersistence,
+  createLastPlaylistSnapshot,
+  playlistCollectionFromSnapshot,
+  type LastPlaylistSnapshotPersistence,
+} from "./playlist-snapshot";
+import { MemoryPlaylistCollection } from "./playlists";
 import {
   executeYouTubeDownloadBatch,
   prepareYouTubeDownloadBatch,
@@ -59,6 +66,7 @@ export type AppCoordinatorOptions = {
   player: Player;
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
+  playlistSnapshotPersistence?: LastPlaylistSnapshotPersistence;
   appPreferencesPersistence?: AppPreferencesPersistence;
   dependencyRunner?: DependencyCommandRunner;
   prepareDownloadBatch?: typeof prepareYouTubeDownloadBatch;
@@ -74,6 +82,8 @@ export class AppCoordinator {
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
+  private readonly playlistSnapshotPersistence: LastPlaylistSnapshotPersistence;
+  private readonly playlists: MemoryPlaylistCollection;
   private readonly appPreferencesPersistence: AppPreferencesPersistence;
   private readonly dependencyRunner: DependencyCommandRunner;
   private readonly prepareDownloadBatch: typeof prepareYouTubeDownloadBatch;
@@ -104,9 +114,11 @@ export class AppCoordinator {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
     this.queue = options.queue;
+    this.playlists = new MemoryPlaylistCollection(options.queue);
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
     this.snapshotPersistence = options.snapshotPersistence ?? new InMemoryLastQueueSnapshotPersistence();
+    this.playlistSnapshotPersistence = options.playlistSnapshotPersistence ?? new InMemoryLastPlaylistSnapshotPersistence();
     this.appPreferencesPersistence = options.appPreferencesPersistence
       ?? new InMemoryAppPreferencesPersistence();
     this.dependencyRunner = options.dependencyRunner ?? nodeDependencyCommandRunner;
@@ -119,7 +131,7 @@ export class AppCoordinator {
       const playbackFailed = playback.failureKind === "playback";
       if (playbackFailed) this.recordCurrentTrackPlaybackFailure(playback.message);
       this.notifyStateChanged("playback");
-      this.maybeCheckpointLastQueueSnapshot(playback);
+      this.maybeCheckpointLastPlaylistSnapshot(playback);
       if (reachedNaturalEnd || playbackFailed) void this.advanceAfterTerminalPlaybackEvent();
     });
     this.syncQueueState();
@@ -141,7 +153,7 @@ export class AppCoordinator {
 
   async start(): Promise<void> {
     const preferences = await this.restoreAppPreferences();
-    await this.restoreQueueSnapshotIfPresent(preferences?.volume);
+    await this.restorePlaylistSnapshotOrMigrateQueue(preferences?.volume);
     this.syncQueueState();
     this.notifyStateChanged();
   }
@@ -201,7 +213,7 @@ export class AppCoordinator {
         && ["toggle-play-pause", "stop"].includes(intent.operation);
       if (!this.tornDown && !persistenceIntent) {
         const meaningful = beforeSnapshot !== this.snapshotFingerprint();
-        if (meaningful || forceSave) await this.saveLastQueueSnapshot({ meaningful });
+        if (meaningful || forceSave) await this.saveLastPlaylistSnapshot({ meaningful });
       }
     }
   }
@@ -209,7 +221,7 @@ export class AppCoordinator {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
-    await this.saveLastQueueSnapshot({ meaningful: false });
+    await this.saveLastPlaylistSnapshot({ meaningful: false });
     this.pendingDownloadBatches.length = 0;
     this.pendingPlaylistConfirmation?.prepared.cancel();
     this.pendingPlaylistConfirmation?.settle();
@@ -276,13 +288,22 @@ export class AppCoordinator {
     }
   }
 
-  private async restoreQueueSnapshotIfPresent(preferredVolume?: AppPreferencesRecord["volume"]): Promise<void> {
-    const snapshot = await this.snapshotPersistence.load();
-    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
-    this.snapshotSaveBlockedUntilMeaningfulChange = this.snapshotPersistence.wasLastLoadQuarantined?.() ?? false;
-    if (!snapshot) return;
+  private async restorePlaylistSnapshotOrMigrateQueue(preferredVolume?: AppPreferencesRecord["volume"]): Promise<void> {
+    const snapshot = await this.playlistSnapshotPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.playlistSnapshotPersistence);
+    const quarantined = this.playlistSnapshotPersistence.wasLastLoadQuarantined?.() ?? false;
+    this.snapshotSaveBlockedUntilMeaningfulChange = quarantined;
+    if (snapshot) {
+      await this.applyLastPlaylistSnapshot(snapshot, preferredVolume);
+      return;
+    }
+    if (quarantined) return;
 
-    await this.applyLastQueueSnapshot(snapshot, preferredVolume);
+    const legacy = await this.snapshotPersistence.load();
+    this.recordPersistenceRecoveryMessages(this.snapshotPersistence);
+    if (!legacy) return;
+    await this.applyLastQueueSnapshot(legacy, preferredVolume);
+    await this.saveLastPlaylistSnapshot({ meaningful: true });
   }
 
   private recordPersistenceRecoveryMessages(persistence: { drainRecoveryMessages?(): string[] }): void {
@@ -302,6 +323,10 @@ export class AppCoordinator {
         availability: { status: "unknown" },
       })),
     });
+    this.playlists.updateActivePlayback({
+      positionSeconds: snapshot.positionSeconds ?? 0,
+      playbackStatus: snapshot.currentIndex >= 0 ? "resumable" : "stopped",
+    });
     await this.refreshRestoredProviderAvailability();
     const volume = preferredVolume ?? snapshot.volume;
     this.appState.volume = { ...volume };
@@ -317,6 +342,31 @@ export class AppCoordinator {
         restored: true,
       }
       : { status: "idle", currentTrackIdentity: null };
+    this.selectQueueIndex(current ? this.queue.currentIndex : 0);
+    this.syncQueueState();
+  }
+
+  private async applyLastPlaylistSnapshot(
+    snapshot: LastPlaylistSnapshot,
+    preferredVolume?: AppPreferencesRecord["volume"],
+  ): Promise<void> {
+    this.playlists.restore(playlistCollectionFromSnapshot(snapshot));
+    await this.refreshRestoredProviderAvailability();
+    const volume = preferredVolume ?? snapshot.volume;
+    this.appState.volume = { ...volume };
+    if (volume.ready) await this.runPlayerCommand(() => this.player.setVolume(volume.percent));
+    const state = this.playlists.snapshot().playlists.find((playlist) => playlist.id === snapshot.activePlaylistId)!;
+    const current = this.queue.entries[this.queue.currentIndex];
+    this.appState.playback = current && state.playbackStatus === "resumable"
+      ? {
+        status: "paused",
+        positionSeconds: state.positionSeconds,
+        currentTrackIdentity: current.track.identity,
+        restored: true,
+      }
+      : current
+        ? { status: "stopped", positionSeconds: 0, currentTrackIdentity: current.track.identity }
+        : { status: "idle", currentTrackIdentity: null };
     this.selectQueueIndex(current ? this.queue.currentIndex : 0);
     this.syncQueueState();
   }
@@ -649,7 +699,7 @@ export class AppCoordinator {
     this.naturalAdvanceInFlight = true;
     try {
       await this.nextTrack();
-      await this.saveLastQueueSnapshot({ meaningful: true });
+      await this.saveLastPlaylistSnapshot({ meaningful: true });
     } finally {
       this.naturalAdvanceInFlight = false;
     }
@@ -736,15 +786,15 @@ export class AppCoordinator {
     this.appState.lastEvent = `seeked ${seconds}s`;
   }
 
-  private async saveLastQueueSnapshot(options: { meaningful?: boolean } = {}): Promise<void> {
+  private async saveLastPlaylistSnapshot(options: { meaningful?: boolean } = {}): Promise<void> {
     if (this.snapshotSaveBlockedUntilMeaningfulChange && !options.meaningful) return;
     if (options.meaningful) this.snapshotSaveBlockedUntilMeaningfulChange = false;
-    const snapshot = this.currentLastQueueSnapshot();
+    const snapshot = this.currentLastPlaylistSnapshot();
     const write = async () => {
       try {
-        await this.snapshotPersistence.save(snapshot);
+        await this.playlistSnapshotPersistence.save(snapshot);
       } catch (error) {
-        const message = `Could not save Last Queue Snapshot: ${error instanceof Error ? error.message : String(error)}. Will retry on the next state change or quit.`;
+        const message = `Could not save Last Playlist Snapshot: ${error instanceof Error ? error.message : String(error)}. Will retry on the next state change or quit.`;
         this.appState.appErrors.push(message);
         this.appState.lastEvent = message;
         this.notifyStateChanged();
@@ -755,24 +805,31 @@ export class AppCoordinator {
   }
 
   private snapshotFingerprint(): string {
-    return JSON.stringify(this.currentLastQueueSnapshot());
+    return JSON.stringify(this.currentLastPlaylistSnapshot());
   }
 
-  private currentLastQueueSnapshot(): LastQueueSnapshot {
-    return createLastQueueSnapshot(
-      this.queue.snapshot(),
-      this.appState.volume,
-      this.appState.playback.positionSeconds,
-    );
+  private currentLastPlaylistSnapshot(): LastPlaylistSnapshot {
+    const hasCurrent = this.queue.currentIndex >= 0;
+    const position = hasCurrent ? this.appState.playback.positionSeconds ?? 0 : 0;
+    const resumable = hasCurrent
+      && this.appState.playback.status !== "stopped"
+      && this.appState.playback.status !== "idle";
+    this.playlists.updateActivePlayback({
+      positionSeconds: resumable ? position : 0,
+      playbackStatus: resumable ? "resumable" : "stopped",
+    });
+    const collection = this.playlists.snapshot();
+    this.appState.playlists = collection;
+    return createLastPlaylistSnapshot(collection, this.appState.volume);
   }
 
-  private maybeCheckpointLastQueueSnapshot(playback: PlayerPlaybackState): void {
+  private maybeCheckpointLastPlaylistSnapshot(playback: PlayerPlaybackState): void {
     if (this.tornDown || playback.status !== "playing") return;
     if (typeof playback.positionSeconds !== "number" || !Number.isFinite(playback.positionSeconds)) return;
     const now = this.now();
     if (now - this.lastSnapshotCheckpointAt < 30_000) return;
     this.lastSnapshotCheckpointAt = now;
-    void this.saveLastQueueSnapshot({ meaningful: false });
+    void this.saveLastPlaylistSnapshot({ meaningful: false });
   }
 
   private async refreshRestoredProviderAvailability(): Promise<void> {
@@ -1222,6 +1279,7 @@ export class AppCoordinator {
 
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
+    this.appState.playlists = this.playlists.snapshot();
   }
 
   private selectQueueIndex(index: number): void {

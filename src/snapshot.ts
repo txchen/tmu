@@ -1,7 +1,7 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { readFile, readdir, rename } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { YOUTUBE_CACHE_PROVIDER_ID, type LastQueueSnapshot, type LastQueueSnapshotEntry, type QueueState, type SnapshotTrack, type Track, type VolumeState } from "./domain";
-import { JsonRecoveryMessages } from "./json-persistence";
+import { JsonRecoveryMessages, writeJsonAtomically } from "./json-persistence";
 
 export type LastQueueSnapshotPersistence = {
   load(): Promise<LastQueueSnapshot | null>;
@@ -54,15 +54,7 @@ export class FileLastQueueSnapshotPersistence implements LastQueueSnapshotPersis
   }
 
   async save(snapshot: LastQueueSnapshot): Promise<void> {
-    await mkdir(dirname(this.path), { recursive: true });
-    const temporaryPath = join(dirname(this.path), `.${basename(this.path)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    try {
-      await writeFile(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
-      await rename(temporaryPath, this.path);
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined);
-      throw error;
-    }
+    await writeJsonAtomically(this.path, snapshot);
   }
 
   drainRecoveryMessages(): string[] {

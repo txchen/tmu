@@ -15,6 +15,7 @@ import { createDefaultTmuConfig, loadTmuConfig, type TmuConfig, type TmuConfigIn
 import type { DependencyHealthRefresh } from "./coordinator";
 import { FileAppPreferencesPersistence, type AppPreferencesPersistence } from "./preferences";
 import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } from "./snapshot";
+import { FileLastPlaylistSnapshotPersistence, type LastPlaylistSnapshotPersistence } from "./playlist-snapshot";
 import type { Player } from "./domain";
 import type { executeYouTubeDownloadBatch, prepareYouTubeDownloadBatch } from "./youtube-url-download";
 
@@ -25,6 +26,7 @@ export type TmuAppOptions = {
   dependencyHealth?: DependencyHealthState;
   refreshDependencyHealth?: DependencyHealthRefresh;
   snapshotPersistence?: LastQueueSnapshotPersistence;
+  playlistSnapshotPersistence?: LastPlaylistSnapshotPersistence;
   appPreferencesPersistence?: AppPreferencesPersistence;
   player?: Player;
   dependencyRunner?: DependencyCommandRunner;
@@ -56,6 +58,7 @@ export function createTmuApp(options: TmuAppOptions = {}): {
     player: options.player ?? new NoopPlayer(),
     refreshDependencyHealth: options.refreshDependencyHealth,
     snapshotPersistence: options.snapshotPersistence,
+    playlistSnapshotPersistence: options.playlistSnapshotPersistence,
     appPreferencesPersistence: options.appPreferencesPersistence,
     dependencyRunner: options.dependencyRunner,
     prepareDownloadBatch: options.prepareDownloadBatch,
@@ -91,6 +94,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       dependencyHealth,
       player,
       snapshotPersistence: new FileLastQueueSnapshotPersistence(loaded.config.persistence.lastQueueSnapshotPath),
+      playlistSnapshotPersistence: new FileLastPlaylistSnapshotPersistence(loaded.config.persistence.lastPlaylistSnapshotPath),
       appPreferencesPersistence: new FileAppPreferencesPersistence(loaded.config.persistence.appPreferencesPath),
       refreshDependencyHealth: (helper, currentHealth) =>
         checkHelperDependencyHealth(loaded.config, helper, currentHealth, {

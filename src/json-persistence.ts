@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 export class JsonRecoveryMessages {
   private messages: string[] = [];
@@ -46,6 +47,18 @@ export async function loadJsonRecord<T>(options: {
   } catch (error) {
     options.recoveryMessages.push(`Ignored corrupted ${options.label} at ${options.path}: ${errorMessage(error)}`);
     return null;
+  }
+}
+
+export async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const temporaryPath = join(dirname(path), `.${basename(path)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
   }
 }
 

@@ -11,6 +11,8 @@ export * from "./playback-benchmark";
 export * from "./preferences";
 export * from "./providers";
 export * from "./queue";
+export * from "./playlists";
+export * from "./playlist-snapshot";
 export * from "./snapshot";
 export * from "./state";
 export * from "./state-publication";

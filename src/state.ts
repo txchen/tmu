@@ -39,6 +39,10 @@ export function createInitialAppState(
       currentIndex: -1,
       repeatAll: false,
     },
+    playlists: {
+      activePlaylistId: "",
+      playlists: [],
+    },
     playback: {
       status: "idle",
       currentTrackIdentity: null,
