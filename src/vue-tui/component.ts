@@ -553,6 +553,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
       appState.backgroundSounds.snapshot.sounds,
       uiState.background.soundPicker,
       noColor,
+      uiState.terminal.rows,
     ));
   }
 
@@ -752,18 +753,28 @@ function backgroundSoundPickerModal(
   sounds: readonly { id: string; label: string }[],
   picker: NonNullable<UiState["background"]["soundPicker"]>,
   noColor: boolean,
+  terminalRows: number,
 ) {
-  const rows = sounds.slice(picker.scroll, picker.scroll + 10).map((sound, offset) => {
-    const index = picker.scroll + offset;
+  const maximumRows = Math.max(1, terminalRows - 9);
+  const columnCount = Math.max(2, Math.ceil(sounds.length / maximumRows));
+  const rowsPerColumn = Math.ceil(sounds.length / columnCount);
+  const option = (index: number) => {
+    const sound = sounds[index];
+    const width = `${100 / columnCount}%`;
+    if (!sound) return h(Text, { width }, () => "");
     return h(Text, {
+      width,
       inverse: index === picker.selectedIndex,
       color: index === picker.selectedIndex && !noColor ? "cyan" : undefined,
       wrap: "truncate-end",
     }, () => `${index === picker.selectedIndex ? "›" : " "} ${sound.label}`);
-  });
+  };
+  const rows = Array.from({ length: rowsPerColumn }, (_, row) => h(Box, {
+    flexDirection: "row", width: "100%",
+  }, () => Array.from({ length: columnCount }, (_, column) => option(row + column * rowsPerColumn))));
   return h(Box, {
     flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
-    paddingX: 2, width: "60%",
+    paddingX: 2, width: "80%",
   }, () => [
     h(Text, { bold: true }, () => "Choose Background Sound"),
     ...rows,

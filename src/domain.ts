@@ -255,7 +255,7 @@ export type UiState = {
   background: {
     selectedRow: number;
     pendingVolumePercent: number | null;
-    soundPicker: null | { selectedIndex: number; scroll: number };
+    soundPicker: null | { selectedIndex: number };
   };
   terminal: {
     columns: number;

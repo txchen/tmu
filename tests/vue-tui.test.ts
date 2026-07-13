@@ -107,7 +107,7 @@ describe("TMU top-level surface smoke", () => {
     [120, 30],
     [80, 24],
     [60, 20],
-  ])("shows and scrolls the complete Background Sound picker at %sx%s", async (columns, rows) => {
+  ])("shows the complete Background Sound picker without scrolling at %sx%s", async (columns, rows) => {
     const sounds = Array.from({ length: 14 }, (_, index) => ({ id: `sound-${index + 1}`, label: `Sound ${index + 1}` }));
     let snapshot = { enabled: false, sound: sounds[6]!, sounds, volumePercent: 45 };
     const writes: string[] = [];
@@ -129,7 +129,9 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("j");
     await terminal.stdin.write("\r");
     expect(terminal.lastFrame()).toContain("Choose Background Sound");
+    expect(terminal.lastFrame()).toContain("Sound 1");
     expect(terminal.lastFrame()).toContain("Sound 7");
+    expect(terminal.lastFrame()).toContain("Sound 14");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Sound 14");
     expect(terminal.lastFrame()!.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
@@ -137,6 +139,26 @@ describe("TMU top-level surface smoke", () => {
 
     expect(writes).toEqual(["sound-14"]);
     expect(terminal.lastFrame()).toContain("Sound 14 · Enter to choose");
+  });
+
+  test("adapts picker columns to show a larger inventory at the 60x16 minimum", async () => {
+    const sounds = Array.from({ length: 24 }, (_, index) => ({ id: `sound-${index + 1}`, label: `Sound ${index + 1}` }));
+    const snapshot = { enabled: false, sound: sounds[0]!, sounds, volumePercent: 45 };
+    const control = {
+      probe: async () => snapshot, read: async () => snapshot,
+      setEnabled: async () => snapshot, setSound: async () => snapshot, setVolume: async () => snapshot,
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    coordinator.dispatchUi({ type: "switchTab", tab: "background" });
+    await coordinator.enterBackgroundSounds();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 16 });
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\r");
+    const frame = terminal.lastFrame()!;
+    expect(frame).toContain("Sound 1");
+    expect(frame).toContain("Sound 24");
+    expect(frame.split("\n").every((line) => Array.from(line).length <= 60)).toBe(true);
   });
 
   test("controls Background Sound settings with focused keys and authoritative confirmation", async () => {

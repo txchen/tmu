@@ -132,14 +132,12 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "openBackgroundSoundPicker":
       return { ...state, background: { ...state.background, soundPicker: {
         selectedIndex: action.activeIndex,
-        scroll: visibleScroll(0, action.activeIndex),
       } } };
     case "selectBackgroundSound": {
       if (!state.background.soundPicker) return state;
       const selectedIndex = clampIndex(action.index, action.count);
       return { ...state, background: { ...state.background, soundPicker: {
         selectedIndex,
-        scroll: visibleScroll(state.background.soundPicker.scroll, selectedIndex),
       } } };
     }
     case "dismissBackgroundSoundPicker":
