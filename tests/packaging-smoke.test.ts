@@ -122,7 +122,7 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
 
   try {
     await waitFor(() => output.includes("Player") && output.includes("Library") && output.includes("Downloads"));
-    expect(output).toContain("prev · next");
+    expect(stripAnsi(output)).toContain("[ prev ] next");
     output = "";
     terminal.write("]");
     await waitFor(() => output.includes("▸ Library ◂"));
@@ -139,6 +139,10 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
     if (!exited) terminal.kill();
     await withTimeout(exitPromise, 2_000, "Timed out cleaning up packed terminal process");
   }
+}
+
+function stripAnsi(value: string): string {
+  return value.replaceAll(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
