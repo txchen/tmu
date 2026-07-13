@@ -5,6 +5,7 @@ import { createTmuApp } from "../src/app";
 import { AppCoordinator } from "../src/coordinator";
 import type { PlayerPlaybackState, Provider, Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
+import { InMemoryLastPlaylistSnapshotPersistence } from "../src/playlist-snapshot";
 import { MemoryQueue } from "../src/queue";
 import { createInitialAppState, createInitialUiState } from "../src/state";
 import { StatePublicationGate } from "../src/state-publication";
@@ -13,7 +14,117 @@ import type { YouTubeCacheProvider } from "../src/youtube-cache";
 
 afterEach(() => cleanup());
 
+class StopCountingPlayer extends NoopPlayer {
+  stopCount = 0;
+
+  override async stop(): Promise<PlayerPlaybackState> {
+    this.stopCount += 1;
+    return super.stop();
+  }
+}
+
 describe("TMU top-level surface smoke", () => {
+  test("renames the selected Playlist through modal text capture and keeps it selected", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("e");
+    expect(terminal.lastFrame()).toContain("Rename Playlist");
+    await terminal.stdin.write("\x7f\x7f\x7f\x7f\x7f\x7f\x7f");
+    await terminal.stdin.write("p?Focus");
+    await terminal.stdin.write("\r");
+
+    expect(coordinator.appState.playlists.playlists[0]?.name).toBe("p?Focus");
+    expect(coordinator.appState.playback.currentTrackIdentity).toBeNull();
+    expect(coordinator.uiState.playlistManager).toMatchObject({ mode: "browse", selectedIndex: 0 });
+    expect(terminal.lastFrame()).toContain("› * p?Focus · 0");
+  });
+
+  test("keeps invalid Playlist names editable with actionable errors", async () => {
+    const { coordinator } = createTmuApp();
+    await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    const initialPlaylistId = coordinator.appState.playlists.playlists[0]!.id;
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: initialPlaylistId });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("e");
+    await terminal.stdin.write("\x7f\x7f\x7f\x7f\x7f\x7f\x7f");
+    await terminal.stdin.write("   ");
+    await terminal.stdin.write("\r");
+    expect(coordinator.uiState.playlistManager).toMatchObject({ mode: "rename", error: "Playlist name cannot be empty" });
+    expect(terminal.lastFrame()).toContain("Error: Playlist name cannot be empty");
+
+    await terminal.stdin.write("\x7f\x7f\x7f");
+    await terminal.stdin.write("sTuDy");
+    await terminal.stdin.write("\r");
+    expect(coordinator.uiState.playlistManager?.error).toContain("already in use");
+    await terminal.stdin.write("\x7f\x7f\x7f\x7f\x7f");
+    await terminal.stdin.write("界界界界界界界界界界界界界界界界界");
+    await terminal.stdin.write("\r");
+    expect(coordinator.uiState.playlistManager?.error).toContain("at most 16");
+    await terminal.stdin.write("\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f\x7f");
+    await terminal.stdin.write("界界界界界界界界界界界界界界界界");
+    await terminal.stdin.write("\r");
+    expect(coordinator.appState.playlists.playlists[0]?.name).toBe("界界界界界界界界界界界界界界界界");
+    expect(coordinator.uiState.playlistManager?.mode).toBe("browse");
+  });
+
+  test("reorders Playlists at boundaries, restores order, and reopens on the Active Playlist", async () => {
+    const persistence = new InMemoryLastPlaylistSnapshotPersistence();
+    const player = new StopCountingPlayer();
+    const first = createTmuApp({ playlistSnapshotPersistence: persistence, player });
+    await first.coordinator.start();
+    await first.coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    await first.coordinator.dispatch({ type: "createPlaylist", name: "Road" });
+    const activeId = first.coordinator.appState.playlists.activePlaylistId;
+    const stopCountBeforeReorder = player.stopCount;
+    const terminal = await render(createTmuRoot({ coordinator: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("K");
+    await terminal.stdin.write("K");
+    await terminal.stdin.write("K");
+    expect(first.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Road", "Default", "Study"]);
+    expect(first.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0 });
+    await terminal.stdin.write("J");
+    await terminal.stdin.write("J");
+    await terminal.stdin.write("J");
+    expect(first.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study", "Road"]);
+    expect(first.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 2 });
+    expect(first.coordinator.appState.playlists.activePlaylistId).toBe(activeId);
+    expect(player.stopCount).toBe(stopCountBeforeReorder);
+    await terminal.stdin.write("\x1b");
+
+    const restored = createTmuApp({ playlistSnapshotPersistence: persistence });
+    await restored.coordinator.start();
+    expect(restored.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study", "Road"]);
+    const restoredTerminal = await render(createTmuRoot({ coordinator: restored.coordinator, noColor: true }), { columns: 80, rows: 24 });
+    await restoredTerminal.stdin.write("P");
+    expect(restored.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 2 });
+    expect(restoredTerminal.lastFrame()).toContain("› * Road · 0");
+  });
+
+  test("reopening Playlist Manager discards prior selection and scroll to reveal the Active Playlist", async () => {
+    const { coordinator } = createTmuApp();
+    for (let index = 1; index <= 11; index += 1) {
+      await coordinator.dispatch({ type: "createPlaylist", name: `List ${index}` });
+    }
+    const initialPlaylistId = coordinator.appState.playlists.playlists[0]!.id;
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: initialPlaylistId });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("G");
+    expect(coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 11, scroll: 2 });
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("P");
+
+    expect(coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0, scroll: 0 });
+    expect(terminal.lastFrame()).toContain("› * Default · 0");
+  });
+
   test("opens Playlist Manager globally, captures create input, and shows the Active Playlist on every tab", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });

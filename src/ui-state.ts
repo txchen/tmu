@@ -41,6 +41,7 @@ export type UiStateAction =
   | { type: "openPlaylistManager"; activeIndex: number }
   | { type: "selectPlaylist"; index: number; count: number }
   | { type: "beginCreatePlaylist" }
+  | { type: "beginRenamePlaylist"; name: string }
   | { type: "editPlaylistName"; value: string; cursor: number }
   | { type: "setPlaylistNameError"; error: string | null }
   | { type: "cancelPlaylistEdit" }
@@ -206,6 +207,13 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
     case "beginCreatePlaylist":
       return state.playlistManager
         ? { ...state, playlistManager: { ...state.playlistManager, mode: "create", value: "", cursor: 0, error: null } }
+        : state;
+    case "beginRenamePlaylist":
+      return state.playlistManager
+        ? { ...state, playlistManager: {
+          ...state.playlistManager, mode: "rename", value: action.name,
+          cursor: action.name.length, error: null,
+        } }
         : state;
     case "editPlaylistName":
       return state.playlistManager

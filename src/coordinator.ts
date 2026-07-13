@@ -206,6 +206,16 @@ export class AppCoordinator {
         case "createPlaylist":
           await this.createPlaylist(intent.name);
           return;
+        case "renamePlaylist":
+          this.playlists.rename(intent.playlistId, intent.name);
+          this.appState.lastEvent = `renamed Playlist to ${intent.name.trim()}`;
+          this.syncQueueState();
+          return;
+        case "movePlaylist":
+          this.playlists.move(intent.playlistId, intent.delta);
+          this.appState.lastEvent = "reordered Playlists";
+          this.syncQueueState();
+          return;
         case "switchPlaylist":
           await this.switchPlaylist(intent.playlistId);
           return;

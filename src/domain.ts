@@ -289,7 +289,7 @@ export type UiState = {
   playlistManager: null | {
     selectedIndex: number;
     scroll: number;
-    mode: "browse" | "create";
+    mode: "browse" | "create" | "rename";
     value: string;
     cursor: number;
     error: string | null;
@@ -306,6 +306,8 @@ export type AppIntent =
   | { type: "renameTrack"; identity: TrackIdentity; title: string }
   | { type: "clearQueue" }
   | { type: "createPlaylist"; name: string }
+  | { type: "renamePlaylist"; playlistId: string; name: string }
+  | { type: "movePlaylist"; playlistId: string; delta: -1 | 1 }
   | { type: "switchPlaylist"; playlistId: string }
   | { type: "cacheOperation"; operation: "request-delete"; identity: TrackIdentity }
   | { type: "cacheOperation"; operation: "request-cleanup"; stem: string }

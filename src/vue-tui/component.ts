@@ -255,12 +255,18 @@ export function createTmuRoot(options: TmuRootOptions) {
 async function routePlaylistManager(input: string, key: InputKey, coordinator: AppCoordinator): Promise<void> {
   const manager = coordinator.uiState.playlistManager;
   if (!manager) return;
-  if (manager.mode === "create") {
+  if (manager.mode !== "browse") {
     if (key.escape) coordinator.dispatchUi({ type: "cancelPlaylistEdit" });
     else if (key.return) {
       try {
-        await coordinator.dispatch({ type: "createPlaylist", name: manager.value });
-        coordinator.dispatchUi({ type: "dismissPlaylistManager" });
+        if (manager.mode === "create") {
+          await coordinator.dispatch({ type: "createPlaylist", name: manager.value });
+          coordinator.dispatchUi({ type: "dismissPlaylistManager" });
+        } else {
+          const selected = coordinator.appState.playlists.playlists[manager.selectedIndex];
+          if (selected) await coordinator.dispatch({ type: "renamePlaylist", playlistId: selected.id, name: manager.value });
+          coordinator.dispatchUi({ type: "cancelPlaylistEdit" });
+        }
       } catch (error) {
         coordinator.dispatchUi({ type: "setPlaylistNameError", error: error instanceof Error ? error.message : String(error) });
       }
@@ -271,10 +277,20 @@ async function routePlaylistManager(input: string, key: InputKey, coordinator: A
     return;
   }
   const playlists = coordinator.appState.playlists.playlists;
+  const selected = playlists[manager.selectedIndex];
   if (key.escape) coordinator.dispatchUi({ type: "dismissPlaylistManager" });
   else if (input === "c") coordinator.dispatchUi({ type: "beginCreatePlaylist" });
+  else if (input === "e") {
+    if (selected) coordinator.dispatchUi({ type: "beginRenamePlaylist", name: selected.name });
+  } else if (input === "J" || input === "K") {
+    if (selected) {
+      const delta = input === "J" ? 1 : -1;
+      await coordinator.dispatch({ type: "movePlaylist", playlistId: selected.id, delta });
+      const nextIndex = coordinator.appState.playlists.playlists.findIndex((playlist) => playlist.id === selected.id);
+      coordinator.dispatchUi({ type: "selectPlaylist", index: nextIndex, count: playlists.length });
+    }
+  }
   else if (key.return) {
-    const selected = playlists[manager.selectedIndex];
     if (selected) await coordinator.dispatch({ type: "switchPlaylist", playlistId: selected.id });
     coordinator.dispatchUi({ type: "dismissPlaylistManager" });
   } else {
@@ -617,11 +633,11 @@ function playlistManagerModal(
       `${index === manager.selectedIndex ? "›" : " "} ${playlist.id === collection.activePlaylistId ? "*" : " "} ${playlist.name} · ${playlist.entries.length}`);
   });
   return h(Box, { flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 2, width: "70%" }, () => [
-    h(Text, { bold: true }, () => manager.mode === "create" ? "Create Playlist" : "Playlist Manager"),
-    ...(manager.mode === "create"
+    h(Text, { bold: true }, () => manager.mode === "create" ? "Create Playlist" : manager.mode === "rename" ? "Rename Playlist" : "Playlist Manager"),
+    ...(manager.mode !== "browse"
       ? [h(Text, () => `Name: ${manager.value}│`), manager.error ? h(Text, { color: noColor ? undefined : "red" }, () => `Error: ${manager.error}`) : null]
       : rows),
-    h(Text, { dimColor: true }, () => manager.mode === "create" ? "Enter Create · Esc Cancel" : "j/k or ↑/↓ Move · Enter Switch · c Create · Esc Close"),
+    h(Text, { dimColor: true }, () => manager.mode === "create" ? "Enter Create · Esc Cancel" : manager.mode === "rename" ? "Enter Save · Esc Cancel" : "j/k Move · Enter Switch · c Create · e Rename · J/K Reorder · Esc Close"),
   ]);
 }
 

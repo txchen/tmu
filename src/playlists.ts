@@ -43,6 +43,22 @@ export class MemoryPlaylistCollection {
     return record;
   }
 
+  rename(id: string, name: string): void {
+    const record = this.records.find((playlist) => playlist.id === id);
+    if (!record) throw new Error(`Playlist is missing: ${id}`);
+    record.name = validatePlaylistName(name, this.records.filter((playlist) => playlist.id !== id).map((playlist) => playlist.name));
+  }
+
+  move(id: string, delta: -1 | 1): number {
+    const from = this.records.findIndex((playlist) => playlist.id === id);
+    if (from < 0) throw new Error(`Playlist is missing: ${id}`);
+    const to = Math.max(0, Math.min(this.records.length - 1, from + delta));
+    if (to === from) return from;
+    const [record] = this.records.splice(from, 1);
+    this.records.splice(to, 0, record!);
+    return to;
+  }
+
   removeInactive(id: string): void {
     if (id === this.activeId) throw new Error("Cannot remove the Active Playlist");
     this.records = this.records.filter((playlist) => playlist.id !== id);
