@@ -15,6 +15,14 @@ TMU supports multiple persistent, user-named Playlists. Press uppercase `P` outs
 
 YouTube Cache is the only current Provider. TMU keeps a narrow internal Provider boundary for listing/searching Tracks and resolving local playback, as documented in [`docs/adr/0001-keep-narrow-provider-abstraction.md`](docs/adr/0001-keep-narrow-provider-abstraction.md).
 
+## macOS Background Sounds
+
+On macOS 26.5 and newer, TMU can control Apple's Background Sounds from the optional `Background` tab. The tab can enable or disable Background Sounds, select an immediately usable sound, and adjust its independent volume without affecting TMU playback.
+
+TMU does not download Apple's Background Sound assets. Before selecting a sound in TMU, open macOS **System Settings → Accessibility → Audio → Background Sounds** and download it using Apple's native interface. Return to TMU and press `u` in the `Background` tab to refresh the available sounds. Sounds that have not been downloaded do not appear in TMU's picker.
+
+Background Sounds remain owned by macOS rather than TMU: their enabled state, selected sound, and volume are shared with System Settings and are not saved in TMU's configuration.
+
 ## YouTube URL Download
 
 YouTube URL Download stores downloaded audio in the YouTube Cache without adding it to any TMU Playlist. Users are responsible for downloading and keeping only content they have the right to download and keep.
