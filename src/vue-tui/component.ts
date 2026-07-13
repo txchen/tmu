@@ -613,15 +613,21 @@ function progressBar(positionSeconds: number, durationSeconds: number): string {
 }
 
 function tabHeader(active: UiState["activeTab"], noColor: boolean, playlistName = "Default", columns = 100) {
-  const tab = (id: UiState["activeTab"], label: string) => h(Text, {
+  const tab = (id: UiState["activeTab"], label: string, width?: number) => h(Text, {
     bold: active === id, inverse: active === id, dimColor: active !== id,
     color: active === id && !noColor ? "cyan" : undefined,
+    ...(width === undefined ? {} : { width, wrap: "truncate-end" }),
   }, () => active === id ? `▸ ${label} ◂` : label);
+  const playerLabel = `Player (${playlistName})`;
+  const availablePlayerWidth = columns - 40;
+  const playerWidth = Math.max(12, Math.min(playerLabel.length + (active === "playback" ? 4 : 0), 30, availablePlayerWidth));
   return h(Box, { borderStyle: "round", width: "100%", paddingX: 1 }, () => [
-    tab("playback", "Player"), h(Text, () => "  "), tab("library", "Library"), h(Text, () => "  "),
+    tab("playback", playerLabel, playerWidth), h(Text, () => "  "), tab("library", "Library"), h(Text, () => "  "),
     tab("downloader", "Downloads"), h(Spacer),
-    h(Text, { bold: true, wrap: "truncate-end", width: Math.max(8, Math.min(28, columns - 55)) }, () => `Playlist: ${playlistName}`),
-    h(Text, { dimColor: true }, () => "  [ prev · next ]"),
+    h(Text, { color: noColor ? undefined : "cyan", bold: true }, () => "["),
+    h(Text, { dimColor: true }, () => " prev "),
+    h(Text, { color: noColor ? undefined : "cyan", bold: true }, () => "]"),
+    h(Text, { dimColor: true }, () => " next"),
   ]);
 }
 
@@ -672,7 +678,7 @@ function playbackView(
     flexDirection: "column", flexGrow: 2, width: uiState.terminal.tier === "narrow" ? "100%" : "66%",
     borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 1,
   }, () => [
-    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `Playlist · ${entries.length} Track${entries.length === 1 ? "" : "s"} · ${position}/${entries.length}`),
+    h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => `${activePlaylistName(snapshot.appState)} · ${entries.length} Track${entries.length === 1 ? "" : "s"} · ${position}/${entries.length}`),
     ...lines.slice(uiState.playlistScroll, uiState.playlistScroll + 10).map((line, index) => h(Text, { wrap: "truncate-end", inverse: entries.length > 0 && index + uiState.playlistScroll === uiState.selectedPlaylistIndex }, () => line)),
   ]);
   const selected = entries[uiState.selectedPlaylistIndex];
@@ -1111,7 +1117,9 @@ function selectedLibraryEntryIsIncomplete(coordinator: AppCoordinator): boolean 
 
 function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const shortcuts: Array<[key: string, action: string]> = ui.activeTab === "playback"
-    ? [["j/k", "Move"], ["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["?", "Help"]]
+    ? ui.terminal.columns < 90
+      ? [["j/k", "Move"], ["Space", "Play"], ["Enter", "Select"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
+      : [["j/k", "Move"], ["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
     : ui.activeTab === "library" && ui.library.inputFocused
       ? [["Type", "Search"], ["Enter", "Results"], ["Esc/Tab → ?", "Help"]]
       : ui.activeTab === "library" && incompleteSelected

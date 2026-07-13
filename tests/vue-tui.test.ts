@@ -294,7 +294,7 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "p?Study"]);
     expect(coordinator.appState.playlists.activePlaylistId).toBe(coordinator.appState.playlists.playlists[1]!.id);
     expect(coordinator.uiState.playlistManager).toBeNull();
-    expect(terminal.lastFrame()).toContain("Playlist: p?Study");
+    expect(terminal.lastFrame()).toContain("Player (p?Study)");
   });
 
   test("Library actions target only the Active Playlist and the narrow top bar stays bounded", async () => {
@@ -336,8 +336,9 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Player");
     expect(terminal.lastFrame()).toContain("Library");
     expect(terminal.lastFrame()).toContain("Downloads");
+    expect(terminal.lastFrame()).toContain("[ prev ] next");
     expect(terminal.lastFrame()).toContain("Playlist is empty — open Library to add Tracks.");
-    expect(terminal.lastFrame()).toContain("──  j/k Move · Space Play/Pause · Enter Play Selected · n/p Next/Prev · ? Help");
+    expect(terminal.lastFrame()).toContain("──  j/k Move · Space Play/Pause · Enter Play Selected · n/p Next/Prev · P Playlists · ? Help");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("library");
@@ -714,7 +715,7 @@ describe("TMU top-level surface smoke", () => {
     };
 
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("j/k Move · Space Play/Pause · Enter Play Selected");
+    expect(terminal.lastFrame()).toContain("j/k Move · Space Play · Enter Select · n/p Next/Prev · P Playlists · ? Help");
     expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
     expect(terminal.lastFrame()).toContain("Randomize entire Playlist");
     await terminal.stdin.write("\x1b[6~");
@@ -815,7 +816,7 @@ describe("TMU top-level surface smoke", () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
 
-    expect(terminal.lastFrame()).toContain("▸ Player ◂");
+    expect(terminal.lastFrame()).toContain("▸ Player (Default) ◂");
     expect(terminal.lastFrame()).toContain("Library");
     expect(terminal.lastFrame()).toContain("Downloads");
 
@@ -938,6 +939,7 @@ describe("TMU top-level surface smoke", () => {
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
       initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
+    await coordinator.dispatch({ type: "createPlaylist", name: "Road" });
     await coordinator.dispatch({ type: "addToPlaylist", target: first });
     await coordinator.dispatch({ type: "addToPlaylist", target: second });
     coordinator.dispatchUi({ type: "selectPlaylistTrack", index: 1, identities: coordinator.playlistTrackIdentities() });
@@ -945,7 +947,7 @@ describe("TMU top-level surface smoke", () => {
 
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 28 });
     let frame = terminal.lastFrame()!;
-    expect(frame).toContain("Playlist · 2 Tracks · 2/2");
+    expect(frame).toContain("Road · 2 Tracks · 2/2");
     expect(frame).toContain("▶ First · 1:05");
     expect(frame).not.toContain("CURRENT");
     expect(frame).toContain("Selected Song · 4:05");
@@ -955,13 +957,13 @@ describe("TMU top-level surface smoke", () => {
     expect(frame).toContain("Format: opus");
     expect(frame).toContain("Size: 1.5 MiB");
     expect(frame).toContain("Video ID: second");
-    const widePlaylistLine = frame.split("\n").findIndex((line) => line.includes("Playlist ·"));
+    const widePlaylistLine = frame.split("\n").findIndex((line) => line.includes("Road ·"));
     const widePreviewLine = frame.split("\n").findIndex((line) => line.includes("Selected Track"));
     expect(widePreviewLine).toBe(widePlaylistLine);
 
     await terminal.terminal.resize(100, 28);
     frame = terminal.lastFrame()!;
-    const mediumTitleLine = frame.split("\n").find((line) => line.includes("Playlist ·") && line.includes("Selected Track"))!;
+    const mediumTitleLine = frame.split("\n").find((line) => line.includes("Road ·") && line.includes("Selected Track"))!;
     const borders = [...mediumTitleLine].flatMap((character, index) => character === "│" ? [index] : []);
     expect(borders).toHaveLength(4);
     expect((borders[1]! - borders[0]!) / (borders[3]! - borders[2]!)).toBeGreaterThan(1.6);
