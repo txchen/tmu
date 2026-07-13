@@ -43,6 +43,7 @@ function discoverSounds(settings, bundle) {
   }
   const seen = {};
   const sounds = [];
+  const objects = {};
   for (const sound of values) {
     const path = stringValue(sound.path);
     const usable = Boolean(path) && Boolean(fileManager.fileExistsAtPath(path));
@@ -51,14 +52,16 @@ function discoverSounds(settings, bundle) {
     if (!seen[option.id]) {
       seen[option.id] = true;
       sounds.push(option);
+      objects[option.id] = sound;
     }
   }
-  return sounds;
+  return { sounds: sounds, objects: objects };
 }
 
 function readSnapshot(settings, bundle) {
   const selected = soundOption(settings.selectedComfortSound);
-  const sounds = discoverSounds(settings, bundle);
+  const discovered = discoverSounds(settings, bundle);
+  const sounds = discovered.sounds;
   if (!sounds.some(function (sound) { return sound.id === selected.id; })) {
     throw new Error("The selected sound is not immediately usable");
   }
@@ -74,7 +77,7 @@ function readSnapshot(settings, bundle) {
 
 function run(argv) {
   const command = argv[0];
-  if (command !== "probe" && command !== "read") return failure("contract-mismatch", "Unsupported fixed command");
+  if (["probe", "read", "set-enabled", "set-sound", "set-volume"].indexOf(command) < 0) return failure("contract-mismatch", "Unsupported fixed command");
   try {
     const bundle = $.NSBundle.bundleWithPath(FRAMEWORK);
     if (!bundle || !bundle.load) return failure("framework-load", "HearingUtilities.framework could not be loaded");
@@ -89,6 +92,21 @@ function run(argv) {
       if (!responds(settings, selector)) return failure("contract-mismatch", "Required Background Sounds contract is unavailable");
     }
     if (!Boolean(settings.comfortSoundsAvailable)) return failure("unavailable", "Enable Background Sounds availability in macOS System Settings");
+    if (command === "set-enabled") {
+      if (argv[1] !== "true" && argv[1] !== "false") return failure("contract-mismatch", "Invalid enabled value");
+      settings.setComfortSoundsEnabled(argv[1] === "true");
+    } else if (command === "set-volume") {
+      const percent = Number(argv[1]);
+      if (!Number.isInteger(percent) || percent < 0 || percent > 100) return failure("contract-mismatch", "Invalid volume value");
+      settings.setRelativeVolume(percent / 100);
+    } else if (command === "set-sound") {
+      let id;
+      try { id = JSON.parse(argv[1]); } catch (_) { return failure("contract-mismatch", "Invalid sound id"); }
+      if (typeof id !== "string" || !id) return failure("contract-mismatch", "Invalid sound id");
+      const discovered = discoverSounds(settings, bundle);
+      if (!discovered.objects[id]) return failure("unavailable", "Open System Settings to download this Background Sound, then refresh.");
+      settings.setSelectedComfortSound(discovered.objects[id]);
+    }
     return envelope(true, { snapshot: readSnapshot(settings, bundle) });
   } catch (error) {
     return failure("contract-mismatch", error && error.message ? error.message : error);

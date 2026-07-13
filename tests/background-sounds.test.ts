@@ -6,6 +6,7 @@ import {
   BackgroundSoundsError,
   JxaBackgroundSoundsControl,
   isBackgroundSoundsCandidate,
+  type BackgroundSoundsSnapshot,
 } from "../src/background-sounds";
 
 describe("Background Sounds runtime boundary", () => {
@@ -52,6 +53,34 @@ describe("Background Sounds runtime boundary", () => {
       ["-l", "JavaScript", "/package/dist/background-sounds.jxa", "probe"],
       expect.objectContaining({ timeout: expect.any(Number), maxBuffer: expect.any(Number), shell: false }),
     );
+  });
+
+  test("setters pass validated fixed arguments and return the authoritative confirmed snapshot", async () => {
+    const confirmed = {
+      enabled: false,
+      sound: { id: "Ocean", label: "Ocean" },
+      sounds: [{ id: "Rain", label: "Rain" }, { id: "Ocean", label: "Ocean" }],
+      volumePercent: 55,
+    };
+    const run = vi.fn(async () => ({ stdout: JSON.stringify({ protocolVersion: 1, ok: true, snapshot: confirmed }), stderr: "" }));
+    const control = new JxaBackgroundSoundsControl({ run, helperPath: "/helper" });
+
+    await expect(control.setSound("Ocean")).resolves.toEqual(confirmed);
+    expect(run).toHaveBeenLastCalledWith("/usr/bin/osascript",
+      ["-l", "JavaScript", "/helper", "set-sound", JSON.stringify("Ocean")], expect.any(Object));
+    await expect(control.setVolume(55)).resolves.toEqual(confirmed);
+    await expect(control.setEnabled(false)).resolves.toEqual(confirmed);
+  });
+
+  test("rejects an authoritative apply mismatch", async () => {
+    const snapshot = { enabled: false, sound: { id: "Rain", label: "Rain" }, sounds: [{ id: "Rain", label: "Rain" }], volumePercent: 45 };
+    const control = new JxaBackgroundSoundsControl({
+      run: async () => ({ stdout: JSON.stringify({ protocolVersion: 1, ok: true, snapshot }), stderr: "" }),
+      helperPath: "/helper",
+    });
+    await expect(control.setEnabled(true)).rejects.toMatchObject({ code: "apply-mismatch" });
+    await expect(control.setSound("Ocean")).rejects.toMatchObject({ code: "apply-mismatch" });
+    await expect(control.setVolume(50)).rejects.toMatchObject({ code: "apply-mismatch" });
   });
 
   test.each([
@@ -147,15 +176,15 @@ async function runBundledHelper(options: { missingSelector?: string; available?:
 }
 
 describe("Background Sounds session lifecycle", () => {
-  const snapshot = {
+  const snapshot: BackgroundSoundsSnapshot = {
     enabled: false,
     sound: { id: "Rain", label: "Rain" },
     sounds: [{ id: "Rain", label: "Rain" }],
     volumePercent: 45,
-  } as const;
+  };
 
   test("does no work at startup, probes on first entry, and reads on refresh and re-entry", async () => {
-    const control = { probe: vi.fn(async () => snapshot), read: vi.fn(async () => snapshot) };
+    const control = mutableControl(snapshot);
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
 
     await coordinator.start();
@@ -175,6 +204,7 @@ describe("Background Sounds session lifecycle", () => {
         .mockRejectedValueOnce(new BackgroundSoundsError("contract-mismatch", "macOS contract changed"))
         .mockResolvedValueOnce(snapshot),
       read: vi.fn(async () => snapshot),
+      setEnabled: vi.fn(async () => snapshot), setSound: vi.fn(async () => snapshot), setVolume: vi.fn(async () => snapshot),
     };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
 
@@ -203,6 +233,7 @@ describe("Background Sounds session lifecycle", () => {
           activeReads -= 1;
         }
       }),
+      setEnabled: vi.fn(async () => snapshot), setSound: vi.fn(async () => snapshot), setVolume: vi.fn(async () => snapshot),
     };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     await coordinator.enterBackgroundSounds();
@@ -232,6 +263,7 @@ describe("Background Sounds session lifecycle", () => {
           reject(new BackgroundSoundsError("cancelled", "cancelled"));
         }, { once: true });
       })),
+      setEnabled: vi.fn(async () => snapshot), setSound: vi.fn(async () => snapshot), setVolume: vi.fn(async () => snapshot),
     };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     await coordinator.enterBackgroundSounds();
@@ -244,4 +276,96 @@ describe("Background Sounds session lifecycle", () => {
     expect(aborted).toBe(true);
     expect(coordinator.appState.appErrors).toEqual([]);
   });
+
+  test("serializes authoritative enabled and sound mutations without changing unrelated values", async () => {
+    const ocean = { ...snapshot, sound: { id: "Ocean", label: "Ocean" }, sounds: [...snapshot.sounds, { id: "Ocean", label: "Ocean" }] };
+    const enabled = { ...ocean, enabled: true };
+    const calls: string[] = [];
+    const control = {
+      ...mutableControl(ocean),
+      setEnabled: vi.fn(async (value: boolean) => { calls.push(`enabled:${value}`); return enabled; }),
+      setSound: vi.fn(async (id: string) => { calls.push(`sound:${id}`); return { ...enabled, sound: ocean.sounds[0]! }; }),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    const playerAndPersistenceState = JSON.stringify({ playback: coordinator.appState.playback, volume: coordinator.appState.volume, playlists: coordinator.appState.playlists });
+    await coordinator.enterBackgroundSounds();
+    await coordinator.setBackgroundSoundsEnabled(true);
+    await coordinator.cycleBackgroundSound(1);
+
+    expect(calls).toEqual(["enabled:true", "sound:Rain"]);
+    expect(coordinator.appState.backgroundSounds).toMatchObject({ status: "ready", snapshot: { enabled: true, volumePercent: 45 } });
+    expect(JSON.stringify({ playback: coordinator.appState.playback, volume: coordinator.appState.volume, playlists: coordinator.appState.playlists })).toBe(playerAndPersistenceState);
+  });
+
+  test("orders a refresh after a mutation and recovers from a failed write with the last confirmed snapshot", async () => {
+    let releaseMutation!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseMutation = resolve; });
+    const calls: string[] = [];
+    const control = {
+      ...mutableControl(snapshot),
+      setEnabled: vi.fn(async () => { calls.push("set:start"); await blocked; calls.push("set:end"); throw new BackgroundSoundsError("helper-exit", "write failed"); }),
+      read: vi.fn(async () => { calls.push("read"); return snapshot; }),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    await coordinator.enterBackgroundSounds();
+
+    const mutation = coordinator.setBackgroundSoundsEnabled(true);
+    const refresh = coordinator.refreshBackgroundSounds();
+    await vi.waitFor(() => expect(calls).toEqual(["set:start"]));
+    releaseMutation();
+    await Promise.all([mutation, refresh]);
+
+    expect(calls).toEqual(["set:start", "set:end", "read"]);
+    expect(coordinator.appState.backgroundSounds).toEqual({ status: "ready", snapshot });
+  });
+
+  test("failed volume write discards its pending draft and leaves confirmed state stale until retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const control = mutableControl(snapshot);
+      control.setVolume.mockRejectedValue(new BackgroundSoundsError("helper-exit", "volume write failed"));
+      const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+      await coordinator.enterBackgroundSounds();
+      coordinator.adjustBackgroundSoundsVolume(1);
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expect(coordinator.uiState.background.pendingVolumePercent).toBeNull());
+      expect(coordinator.appState.backgroundSounds).toEqual({ status: "degraded", snapshot, error: "volume write failed" });
+      await coordinator.retryBackgroundSounds();
+      expect(coordinator.appState.backgroundSounds).toEqual({ status: "ready", snapshot });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("coalesces rapid five-point volume changes into one final authoritative write", async () => {
+    vi.useFakeTimers();
+    try {
+      const control = mutableControl(snapshot);
+      control.setVolume.mockImplementation(async (percent) => ({ ...snapshot, volumePercent: percent }));
+      const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+      await coordinator.enterBackgroundSounds();
+
+      coordinator.adjustBackgroundSoundsVolume(1);
+      coordinator.adjustBackgroundSoundsVolume(1);
+      coordinator.adjustBackgroundSoundsVolume(-1);
+      expect(coordinator.uiState.background.pendingVolumePercent).toBe(50);
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expect(control.setVolume).toHaveBeenCalledOnce());
+
+      expect(control.setVolume).toHaveBeenCalledWith(50, expect.any(AbortSignal));
+      expect(coordinator.appState.backgroundSounds).toMatchObject({ status: "ready", snapshot: { volumePercent: 50 } });
+      expect(coordinator.uiState.background.pendingVolumePercent).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function mutableControl(value: BackgroundSoundsSnapshot) {
+    return {
+      probe: vi.fn(async () => value), read: vi.fn(async () => value),
+      setEnabled: vi.fn(async (_enabled: boolean) => value),
+      setSound: vi.fn(async (_id: string) => value),
+      setVolume: vi.fn(async (_percent: number) => value),
+    };
+  }
 });

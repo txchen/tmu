@@ -19,6 +19,9 @@ export type BackgroundSoundsFailureCode = typeof backgroundSoundsFailureCodes[nu
 export interface BackgroundSoundsControl {
   probe(signal?: AbortSignal): Promise<BackgroundSoundsSnapshot>;
   read(signal?: AbortSignal): Promise<BackgroundSoundsSnapshot>;
+  setEnabled(value: boolean, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot>;
+  setSound(id: string, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot>;
+  setVolume(percent: number, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot>;
 }
 
 export class BackgroundSoundsError extends Error {
@@ -66,15 +69,36 @@ export class JxaBackgroundSoundsControl implements BackgroundSoundsControl {
 
   probe(signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> { return this.invoke("probe", signal); }
   read(signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> { return this.invoke("read", signal); }
+  async setEnabled(value: boolean, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> {
+    const snapshot = await this.invoke("set-enabled", signal, value ? "true" : "false");
+    return this.confirm(snapshot.enabled === value, snapshot);
+  }
+  async setSound(id: string, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> {
+    if (!id || id.length > 200) throw new BackgroundSoundsError("invalid-snapshot", "The selected Background Sound is invalid.");
+    const snapshot = await this.invoke("set-sound", signal, JSON.stringify(id));
+    return this.confirm(snapshot.sound.id === id, snapshot);
+  }
+  async setVolume(percent: number, signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> {
+    if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+      throw new BackgroundSoundsError("invalid-snapshot", "Background Sound volume must be an integer from 0 to 100.");
+    }
+    const snapshot = await this.invoke("set-volume", signal, String(percent));
+    return this.confirm(snapshot.volumePercent === percent, snapshot);
+  }
 
-  private async invoke(command: "probe" | "read", signal?: AbortSignal): Promise<BackgroundSoundsSnapshot> {
+  private confirm(matches: boolean, snapshot: BackgroundSoundsSnapshot): BackgroundSoundsSnapshot {
+    if (!matches) throw new BackgroundSoundsError("apply-mismatch", "macOS did not confirm the requested Background Sounds change.");
+    return snapshot;
+  }
+
+  private async invoke(command: "probe" | "read" | "set-enabled" | "set-sound" | "set-volume", signal?: AbortSignal, value?: string): Promise<BackgroundSoundsSnapshot> {
     if (!existsSync(this.helperPath) && this.run === nodeExecFile) {
       throw new BackgroundSoundsError("helper-missing", "The bundled Background Sounds helper is missing. Reinstall TMU and retry.");
     }
     try {
       const result = await this.run(
         "/usr/bin/osascript",
-        ["-l", "JavaScript", this.helperPath, command],
+        ["-l", "JavaScript", this.helperPath, command, ...(value === undefined ? [] : [value])],
         { timeout: this.timeoutMs, maxBuffer: this.maxBufferBytes, shell: false, ...(signal ? { signal } : {}) },
       );
       return parseEnvelope(result.stdout);
@@ -137,4 +161,7 @@ export class UnavailableBackgroundSoundsControl implements BackgroundSoundsContr
   private fail(): never { throw new BackgroundSoundsError("unsupported-platform", "Background Sounds requires macOS 26.5 or newer."); }
   async probe(): Promise<BackgroundSoundsSnapshot> { return this.fail(); }
   async read(): Promise<BackgroundSoundsSnapshot> { return this.fail(); }
+  async setEnabled(): Promise<BackgroundSoundsSnapshot> { return this.fail(); }
+  async setSound(): Promise<BackgroundSoundsSnapshot> { return this.fail(); }
+  async setVolume(): Promise<BackgroundSoundsSnapshot> { return this.fail(); }
 }

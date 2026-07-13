@@ -54,6 +54,13 @@ import {
 import { UiStateStore, type UiStateAction } from "./ui-state";
 import { BackgroundSoundsError, type BackgroundSoundsControl } from "./background-sounds";
 
+type BackgroundSoundsOperation =
+  | { type: "probe" }
+  | { type: "read" }
+  | { type: "setEnabled"; value: boolean }
+  | { type: "setSound"; value: string }
+  | { type: "setVolume"; value: number };
+
 export type DependencyHealthRefresh = (
   helper: HelperName,
   currentHealth: DependencyHealthState,
@@ -113,6 +120,7 @@ export class AppCoordinator {
   private readonly backgroundSoundsControl?: BackgroundSoundsControl;
   private backgroundSoundsTail: Promise<void> = Promise.resolve();
   private backgroundSoundsAbort: AbortController | null = null;
+  private backgroundVolumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
@@ -165,18 +173,47 @@ export class AppCoordinator {
   async enterBackgroundSounds(): Promise<void> {
     const shouldProbe = this.appState.backgroundSounds.status === "candidate"
       || this.appState.backgroundSounds.status === "unavailable";
-    await this.runBackgroundSounds(shouldProbe ? "probe" : "read");
+    await this.runBackgroundSounds({ type: shouldProbe ? "probe" : "read" });
   }
 
   async refreshBackgroundSounds(): Promise<void> {
-    await this.runBackgroundSounds(this.appState.backgroundSounds.status === "candidate" ? "probe" : "read");
+    await this.runBackgroundSounds({ type: this.appState.backgroundSounds.status === "candidate" ? "probe" : "read" });
   }
 
   async retryBackgroundSounds(): Promise<void> {
-    await this.runBackgroundSounds(this.appState.backgroundSounds.status === "unavailable" ? "probe" : "read");
+    await this.runBackgroundSounds({ type: this.appState.backgroundSounds.status === "unavailable" ? "probe" : "read" });
   }
 
-  private async runBackgroundSounds(operation: "probe" | "read"): Promise<void> {
+  async setBackgroundSoundsEnabled(value: boolean): Promise<void> {
+    if (this.appState.backgroundSounds.status !== "ready") return;
+    await this.runBackgroundSounds({ type: "setEnabled", value });
+  }
+
+  async cycleBackgroundSound(delta: 1 | -1): Promise<void> {
+    const state = this.appState.backgroundSounds;
+    if (state.status !== "ready") return;
+    const current = state.snapshot.sounds.findIndex((sound) => sound.id === state.snapshot.sound.id);
+    const index = (current + delta + state.snapshot.sounds.length) % state.snapshot.sounds.length;
+    const target = state.snapshot.sounds[index];
+    if (target) await this.runBackgroundSounds({ type: "setSound", value: target.id });
+  }
+
+  adjustBackgroundSoundsVolume(delta: 1 | -1): void {
+    const state = this.appState.backgroundSounds;
+    if (state.status !== "ready") return;
+    const current = this.uiState.background.pendingVolumePercent ?? state.snapshot.volumePercent;
+    const target = Math.max(0, Math.min(100, current + delta * 5));
+    this.dispatchUi({ type: "setBackgroundPendingVolume", percent: target });
+    if (this.backgroundVolumeTimer) clearTimeout(this.backgroundVolumeTimer);
+    this.backgroundVolumeTimer = setTimeout(() => {
+      this.backgroundVolumeTimer = null;
+      void this.runBackgroundSounds({ type: "setVolume", value: target }).finally(() => {
+        this.dispatchUi({ type: "setBackgroundPendingVolume", percent: null });
+      });
+    }, 150);
+  }
+
+  private async runBackgroundSounds(operation: BackgroundSoundsOperation): Promise<void> {
     if (!this.backgroundSoundsControl || this.appState.backgroundSounds.status === "hidden" || this.tornDown) return;
     const task = async () => {
       const previous = this.appState.backgroundSounds;
@@ -187,7 +224,14 @@ export class AppCoordinator {
       const controller = new AbortController();
       this.backgroundSoundsAbort = controller;
       try {
-        const snapshot = await this.backgroundSoundsControl![operation](controller.signal);
+        const control = this.backgroundSoundsControl!;
+        const snapshot = operation.type === "setEnabled" ? await control.setEnabled(operation.value, controller.signal)
+          : operation.type === "setSound" ? await control.setSound(operation.value, controller.signal)
+            : operation.type === "setVolume" ? await control.setVolume(operation.value, controller.signal)
+              : await control[operation.type](controller.signal);
+        if ("snapshot" in previous && mutationChangedIndependentBackgroundValues(operation, previous.snapshot, snapshot)) {
+          throw new BackgroundSoundsError("apply-mismatch", "macOS changed an independent Background Sounds setting; refresh and retry.");
+        }
         this.appState.backgroundSounds = { status: "ready", snapshot };
       } catch (error) {
         if (this.tornDown && error instanceof BackgroundSoundsError && error.code === "cancelled") return;
@@ -286,6 +330,9 @@ export class AppCoordinator {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
+    if (this.backgroundVolumeTimer) clearTimeout(this.backgroundVolumeTimer);
+    this.backgroundVolumeTimer = null;
+    this.dispatchUi({ type: "setBackgroundPendingVolume", percent: null });
     this.backgroundSoundsAbort?.abort();
     await this.saveLastPlaylistSnapshot({ meaningful: false });
     this.pendingDownloadBatches.length = 0;
@@ -1426,4 +1473,16 @@ export class AppCoordinator {
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
     for (const listener of this.stateListeners) listener(reason);
   }
+}
+
+function mutationChangedIndependentBackgroundValues(
+  operation: BackgroundSoundsOperation,
+  before: import("./background-sounds").BackgroundSoundsSnapshot,
+  after: import("./background-sounds").BackgroundSoundsSnapshot,
+): boolean {
+  const sameSound = before.sound.id === after.sound.id;
+  if (operation.type === "setEnabled") return !sameSound || before.volumePercent !== after.volumePercent;
+  if (operation.type === "setSound") return before.enabled !== after.enabled || before.volumePercent !== after.volumePercent;
+  if (operation.type === "setVolume") return before.enabled !== after.enabled || !sameSound;
+  return false;
 }

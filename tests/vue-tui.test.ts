@@ -38,6 +38,7 @@ describe("TMU top-level surface smoke", () => {
         return snapshot;
       },
       read: async () => snapshot,
+      setEnabled: async () => snapshot, setSound: async () => snapshot, setVolume: async () => snapshot,
     };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
@@ -79,7 +80,10 @@ describe("TMU top-level surface smoke", () => {
       sounds: [{ id: "Rain", label: "Rain" }],
       volumePercent: 45,
     } as const;
-    const control = { probe: async () => snapshot, read: async () => snapshot };
+    const control = {
+      probe: async () => snapshot, read: async () => snapshot,
+      setEnabled: async () => snapshot, setSound: async () => snapshot, setVolume: async () => snapshot,
+    };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     coordinator.dispatchUi({ type: "switchTab", tab: "background" });
     await coordinator.enterBackgroundSounds();
@@ -91,6 +95,45 @@ describe("TMU top-level surface smoke", () => {
     expect(frame).toContain("Sound               ‹ Rain ›");
     expect(frame).toContain("Confirmed from macOS");
     expect(frame.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
+  });
+
+  test("controls Background Sound settings with focused keys and authoritative confirmation", async () => {
+    let snapshot = {
+      enabled: false,
+      sound: { id: "Rain", label: "Rain" },
+      sounds: [{ id: "Rain", label: "Rain" }, { id: "Ocean", label: "Ocean" }],
+      volumePercent: 45,
+    };
+    const writes: string[] = [];
+    const control = {
+      probe: async () => snapshot, read: async () => snapshot,
+      setEnabled: async (enabled: boolean) => (writes.push(`enabled:${enabled}`), snapshot = { ...snapshot, enabled }),
+      setSound: async (id: string) => (writes.push(`sound:${id}`), snapshot = { ...snapshot, sound: snapshot.sounds.find((sound) => sound.id === id)! }),
+      setVolume: async (volumePercent: number) => (writes.push(`volume:${volumePercent}`), snapshot = { ...snapshot, volumePercent }),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    coordinator.dispatchUi({ type: "switchTab", tab: "background" });
+    await coordinator.enterBackgroundSounds();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+
+    await terminal.stdin.write("\x1b[C");
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\x1b[C");
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\x1b[C");
+    expect(terminal.lastFrame()).toContain("45% → 50% pending");
+    await sleep(175);
+
+    expect(writes).toEqual(["enabled:true", "sound:Ocean", "volume:50"]);
+    expect(terminal.lastFrame()).toContain("● On");
+    expect(terminal.lastFrame()).toContain("‹ Ocean ›");
+    expect(terminal.lastFrame()).toContain("50%");
+    expect(coordinator.uiState.background.selectedRow).toBe(2);
+    await terminal.stdin.write("k");
+    await terminal.stdin.write("\x1b[A");
+    expect(coordinator.uiState.background.selectedRow).toBe(0);
+    await terminal.stdin.write("\x1b[D");
+    expect(writes.at(-1)).toBe("enabled:false");
   });
   test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
     const player = new StopCountingPlayer();

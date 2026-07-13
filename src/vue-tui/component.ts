@@ -665,6 +665,7 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
   }
   if (!("snapshot" in state)) return null;
   const snapshotValue = state.snapshot;
+  const pendingVolume = snapshot.uiState.background.pendingVolumePercent;
   const stale = state.status === "degraded";
   const busy = state.status === "busy";
   const filled = Math.round(snapshotValue.volumePercent / 10);
@@ -673,7 +674,7 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
     h(Text, () => ""),
     row(0, "Background Sounds", snapshotValue.enabled ? "● On" : "○ Off"),
     row(1, "Sound", `‹ ${snapshotValue.sound.label} ›`),
-    row(2, "Volume", `[${"■".repeat(filled)}${"·".repeat(10 - filled)}] ${snapshotValue.volumePercent}%`),
+    row(2, "Volume", `[${"■".repeat(filled)}${"·".repeat(10 - filled)}] ${snapshotValue.volumePercent}%${pendingVolume === null ? "" : ` → ${pendingVolume}% pending`}`),
     h(Text, { dimColor: true }, () => `  ${"State".padEnd(20)}${busy ? "Refreshing from macOS…" : stale ? "Stale · press u to retry" : "Confirmed from macOS"}`),
     stale ? h(Text, { color: noColor ? undefined : "red" }, () => state.error) : null,
   ]);
@@ -689,8 +690,18 @@ async function routeBackground(input: string, key: InputKey, coordinator: AppCoo
     coordinator.dispatchUi({ type: "setBackgroundSelection", index: coordinator.uiState.background.selectedRow + delta });
     return true;
   }
-  // Read-only slice: consume arrows on Settings rows so they never seek the Player.
-  return Boolean(key.leftArrow || key.rightArrow || key.return);
+  if (!key.leftArrow && !key.rightArrow && !key.return) return false;
+  const state = coordinator.appState.backgroundSounds;
+  if (state.status !== "ready") return true;
+  const row = coordinator.uiState.background.selectedRow;
+  if (row === 0) {
+    if (key.leftArrow) await coordinator.setBackgroundSoundsEnabled(false);
+    else if (key.rightArrow) await coordinator.setBackgroundSoundsEnabled(true);
+    else await coordinator.setBackgroundSoundsEnabled(!state.snapshot.enabled);
+  }
+  else if (row === 1) await coordinator.cycleBackgroundSound(key.leftArrow ? -1 : 1);
+  else if (row === 2 && (key.leftArrow || key.rightArrow)) coordinator.adjustBackgroundSoundsVolume(key.leftArrow ? -1 : 1);
+  return true;
 }
 
 function activePlaylistName(appState: PublicationSnapshot["appState"]): string {
@@ -1057,7 +1068,7 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
     title: "BACKGROUND SOUNDS",
     rows: [
       ["j/k, ↑/↓", "Move selection"], ["u", "Refresh or retry macOS state"],
-      ["←/→, Enter", "Controls are read-only in this release"],
+      ["←/→", "Adjust focused sound or volume"], ["Enter", "Activate focused control"],
     ],
   }];
   return [
@@ -1198,7 +1209,7 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
             ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
             : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.activeTab === "background"
-            ? [["j/k", "Move"], ["u", "Refresh"], ["?", "Help"]]
+            ? [["j/k", "Move"], ["←/→", "Adjust"], ["Enter", "Activate"], ["u", "Refresh"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
