@@ -108,12 +108,9 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
       refreshDependencyHealth: (helper, currentHealth) =>
         checkHelperDependencyHealth(loaded.config, helper, currentHealth, {
           runner: options.dependencyRunner,
-        }),
+      }),
       dependencyRunner: options.dependencyRunner,
       backgroundSoundsCandidate,
-      backgroundSoundsControl: backgroundSoundsCandidate
-        ? new JxaBackgroundSoundsControl()
-        : new UnavailableBackgroundSoundsControl(),
     }),
     config: loaded.config,
   };

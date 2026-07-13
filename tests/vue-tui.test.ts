@@ -57,6 +57,40 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Sound               ‹ Rain ›");
     expect(terminal.lastFrame()).toContain("60%");
     expect(terminal.lastFrame()).toContain("Confirmed from macOS");
+    await terminal.stdin.write("?");
+    expect(terminal.lastFrame()).toContain("Background Sounds Shortcuts");
+    expect(terminal.lastFrame()).toContain("Refresh or retry macOS");
+    await terminal.stdin.write("?");
+    await terminal.stdin.write("]");
+    expect(coordinator.uiState.activeTab).toBe("playback");
+    await terminal.stdin.write("[");
+    await sleep(0);
+    expect(coordinator.uiState.activeTab).toBe("background");
+  });
+
+  test.each([
+    [120, 30],
+    [80, 24],
+    [60, 20],
+  ])("keeps the candidate Background Settings list usable at %sx%s", async (columns, rows) => {
+    const snapshot = {
+      enabled: false,
+      sound: { id: "Rain", label: "Rain" },
+      sounds: [{ id: "Rain", label: "Rain" }],
+      volumePercent: 45,
+    } as const;
+    const control = { probe: async () => snapshot, read: async () => snapshot };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    coordinator.dispatchUi({ type: "switchTab", tab: "background" });
+    await coordinator.enterBackgroundSounds();
+
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+    const frame = terminal.lastFrame()!;
+    expect(frame).toContain("Background Sounds · macOS");
+    expect(frame).toContain("Background Sounds   ○ Off");
+    expect(frame).toContain("Sound               ‹ Rain ›");
+    expect(frame).toContain("Confirmed from macOS");
+    expect(frame.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
   });
   test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
     const player = new StopCountingPlayer();

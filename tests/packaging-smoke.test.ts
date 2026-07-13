@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { spawn } from "node-pty";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -10,6 +11,7 @@ const exec = promisify(execFile);
 let root = "";
 let tarball = "";
 let packageFiles: string[] = [];
+let packedRoot = "";
 
 beforeAll(async () => {
   if (process.platform === "darwin") {
@@ -28,6 +30,9 @@ beforeAll(async () => {
   tarball = join(root, stdout.trim().split("\n").at(-1) ?? "");
   const listing = await exec("tar", ["-tzf", tarball]);
   packageFiles = listing.stdout.trim().split("\n");
+  packedRoot = join(root, "unpacked", "package");
+  await mkdir(join(root, "unpacked"));
+  await exec("tar", ["-xzf", tarball, "-C", join(root, "unpacked")]);
 }, 30_000);
 
 afterAll(async () => {
@@ -50,8 +55,15 @@ describe("Node npm package", () => {
     expect(pkg.devDependencies).toHaveProperty("tsdown");
     expect(packageFiles).toContain("package/dist/cli.js");
     expect(packageFiles).toContain("package/dist/cli.js.map");
+    expect(packageFiles).toContain("package/dist/background-sounds.js");
     expect(packageFiles).toContain("package/dist/background-sounds.jxa");
-    expect(await readFile("dist/background-sounds.jxa", "utf8")).toContain("HUComfortSoundsSettings");
+    const packagedHelper = join(packedRoot, "dist", "background-sounds.jxa");
+    expect(await readFile(packagedHelper, "utf8")).toContain("HUComfortSoundsSettings");
+    await access(join(packedRoot, "dist", "cli.js"));
+    const packagedAdapter = await import(pathToFileURL(join(packedRoot, "dist", "background-sounds.js")).href);
+    const control = new packagedAdapter.JxaBackgroundSoundsControl() as { helperPath: string };
+    expect(await realpath(control.helperPath)).toBe(await realpath(packagedHelper));
+    await access(control.helperPath);
     expect((await readFile("dist/cli.js", "utf8")).startsWith("#!/usr/bin/env node\n")).toBe(true);
     await access("dist/cli.js.map");
   });

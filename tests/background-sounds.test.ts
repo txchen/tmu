@@ -51,6 +51,51 @@ describe("Background Sounds runtime boundary", () => {
     await expect(control.read()).rejects.toMatchObject({ code });
   });
 
+  test.each([
+    ["framework-load", "HearingUtilities.framework could not be loaded"],
+    ["contract-mismatch", "Required Background Sounds contract is unavailable"],
+    ["unavailable", "Background Sounds is disabled by macOS"],
+  ] as const)("preserves the helper's bounded %s failure", async (code, message) => {
+    const control = new JxaBackgroundSoundsControl({
+      run: async () => ({
+        stdout: JSON.stringify({ protocolVersion: 1, ok: false, code, message }),
+        stderr: "private framework diagnostics that must not escape",
+      }),
+      helperPath: "/helper",
+    });
+
+    await expect(control.probe()).rejects.toMatchObject({ code, message });
+  });
+
+  test("rejects an unknown failure code and an unbounded helper message", async () => {
+    const control = new JxaBackgroundSoundsControl({
+      run: async () => ({
+        stdout: JSON.stringify({ protocolVersion: 1, ok: false, code: "private-error", message: "x".repeat(501) }),
+        stderr: "",
+      }),
+      helperPath: "/helper",
+    });
+
+    await expect(control.read()).rejects.toMatchObject({
+      code: "helper-exit",
+      message: "macOS Background Sounds is unavailable.",
+    });
+  });
+
+  test("maps AbortSignal cancellation without exposing the child error", async () => {
+    const controller = new AbortController();
+    const control = new JxaBackgroundSoundsControl({
+      run: async (_executable, _args, options) => new Promise((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }),
+      helperPath: "/helper",
+    });
+
+    const pending = control.read(controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+  });
+
   test("maps bounded execution failures without leaking them globally", async () => {
     const error = Object.assign(new Error("timed out"), { killed: true });
     const control = new JxaBackgroundSoundsControl({ run: async () => { throw error; }, helperPath: "/helper" });
@@ -96,5 +141,65 @@ describe("Background Sounds session lifecycle", () => {
     expect(coordinator.appState.appErrors).toEqual([]);
     await coordinator.retryBackgroundSounds();
     expect(coordinator.appState.backgroundSounds.status).toBe("ready");
+  });
+
+  test("serializes refreshes and keeps the last confirmed snapshot after a later failure", async () => {
+    let activeReads = 0;
+    let maximumActiveReads = 0;
+    let releaseFirstRead!: () => void;
+    const firstRead = new Promise<void>((resolve) => { releaseFirstRead = resolve; });
+    const control = {
+      probe: vi.fn(async () => snapshot),
+      read: vi.fn(async () => {
+        activeReads += 1;
+        maximumActiveReads = Math.max(maximumActiveReads, activeReads);
+        try {
+          if (control.read.mock.calls.length === 1) await firstRead;
+          else throw new BackgroundSoundsError("helper-exit", "macOS stopped responding");
+          return snapshot;
+        } finally {
+          activeReads -= 1;
+        }
+      }),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    await coordinator.enterBackgroundSounds();
+
+    const first = coordinator.refreshBackgroundSounds();
+    const second = coordinator.refreshBackgroundSounds();
+    await vi.waitFor(() => expect(control.read).toHaveBeenCalledTimes(1));
+    releaseFirstRead();
+    await Promise.all([first, second]);
+
+    expect(maximumActiveReads).toBe(1);
+    expect(coordinator.appState.backgroundSounds).toEqual({
+      status: "degraded",
+      snapshot,
+      error: "macOS stopped responding",
+    });
+    expect(coordinator.appState.appErrors).toEqual([]);
+  });
+
+  test("teardown cancels and waits for an in-flight Background Sounds read", async () => {
+    let aborted = false;
+    const control = {
+      probe: vi.fn(async () => snapshot),
+      read: vi.fn(async (signal?: AbortSignal) => new Promise<typeof snapshot>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(new BackgroundSoundsError("cancelled", "cancelled"));
+        }, { once: true });
+      })),
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    await coordinator.enterBackgroundSounds();
+    const refresh = coordinator.refreshBackgroundSounds();
+    await vi.waitFor(() => expect(control.read).toHaveBeenCalledOnce());
+
+    await coordinator.teardown();
+    await refresh;
+
+    expect(aborted).toBe(true);
+    expect(coordinator.appState.appErrors).toEqual([]);
   });
 });

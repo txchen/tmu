@@ -27,23 +27,25 @@ function soundOption(sound) {
   return { id: id, label: label };
 }
 
-function discoverSounds(settings) {
-  const candidates = ["availableComfortSounds", "comfortSounds", "allComfortSounds"];
-  let collection = null;
-  for (const selector of candidates) {
-    if (responds(settings, selector)) {
-      collection = settings[selector];
-      break;
-    }
+function discoverSounds(settings, bundle) {
+  const soundClass = $.NSClassFromString("HUComfortSound");
+  if (!soundClass || !responds(soundClass, "soundWithName:path:andGroup:")) {
+    throw new Error("The framework sound factory is unavailable");
   }
-  if (!collection) throw new Error("No framework sound-inventory selector is available");
-  const raw = ObjC.unwrap(collection);
-  const values = Array.isArray(raw) ? raw : [];
+  const fileManager = $.NSFileManager.defaultManager;
+  const selected = settings.selectedComfortSound;
+  const values = [selected];
+  const resourcePaths = ObjC.unwrap(bundle.pathsForResourcesOfTypeInDirectory("m4a", ""));
+  for (const resourcePathValue of Array.isArray(resourcePaths) ? resourcePaths : []) {
+    const resourcePath = stringValue(resourcePathValue);
+    const name = stringValue($(resourcePath).lastPathComponent.stringByDeletingPathExtension);
+    if (name) values.push(soundClass.soundWithNamePathAndGroup(name, resourcePath, 0));
+  }
   const seen = {};
   const sounds = [];
   for (const sound of values) {
-    const usable = responds(sound, "isInstalled") ? Boolean(sound.installed)
-      : responds(sound, "installed") ? Boolean(sound.installed) : Boolean(sound.path);
+    const path = stringValue(sound.path);
+    const usable = Boolean(path) && Boolean(fileManager.fileExistsAtPath(path));
     if (!usable) continue;
     const option = soundOption(sound);
     if (!seen[option.id]) {
@@ -54,9 +56,9 @@ function discoverSounds(settings) {
   return sounds;
 }
 
-function readSnapshot(settings) {
+function readSnapshot(settings, bundle) {
   const selected = soundOption(settings.selectedComfortSound);
-  const sounds = discoverSounds(settings);
+  const sounds = discoverSounds(settings, bundle);
   if (!sounds.some(function (sound) { return sound.id === selected.id; })) {
     throw new Error("The selected sound is not immediately usable");
   }
@@ -87,7 +89,7 @@ function run(argv) {
       if (!responds(settings, selector)) return failure("contract-mismatch", "Required Background Sounds contract is unavailable");
     }
     if (!Boolean(settings.comfortSoundsAvailable)) return failure("unavailable", "Enable Background Sounds availability in macOS System Settings");
-    return envelope(true, { snapshot: readSnapshot(settings) });
+    return envelope(true, { snapshot: readSnapshot(settings, bundle) });
   } catch (error) {
     return failure("contract-mismatch", error && error.message ? error.message : error);
   }
