@@ -1125,7 +1125,9 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
       : ui.activeTab === "library" && incompleteSelected
         ? [["j/k", "Move"], ["d", "Clean"], ["/", "Search"], ["?", "Help"]]
         : ui.activeTab === "library"
-          ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["e", "Rename"], ["?", "Help"]]
+          ? ui.terminal.columns < 90
+            ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
+            : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];

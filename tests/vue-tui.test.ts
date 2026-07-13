@@ -567,6 +567,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
     expect(terminal.lastFrame()).not.toContain("? Help ·");
     await terminal.stdin.write(leaveInput);
+    expect(terminal.lastFrame()).toContain(columns < 90 ? "a Add" : "a Add to Playlist");
     const before = { ...coordinator.uiState.library };
     await terminal.stdin.write("?");
     expect(coordinator.uiState.overlays.at(-1)?.scroll).toBe(0);
