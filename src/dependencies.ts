@@ -175,12 +175,14 @@ function dependencyHealthFromHelpers(
     helpers,
     playback: {
       enabled: !mpvMissing,
-      message: mpvMissing ? `Playback disabled: mpv missing at ${helpers.mpv.command}` : undefined,
+      message: mpvMissing
+        ? `mpv is not installed or cannot be found at ${helpers.mpv.command}. Install mpv and ensure the configured command is available on PATH.`
+        : undefined,
     },
     youtubeUrlDownload: {
       enabled: !ytDlpMissing,
       message: ytDlpMissing
-        ? `YouTube URL Download disabled: yt-dlp missing at ${helpers["yt-dlp"].command}`
+        ? `yt-dlp is not installed or cannot be found at ${helpers["yt-dlp"].command}. Install yt-dlp and ensure the configured command is available on PATH.`
         : undefined,
     },
   };

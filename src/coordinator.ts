@@ -975,6 +975,7 @@ export class AppCoordinator {
     if (this.tornDown) return;
     const healthMessage = youtubeDownloadHealthMessage(this.appState.dependencyHealth);
     if (healthMessage) {
+      this.appState.appErrors.push(healthMessage);
       this.appState.lastEvent = healthMessage;
       return;
     }
@@ -1308,6 +1309,7 @@ export class AppCoordinator {
       currentTrackIdentity: this.appState.playback.currentTrackIdentity,
       message: playbackMessage,
     };
+    this.appState.appErrors.push(playbackMessage);
     this.appState.lastEvent = playbackMessage;
     return true;
   }

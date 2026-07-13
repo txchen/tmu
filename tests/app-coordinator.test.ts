@@ -679,6 +679,70 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(player.teardownCount).toBe(1);
   });
 
+  test("reports a clear install error when yt-dlp is missing", async () => {
+    let preflightStarted = false;
+    const appState = createInitialAppState({ "youtube-cache": {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/unused" }),
+    } });
+    const coordinator = new AppCoordinator({
+      appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(),
+      player: new RecordingPlayer(),
+      refreshDependencyHealth: async (_helper, current) => ({
+        ...current,
+        helpers: {
+          ...current.helpers,
+          "yt-dlp": { name: "yt-dlp", command: "yt-dlp", status: "missing" },
+        },
+        youtubeUrlDownload: {
+          enabled: false,
+          message: "yt-dlp is not installed or cannot be found at yt-dlp. Install yt-dlp and ensure the configured command is available on PATH.",
+        },
+      }),
+      prepareDownloadBatch: async () => {
+        preflightStarted = true;
+        return { kind: "rejected", message: "unexpected" };
+      },
+    });
+
+    await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: "https://youtu.be/one" });
+    await waitFor(() => coordinator.appState.downloads.preparingSubmissions === 0);
+
+    expect(preflightStarted).toBe(false);
+    expect(coordinator.appState.appErrors.at(-1)).toMatch(/yt-dlp is not installed.*install yt-dlp/i);
+  });
+
+  test("checks mpv only when playback is requested and reports a clear install error", async () => {
+    let checks = 0;
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(),
+      refreshDependencyHealth: async (_helper, current) => {
+        checks += 1;
+        return {
+          ...current,
+          helpers: { ...current.helpers, mpv: { name: "mpv", command: "mpv", status: "missing" } },
+          playback: {
+            enabled: false,
+            message: "mpv is not installed or cannot be found at mpv. Install mpv and ensure the configured command is available on PATH.",
+          },
+        };
+      },
+    });
+
+    expect(checks).toBe(0);
+    await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack });
+    expect(checks).toBe(0);
+    await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+
+    expect(checks).toBe(1);
+    expect(coordinator.appState.appErrors.at(-1)).toMatch(/mpv is not installed.*install mpv/i);
+  });
+
   test("confirmed Cache Deletion recomputes playback state and retains the Current Playlist entry unavailable", async () => {
     let deleted = false;
     const provider: YouTubeCacheProvider = {

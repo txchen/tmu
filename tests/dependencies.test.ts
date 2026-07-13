@@ -60,11 +60,11 @@ describe("dependency health", () => {
     });
     expect(health.playback).toEqual({
       enabled: false,
-      message: "Playback disabled: mpv missing at /missing/mpv",
+      message: "mpv is not installed or cannot be found at /missing/mpv. Install mpv and ensure the configured command is available on PATH.",
     });
     expect(health.youtubeUrlDownload).toEqual({
       enabled: false,
-      message: "YouTube URL Download disabled: yt-dlp missing at /missing/yt-dlp",
+      message: "yt-dlp is not installed or cannot be found at /missing/yt-dlp. Install yt-dlp and ensure the configured command is available on PATH.",
     });
   });
 
@@ -106,7 +106,7 @@ describe("dependency health", () => {
         },
         youtubeUrlDownload: {
           enabled: false,
-          message: "YouTube URL Download disabled: yt-dlp missing at /old/yt-dlp",
+          message: "yt-dlp is not installed or cannot be found at /old/yt-dlp. Install yt-dlp and ensure the configured command is available on PATH.",
         },
       }),
       { runner },
