@@ -31,11 +31,28 @@ export class MemoryPlaylistCollection {
     return this.activeId;
   }
 
+  get activePlayback(): Pick<PlaylistRecord, "positionSeconds" | "playbackStatus"> {
+    return { positionSeconds: this.active.positionSeconds, playbackStatus: this.active.playbackStatus };
+  }
+
   append(name: string, id = crypto.randomUUID()): { id: string; queue: Queue } {
+    const normalizedName = validatePlaylistName(name, this.records.map((record) => record.name));
     if (this.records.some((playlist) => playlist.id === id)) throw new Error(`Playlist UUID is already in use: ${id}`);
-    const record = { id, name, queue: new MemoryQueue(), positionSeconds: 0, playbackStatus: "stopped" as const };
+    const record = { id, name: normalizedName, queue: new MemoryQueue(), positionSeconds: 0, playbackStatus: "stopped" as const };
     this.records.push(record);
     return record;
+  }
+
+  removeInactive(id: string): void {
+    if (id === this.activeId) throw new Error("Cannot remove the Active Playlist");
+    this.records = this.records.filter((playlist) => playlist.id !== id);
+  }
+
+  activate(id: string): PlaylistState {
+    const record = this.records.find((playlist) => playlist.id === id);
+    if (!record) throw new Error(`Playlist is missing: ${id}`);
+    this.activeId = id;
+    return { id: record.id, name: record.name, ...record.queue.snapshot(), positionSeconds: record.positionSeconds, playbackStatus: record.playbackStatus };
   }
 
   updateActivePlayback(update: { positionSeconds: number; playbackStatus: PlaylistPlaybackStatus }): void {
@@ -80,6 +97,21 @@ export class MemoryPlaylistCollection {
     if (!record) throw new Error("Active Playlist is missing");
     return record;
   }
+}
+
+function validatePlaylistName(name: string, existingNames: readonly string[]): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Playlist name cannot be empty");
+  if (Array.from(trimmed).length > 16) throw new Error("Playlist name must be at most 16 characters");
+  const folded = playlistNameKey(trimmed);
+  if (existingNames.some((candidate) => playlistNameKey(candidate) === folded)) {
+    throw new Error(`Playlist name is already in use: ${trimmed}`);
+  }
+  return trimmed;
+}
+
+export function playlistNameKey(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replaceAll("ß", "ss").replaceAll("ς", "σ");
 }
 
 function normalizePosition(positionSeconds: number): number {

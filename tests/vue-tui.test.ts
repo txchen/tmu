@@ -14,6 +14,54 @@ import type { YouTubeCacheProvider } from "../src/youtube-cache";
 afterEach(() => cleanup());
 
 describe("TMU top-level surface smoke", () => {
+  test("opens Playlist Manager globally, captures create input, and shows the Active Playlist on every tab", async () => {
+    const { coordinator } = createTmuApp();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    for (const tab of ["playback", "library", "downloader"] as const) {
+      coordinator.dispatchUi({ type: "switchTab", tab });
+      if (tab === "downloader") coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: false });
+      await terminal.stdin.write("P");
+      expect(terminal.lastFrame()).toContain("Playlist Manager");
+      expect(terminal.lastFrame()).toContain("› * Default · 0");
+      await terminal.stdin.write("\x1b");
+    }
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("c");
+    await terminal.stdin.write("p?Study");
+    expect(coordinator.appState.playback.currentTrackIdentity).toBeNull();
+    expect(terminal.lastFrame()).toContain("Name: p?Study");
+    await terminal.stdin.write("\r");
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "p?Study"]);
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(coordinator.appState.playlists.playlists[1]!.id);
+    expect(coordinator.uiState.playlistManager).toBeNull();
+    expect(terminal.lastFrame()).toContain("Playlist: p?Study");
+  });
+
+  test("Library actions target only the Active Playlist and the narrow top bar stays bounded", async () => {
+    const track = cachedTrack("active-only", "Active Only");
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [track], searchTracks: () => [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/active-only.opus" }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({ type: "createPlaylist", name: "界界界界界界界界界界界界界界界界" });
+    const activeId = coordinator.appState.playlists.activePlaylistId;
+    const defaultId = coordinator.appState.playlists.playlists[0]!.id;
+    coordinator.dispatchUi({ type: "switchTab", tab: "library" });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+    await terminal.stdin.write("a");
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Active Only"]);
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.playlists.playlists.find((playlist) => playlist.id === activeId)?.entries).toHaveLength(1);
+    expect(terminal.lastFrame()!.split("\n").every((line) => Array.from(line).length <= 60)).toBe(true);
+  });
+
   test("shows and dismisses an error recorded before the TUI mounts", async () => {
     const { coordinator } = createTmuApp();
     coordinator.appState.appErrors.push("Could not restore Last Queue Snapshot");

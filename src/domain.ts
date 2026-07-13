@@ -286,6 +286,14 @@ export type UiState = {
     key: "g";
     expiresAtMs: number;
   };
+  playlistManager: null | {
+    selectedIndex: number;
+    scroll: number;
+    mode: "browse" | "create";
+    value: string;
+    cursor: number;
+    error: string | null;
+  };
 };
 
 export type AppIntent =
@@ -297,6 +305,8 @@ export type AppIntent =
   | { type: "moveQueueTrack"; identity: TrackIdentity; delta: number }
   | { type: "renameTrack"; identity: TrackIdentity; title: string }
   | { type: "clearQueue" }
+  | { type: "createPlaylist"; name: string }
+  | { type: "switchPlaylist"; playlistId: string }
   | { type: "cacheOperation"; operation: "request-delete"; identity: TrackIdentity }
   | { type: "cacheOperation"; operation: "request-cleanup"; stem: string }
   | { type: "cacheOperation"; operation: "confirm" | "cancel" }

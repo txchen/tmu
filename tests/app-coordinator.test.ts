@@ -1,9 +1,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { AppCoordinator } from "../src/coordinator";
-import { PlaybackFailure, type PlaybackLocator, type PlayerLoadOptions, type Provider, type Track } from "../src/domain";
+import { PlaybackFailure, type PlaybackLocator, type PlayerLoadOptions, type PlayerPlaybackState, type Provider, type Track } from "../src/domain";
 import { NoopPlayer } from "../src/player";
 import { MemoryQueue } from "../src/queue";
+import { InMemoryLastPlaylistSnapshotPersistence } from "../src/playlist-snapshot";
 import { createInitialAppState, createInitialUiState } from "../src/state";
 import type { YouTubeCacheProvider } from "../src/youtube-cache";
 
@@ -28,6 +29,10 @@ class RecordingPlayer extends NoopPlayer {
   override async teardown(): Promise<void> {
     this.teardownCount += 1;
   }
+
+  publishForTest(state: PlayerPlaybackState): void {
+    this.updateState(state);
+  }
 }
 
 class SelectivelyFailingPlayer extends RecordingPlayer {
@@ -46,6 +51,12 @@ class PlaybackFailingPlayer extends RecordingPlayer {
 class CommandFailingPlayer extends RecordingPlayer {
   override async load(): Promise<void> {
     throw new Error("mpv IPC socket disconnected");
+  }
+}
+
+class StopFailingPlayer extends RecordingPlayer {
+  override async stop(): Promise<never> {
+    throw new Error("mpv stop failed");
   }
 }
 
@@ -80,6 +91,85 @@ function harness() {
 }
 
 describe("AppCoordinator with the narrow Provider", () => {
+  test("creates and switches independent Playlist playback contexts without autoplay", async () => {
+    const { coordinator, player } = harness();
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+    player.publishForTest({ status: "playing", positionSeconds: 42 });
+
+    await coordinator.dispatch({ type: "createPlaylist", name: " Study " });
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study"]);
+    expect(coordinator.appState.queue.entries).toEqual([]);
+    expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
+    expect(player.loaded).toHaveLength(1);
+
+    await coordinator.dispatch({ type: "addToQueue", target: { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "study" } } });
+    const defaultId = coordinator.appState.playlists.playlists[0]!.id;
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+
+    expect(coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["cached-track"]);
+    expect(coordinator.appState.playback).toMatchObject({ status: "paused", positionSeconds: 42, restored: true });
+    expect(player.loaded).toHaveLength(1);
+    expect(coordinator.appState.playlists.playlists[1]!.entries[0]!.track.identity.stableId).toBe("study");
+  });
+
+  test("rejects invalid Playlist names without changing the Active Playlist", async () => {
+    const { coordinator } = harness();
+    const activeId = coordinator.appState.playlists.activePlaylistId;
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "default" })).rejects.toThrow("already in use");
+    await coordinator.dispatch({ type: "createPlaylist", name: "Straße" });
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "STRASSE" })).rejects.toThrow("already in use");
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: activeId });
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "                 " })).rejects.toThrow("empty");
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "12345678901234567" })).rejects.toThrow("16");
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(activeId);
+    expect(coordinator.appState.playlists.playlists).toHaveLength(2);
+  });
+
+  test.each([
+    ["paused", 18, "resumable", 18],
+    ["stopped", 99, "stopped", 0],
+  ] as const)("switching away from %s preserves the intended Playlist resume state", async (status, positionSeconds, playbackStatus, savedPosition) => {
+    const { coordinator } = harness();
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+    coordinator.appState.playback = { status, positionSeconds, currentTrackIdentity: cachedTrack.identity };
+    await coordinator.dispatch({ type: "createPlaylist", name: "Other" });
+    expect(coordinator.appState.playlists.playlists[0]).toMatchObject({ playbackStatus, positionSeconds: savedPosition });
+  });
+
+  test("restores the created Active Playlist after restart without autoplay", async () => {
+    const persistence = new InMemoryLastPlaylistSnapshotPersistence();
+    const first = new AppCoordinator({
+      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(),
+      player: new RecordingPlayer(), playlistSnapshotPersistence: persistence,
+    });
+    await first.dispatch({ type: "createPlaylist", name: "Road" });
+    const roadId = first.appState.playlists.activePlaylistId;
+
+    const player = new RecordingPlayer();
+    const restored = new AppCoordinator({
+      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(),
+      player, playlistSnapshotPersistence: persistence,
+    });
+    await restored.start();
+
+    expect(restored.appState.playlists.activePlaylistId).toBe(roadId);
+    expect(restored.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Road"]);
+    expect(restored.appState.playback.status).toBe("idle");
+    expect(player.loaded).toEqual([]);
+  });
+
+  test("does not retain a newly created Playlist when switching cannot stop the Player", async () => {
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}), uiState: createInitialUiState(), queue: new MemoryQueue(), player: new StopFailingPlayer(),
+    });
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "Unsafe" })).rejects.toThrow("mpv stop failed");
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default"]);
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(coordinator.appState.playlists.playlists[0]!.id);
+  });
+
   test("Rename Track updates every queued copy without interrupting playback", async () => {
     let track = cachedTrack;
     const provider: YouTubeCacheProvider = {

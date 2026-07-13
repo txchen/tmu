@@ -24,6 +24,7 @@ export type UiStateAction =
   | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
   | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectQueue"; index: number; identities: readonly TrackIdentity[] }
+  | { type: "resetQueueSelection"; index: number; identities: readonly TrackIdentity[] }
   | { type: "openOverlay"; kind: "shortcut-help" }
   | { type: "setOverlayScroll"; scroll: number }
   | { type: "setOverlayPendingG"; pending: boolean }
@@ -36,7 +37,14 @@ export type UiStateAction =
   | { type: "setRenameDialogError"; error: string | null }
   | { type: "dismissRenameDialog" }
   | { type: "setNotification"; notification: NonNullable<UiState["notification"]> }
-  | { type: "dismissNotification" };
+  | { type: "dismissNotification" }
+  | { type: "openPlaylistManager"; activeIndex: number }
+  | { type: "selectPlaylist"; index: number; count: number }
+  | { type: "beginCreatePlaylist" }
+  | { type: "editPlaylistName"; value: string; cursor: number }
+  | { type: "setPlaylistNameError"; error: string | null }
+  | { type: "cancelPlaylistEdit" }
+  | { type: "dismissPlaylistManager" };
 
 export function createInitialUiState(options: InitialUiStateOptions = {}): UiState {
   const columns = options.columns ?? 100;
@@ -54,6 +62,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     renameDialog: null,
     notification: null,
     pendingVimChord: null,
+    playlistManager: null,
   };
 }
 
@@ -120,6 +129,13 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         selectedQueueIdentity: action.identities[index] ?? null,
       };
     }
+    case "resetQueueSelection": {
+      const selectedQueueIndex = clampIndex(action.index, action.identities.length);
+      return {
+        ...state, selectedQueueIndex, queueScroll: visibleScroll(0, selectedQueueIndex),
+        selectedQueueIdentity: action.identities[selectedQueueIndex] ?? null,
+      };
+    }
     case "openOverlay":
       return { ...state, overlays: [...state.overlays, { kind: action.kind, focus: "search", query: "", scroll: 0, pendingG: false }] };
     case "setOverlayScroll": {
@@ -174,6 +190,37 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return { ...state, notification: action.notification };
     case "dismissNotification":
       return { ...state, notification: null };
+    case "openPlaylistManager":
+      return { ...state, playlistManager: {
+        selectedIndex: action.activeIndex, scroll: visibleScroll(0, action.activeIndex),
+        mode: "browse", value: "", cursor: 0, error: null,
+      } };
+    case "selectPlaylist": {
+      if (!state.playlistManager) return state;
+      const selectedIndex = clampIndex(action.index, action.count);
+      return { ...state, playlistManager: {
+        ...state.playlistManager, selectedIndex,
+        scroll: visibleScroll(state.playlistManager.scroll, selectedIndex),
+      } };
+    }
+    case "beginCreatePlaylist":
+      return state.playlistManager
+        ? { ...state, playlistManager: { ...state.playlistManager, mode: "create", value: "", cursor: 0, error: null } }
+        : state;
+    case "editPlaylistName":
+      return state.playlistManager
+        ? { ...state, playlistManager: { ...state.playlistManager, value: action.value, cursor: action.cursor, error: null } }
+        : state;
+    case "setPlaylistNameError":
+      return state.playlistManager
+        ? { ...state, playlistManager: { ...state.playlistManager, error: action.error } }
+        : state;
+    case "cancelPlaylistEdit":
+      return state.playlistManager
+        ? { ...state, playlistManager: { ...state.playlistManager, mode: "browse", value: "", cursor: 0, error: null } }
+        : state;
+    case "dismissPlaylistManager":
+      return { ...state, playlistManager: null };
   }
 }
 

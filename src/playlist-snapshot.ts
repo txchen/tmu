@@ -13,6 +13,7 @@ import {
   type VolumeState,
 } from "./domain";
 import { JsonRecoveryMessages, writeJsonAtomically } from "./json-persistence";
+import { playlistNameKey } from "./playlists";
 
 export type LastPlaylistSnapshotPersistence = {
   load(): Promise<LastPlaylistSnapshot | null>;
@@ -154,7 +155,7 @@ function parseLastPlaylistSnapshot(value: unknown): LastPlaylistSnapshot | null 
   for (const raw of value.playlists) {
     const playlist = parsePlaylist(raw, trackKeys);
     if (!playlist) return null;
-    const foldedName = playlist.name.toLocaleLowerCase();
+    const foldedName = playlistNameKey(playlist.name);
     if (ids.has(playlist.id) || names.has(foldedName)) return null;
     ids.add(playlist.id);
     names.add(foldedName);

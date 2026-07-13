@@ -78,7 +78,6 @@ export class AppCoordinator {
   private readonly checkedHelpers = new Set<HelperName>();
   readonly appState: AppState;
   private readonly uiStateStore: UiStateStore;
-  private readonly queue: Queue;
   private readonly player: Player;
   private readonly refreshDependencyHealth: DependencyHealthRefresh;
   private readonly snapshotPersistence: LastQueueSnapshotPersistence;
@@ -113,7 +112,6 @@ export class AppCoordinator {
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
     this.uiStateStore = new UiStateStore(options.uiState);
-    this.queue = options.queue;
     this.playlists = new MemoryPlaylistCollection(options.queue);
     this.player = options.player;
     this.refreshDependencyHealth = options.refreshDependencyHealth ?? (async (_helper, currentHealth) => currentHealth);
@@ -204,6 +202,12 @@ export class AppCoordinator {
           return;
         case "clearQueue":
           await this.clearQueue();
+          return;
+        case "createPlaylist":
+          await this.createPlaylist(intent.name);
+          return;
+        case "switchPlaylist":
+          await this.switchPlaylist(intent.playlistId);
           return;
       }
     } finally {
@@ -651,6 +655,39 @@ export class AppCoordinator {
     this.uiStateStore.dispatch({ type: "syncQueue", identities: [] });
     this.recordOperationFeedback("success", "cleared Queue");
     this.syncQueueState();
+  }
+
+  private async createPlaylist(name: string): Promise<void> {
+    const playlist = this.playlists.append(name);
+    if (!await this.switchPlaylist(playlist.id)) {
+      this.playlists.removeInactive(playlist.id);
+      this.syncQueueState();
+      throw new Error(this.appState.lastEvent);
+    }
+    this.appState.lastEvent = `created Playlist ${name.trim()}`;
+  }
+
+  private async switchPlaylist(playlistId: string): Promise<boolean> {
+    if (playlistId === this.playlists.activePlaylistId) return true;
+    const wasActive = this.appState.playback.status === "playing" || this.appState.playback.status === "paused";
+    this.playlists.updateActivePlayback({
+      positionSeconds: wasActive ? this.appState.playback.positionSeconds ?? 0 : 0,
+      playbackStatus: wasActive ? "resumable" : "stopped",
+    });
+    if (!await this.runPlayerCommand(() => this.player.stop())) return false;
+    const destination = this.playlists.activate(playlistId);
+    const current = this.queue.entries[this.queue.currentIndex];
+    this.appState.playback = current && destination.playbackStatus === "resumable"
+      ? { status: "paused", positionSeconds: destination.positionSeconds, currentTrackIdentity: current.track.identity, restored: true }
+      : current
+        ? { status: "stopped", positionSeconds: 0, currentTrackIdentity: current.track.identity }
+        : { status: "idle", currentTrackIdentity: null };
+    this.uiStateStore.dispatch({
+      type: "resetQueueSelection", index: current ? this.queue.currentIndex : 0, identities: this.queueIdentities(),
+    });
+    this.appState.lastEvent = `switched to Playlist ${destination.name}`;
+    this.syncQueueState();
+    return true;
   }
 
   private async nextTrack(): Promise<void> {
@@ -1280,6 +1317,10 @@ export class AppCoordinator {
   private syncQueueState(): void {
     this.appState.queue = this.queue.snapshot();
     this.appState.playlists = this.playlists.snapshot();
+  }
+
+  private get queue(): Queue {
+    return this.playlists.activeQueue;
   }
 
   private selectQueueIndex(index: number): void {

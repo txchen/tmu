@@ -169,6 +169,14 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
+        if (ui.playlistManager) {
+          if (isCtrlC(input, key)) {
+            await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+            if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
+          } else await routePlaylistManager(input, key, coordinator);
+          publication.notify("input");
+          return;
+        }
         if (ui.overlays.length > 0) {
           if (isCtrlC(input, key)) {
             await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
@@ -198,6 +206,14 @@ export function createTmuRoot(options: TmuRootOptions) {
         }
         if (!textInputFocused && input === "?") {
           coordinator.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
+          publication.notify("input");
+          return;
+        }
+        if (!textInputFocused && input === "P") {
+          const activeIndex = coordinator.appState.playlists.playlists.findIndex(
+            (playlist) => playlist.id === coordinator.appState.playlists.activePlaylistId,
+          );
+          coordinator.dispatchUi({ type: "openPlaylistManager", activeIndex: Math.max(0, activeIndex) });
           publication.notify("input");
           return;
         }
@@ -234,6 +250,62 @@ export function createTmuRoot(options: TmuRootOptions) {
       return () => render(snapshot.value, coordinator, options.noColor ?? process.env.NO_COLOR !== undefined);
     },
   });
+}
+
+async function routePlaylistManager(input: string, key: InputKey, coordinator: AppCoordinator): Promise<void> {
+  const manager = coordinator.uiState.playlistManager;
+  if (!manager) return;
+  if (manager.mode === "create") {
+    if (key.escape) coordinator.dispatchUi({ type: "cancelPlaylistEdit" });
+    else if (key.return) {
+      try {
+        await coordinator.dispatch({ type: "createPlaylist", name: manager.value });
+        coordinator.dispatchUi({ type: "dismissPlaylistManager" });
+      } catch (error) {
+        coordinator.dispatchUi({ type: "setPlaylistNameError", error: error instanceof Error ? error.message : String(error) });
+      }
+    } else {
+      const next = editTextValue(manager.value, manager.cursor, input, key);
+      coordinator.dispatchUi({ type: "editPlaylistName", value: next.value, cursor: next.cursor });
+    }
+    return;
+  }
+  const playlists = coordinator.appState.playlists.playlists;
+  if (key.escape) coordinator.dispatchUi({ type: "dismissPlaylistManager" });
+  else if (input === "c") coordinator.dispatchUi({ type: "beginCreatePlaylist" });
+  else if (key.return) {
+    const selected = playlists[manager.selectedIndex];
+    if (selected) await coordinator.dispatch({ type: "switchPlaylist", playlistId: selected.id });
+    coordinator.dispatchUi({ type: "dismissPlaylistManager" });
+  } else {
+    const jump = listJump(input, key, chordPending(coordinator.uiState), playlists.length, manager.selectedIndex);
+    if (jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
+    else if (coordinator.uiState.pendingVimChord) coordinator.dispatchUi({ type: "setPendingVimChord", pending: false });
+    const delta = input === "j" || key.downArrow ? 1 : input === "k" || key.upArrow ? -1 : 0;
+    const index = jump.index ?? (key.home ? 0
+      : key.end || input === "G" ? playlists.length - 1
+        : key.pageDown ? manager.selectedIndex + 10
+          : key.pageUp ? manager.selectedIndex - 10
+            : manager.selectedIndex + delta);
+    coordinator.dispatchUi({ type: "selectPlaylist", index, count: playlists.length });
+  }
+}
+
+function editTextValue(value: string, cursor: number, input: string, key: InputKey): { value: string; cursor: number } {
+  if (key.leftArrow) return { value, cursor: previousGraphemeBoundary(value, cursor) };
+  if (key.rightArrow) return { value, cursor: nextGraphemeBoundary(value, cursor) };
+  if (key.home) return { value, cursor: 0 };
+  if (key.end) return { value, cursor: value.length };
+  if (key.backspace && cursor > 0) {
+    const previous = previousGraphemeBoundary(value, cursor);
+    return { value: value.slice(0, previous) + value.slice(cursor), cursor: previous };
+  }
+  if (key.delete) {
+    const next = nextGraphemeBoundary(value, cursor);
+    return { value: value.slice(0, cursor) + value.slice(next), cursor };
+  }
+  if (!key.ctrl && !key.meta && input && !key.tab) return { value: value.slice(0, cursor) + input + value.slice(cursor), cursor: cursor + input.length };
+  return { value, cursor };
 }
 
 async function routeGlobalPlayback(
@@ -434,26 +506,14 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
   }
 
   const confirmation = activeConfirmation(coordinator);
-  if (confirmation) {
-    return h(Box, {
-      flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows,
-    }, () => [
-      tabHeader(uiState.activeTab, noColor),
-      h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () =>
-        confirmationModal(confirmation, uiState, noColor)),
-      h(Text, { dimColor: true }, () => "Modal open · unrelated actions suspended"),
-    ]);
-  }
+  if (confirmation) return modalScreen(snapshot, noColor, confirmationModal(confirmation, uiState, noColor));
 
   if (uiState.renameDialog) {
-    return h(Box, {
-      flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows,
-    }, () => [
-      tabHeader(uiState.activeTab, noColor),
-      h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () =>
-        renameTrackModal(uiState.renameDialog!, noColor)),
-      h(Text, { dimColor: true }, () => "Modal open · Enter Save · Esc Cancel · unrelated actions suspended"),
-    ]);
+    return modalScreen(snapshot, noColor, renameTrackModal(uiState.renameDialog, noColor), "Enter Save · Esc Cancel · ");
+  }
+
+  if (uiState.playlistManager) {
+    return modalScreen(snapshot, noColor, playlistManagerModal(appState.playlists, uiState.playlistManager, noColor));
   }
 
   const renderedLibraryResults = uiState.activeTab === "library"
@@ -467,7 +527,7 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     height: uiState.terminal.rows,
     position: "relative",
   }, () => [
-    tabHeader(uiState.activeTab, noColor),
+    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns),
     uiState.notification ? statusBanner(uiState.notification, noColor) : null,
     uiState.activeTab === "playback"
         ? playbackView(snapshot, coordinator, noColor)
@@ -477,6 +537,15 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     nowPlayingBar(snapshot, noColor),
     footer(uiState, incompleteLibrarySelection, noColor),
     uiState.overlays.at(-1) ? shortcutHelpModal(uiState, incompleteLibrarySelection, noColor) : null,
+  ]);
+}
+
+function modalScreen(snapshot: PublicationSnapshot, noColor: boolean, content: ReturnType<typeof h>, hint = "") {
+  const { appState, uiState } = snapshot;
+  return h(Box, { flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows }, () => [
+    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns),
+    h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () => content),
+    h(Text, { dimColor: true }, () => `Modal open · ${hint}unrelated actions suspended`),
   ]);
 }
 
@@ -520,14 +589,39 @@ function progressBar(positionSeconds: number, durationSeconds: number): string {
   return `[${"=".repeat(filled)}${"-".repeat(width - filled)}]`;
 }
 
-function tabHeader(active: UiState["activeTab"], noColor: boolean) {
+function tabHeader(active: UiState["activeTab"], noColor: boolean, playlistName = "Default", columns = 100) {
   const tab = (id: UiState["activeTab"], label: string) => h(Text, {
     bold: active === id, inverse: active === id, dimColor: active !== id,
     color: active === id && !noColor ? "cyan" : undefined,
   }, () => active === id ? `▸ ${label} ◂` : label);
   return h(Box, { borderStyle: "round", width: "100%", paddingX: 1 }, () => [
     tab("playback", "Player"), h(Text, () => "  "), tab("library", "Library"), h(Text, () => "  "),
-    tab("downloader", "Downloads"), h(Spacer), h(Text, { dimColor: true }, () => "[ prev · next ]"),
+    tab("downloader", "Downloads"), h(Spacer),
+    h(Text, { bold: true, wrap: "truncate-end", width: Math.max(8, Math.min(28, columns - 55)) }, () => `Playlist: ${playlistName}`),
+    h(Text, { dimColor: true }, () => "  [ prev · next ]"),
+  ]);
+}
+
+function activePlaylistName(appState: PublicationSnapshot["appState"]): string {
+  return appState.playlists.playlists.find((playlist) => playlist.id === appState.playlists.activePlaylistId)?.name ?? "Default";
+}
+
+function playlistManagerModal(
+  collection: PublicationSnapshot["appState"]["playlists"],
+  manager: NonNullable<UiState["playlistManager"]>,
+  noColor: boolean,
+) {
+  const rows = collection.playlists.slice(manager.scroll, manager.scroll + 10).map((playlist, offset) => {
+    const index = manager.scroll + offset;
+    return h(Text, { inverse: index === manager.selectedIndex, wrap: "truncate-end" }, () =>
+      `${index === manager.selectedIndex ? "›" : " "} ${playlist.id === collection.activePlaylistId ? "*" : " "} ${playlist.name} · ${playlist.entries.length}`);
+  });
+  return h(Box, { flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan", paddingX: 2, width: "70%" }, () => [
+    h(Text, { bold: true }, () => manager.mode === "create" ? "Create Playlist" : "Playlist Manager"),
+    ...(manager.mode === "create"
+      ? [h(Text, () => `Name: ${manager.value}│`), manager.error ? h(Text, { color: noColor ? undefined : "red" }, () => `Error: ${manager.error}`) : null]
+      : rows),
+    h(Text, { dimColor: true }, () => manager.mode === "create" ? "Enter Create · Esc Cancel" : "j/k or ↑/↓ Move · Enter Switch · c Create · Esc Close"),
   ]);
 }
 
@@ -1061,22 +1155,10 @@ type InputKey = {
 function editRenameDialog(input: string, key: InputKey, coordinator: AppCoordinator): void {
   const dialog = coordinator.uiState.renameDialog;
   if (!dialog) return;
-  let { value, cursor } = dialog;
-  if (key.leftArrow) cursor = previousGraphemeBoundary(value, cursor);
-  else if (key.rightArrow) cursor = nextGraphemeBoundary(value, cursor);
-  else if (key.home) cursor = 0;
-  else if (key.end) cursor = value.length;
-  else if (key.backspace && cursor > 0) {
-    const previousCursor = previousGraphemeBoundary(value, cursor);
-    value = value.slice(0, previousCursor) + value.slice(cursor);
-    cursor = previousCursor;
-  } else if (key.delete && cursor < value.length) {
-    value = value.slice(0, cursor) + value.slice(nextGraphemeBoundary(value, cursor));
-  } else if (input.length > 0 && !key.ctrl && !key.meta) {
-    value = value.slice(0, cursor) + input + value.slice(cursor);
-    cursor += input.length;
-  } else return;
-  coordinator.dispatchUi({ type: "editRenameDialog", value, cursor });
+  const next = editTextValue(dialog.value, dialog.cursor, input, key);
+  if (next.value !== dialog.value || next.cursor !== dialog.cursor) {
+    coordinator.dispatchUi({ type: "editRenameDialog", ...next });
+  }
 }
 
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
