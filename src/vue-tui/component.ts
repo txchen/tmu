@@ -783,16 +783,16 @@ function backgroundSoundPickerModal(
   });
   return h(Box, {
     flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
-    paddingX: 2, width: "50%",
+    paddingX: 2, width: "80%",
   }, () => [
-    h(Text, { bold: true }, () => "Choose Background Sound"),
+    h(Text, { bold: true }, () => "Choose Background Sound · j/k ↑/↓ · Enter · Esc"),
     ...rows,
-    h(Text, { dimColor: true }, () => "j/k ↑/↓ · Enter · Esc"),
+    h(Text, { dimColor: true }, () => "Missing sounds? macOS Settings download · Esc then u refresh"),
   ]);
 }
 
 function backgroundSoundPickerVisibleCount(terminalRows: number, terminalColumns: number, soundCount: number): number {
-  const chromeRows = terminalColumns < 70 ? 9 : 8;
+  const chromeRows = terminalColumns < 70 ? 11 : 8;
   return Math.max(1, Math.min(soundCount, terminalRows - chromeRows));
 }
 

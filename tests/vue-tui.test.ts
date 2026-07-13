@@ -185,8 +185,10 @@ describe("TMU top-level surface smoke", () => {
       volumePercent: 45,
     };
     const writes: string[] = [];
+    let reads = 0;
     const control = {
-      probe: async () => snapshot, read: async () => snapshot,
+      probe: async () => snapshot,
+      read: async () => { reads += 1; return snapshot; },
       setEnabled: async (enabled: boolean) => (writes.push(`enabled:${enabled}`), snapshot = { ...snapshot, enabled }),
       setSound: async (id: string) => (writes.push(`sound:${id}`), snapshot = { ...snapshot, sound: snapshot.sounds.find((sound) => sound.id === id)! }),
       setVolume: async (volumePercent: number) => (writes.push(`volume:${volumePercent}`), snapshot = { ...snapshot, volumePercent }),
@@ -205,8 +207,14 @@ describe("TMU top-level surface smoke", () => {
     expect(writes).toEqual(["enabled:true"]);
     await terminal.stdin.write("\r");
     expect(terminal.lastFrame()).toContain("Choose Background Sound");
+    expect(terminal.lastFrame()).toContain("Missing sounds? macOS Settings download · Esc then u refresh");
     expect(terminal.lastFrame()).toContain("Rain");
     expect(terminal.lastFrame()).toContain("Ocean");
+    await terminal.stdin.write("\x1b");
+    await terminal.stdin.write("u");
+    await sleep(0);
+    expect(reads).toBe(1);
+    await terminal.stdin.write("\r");
     await terminal.stdin.write("\x1b[B");
     await terminal.stdin.write("\r");
     expect(writes).toEqual(["enabled:true", "sound:Ocean"]);
