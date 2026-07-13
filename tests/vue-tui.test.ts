@@ -430,7 +430,7 @@ describe("TMU top-level surface smoke", () => {
     playlist.add(track);
     playlist.startAt(0);
     const coordinator = new AppCoordinator({
-      appState: createInitialAppState({}), uiState: createInitialUiState(),
+      appState: createInitialAppState({}, { backgroundSoundsCandidate: true }), uiState: createInitialUiState(),
       initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
     const hidden = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
@@ -444,7 +444,7 @@ describe("TMU top-level surface smoke", () => {
     coordinator.appState.activePlaylistContent.repeatAll = true;
 
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
-    for (const tab of ["playback", "library", "downloader"] as const) {
+    for (const tab of ["playback", "library", "downloader", "background"] as const) {
       coordinator.dispatchUi({ type: "switchTab", tab });
       const frame = terminal.lastFrame()!;
       expect(frame).toContain("── ▶ PLAYING · A Very Long Current T");

@@ -1,4 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
+import { readFile } from "node:fs/promises";
+import { runInNewContext } from "node:vm";
 import { createTmuApp } from "../src/app";
 import {
   BackgroundSoundsError,
@@ -7,6 +9,19 @@ import {
 } from "../src/background-sounds";
 
 describe("Background Sounds runtime boundary", () => {
+  test.each([
+    "comfortSoundsAvailable", "comfortSoundsEnabled", "setComfortSoundsEnabled:",
+    "selectedComfortSound", "setSelectedComfortSound:", "relativeVolume", "setRelativeVolume:",
+  ])("bundled helper rejects a missing %s selector", async (missingSelector) => {
+    const response = await runBundledHelper({ missingSelector });
+    expect(response).toMatchObject({ protocolVersion: 1, ok: false, code: "contract-mismatch" });
+  });
+
+  test("bundled helper rejects macOS when Background Sounds is unavailable", async () => {
+    const response = await runBundledHelper({ available: false });
+    expect(response).toMatchObject({ protocolVersion: 1, ok: false, code: "unavailable" });
+  });
+
   test.each([
     ["linux", "25.5.0", false],
     ["darwin", "24.9.0", false],
@@ -103,6 +118,33 @@ describe("Background Sounds runtime boundary", () => {
     await expect(control.probe()).rejects.toMatchObject({ code: "timeout" });
   });
 });
+
+async function runBundledHelper(options: { missingSelector?: string; available?: boolean }): Promise<Record<string, unknown>> {
+  const source = await readFile(new URL("../src/background-sounds.jxa", import.meta.url), "utf8");
+  const required = new Set([
+    "comfortSoundsAvailable", "comfortSoundsEnabled", "setComfortSoundsEnabled:",
+    "selectedComfortSound", "setSelectedComfortSound:", "relativeVolume", "setRelativeVolume:",
+  ]);
+  const settings = {
+    comfortSoundsAvailable: options.available ?? true,
+    respondsToSelector: (selector: string) => required.has(selector) && selector !== options.missingSelector,
+  };
+  const dollar = Object.assign((_value: unknown) => ({}), {
+    NSSelectorFromString: (selector: string) => selector,
+    NSBundle: { bundleWithPath: () => ({ load: true }) },
+    NSClassFromString: (name: string) => name === "HUComfortSoundsSettings" ? { sharedInstance: settings } : null,
+  });
+  const context: {
+    ObjC: { import: () => undefined; unwrap: (value: unknown) => unknown };
+    $: typeof dollar;
+    __result?: string;
+  } = {
+    ObjC: { import: () => undefined, unwrap: (value: unknown) => value },
+    $: dollar,
+  };
+  runInNewContext(`${source}\nglobalThis.__result = run(["probe"]);`, context);
+  return JSON.parse(context.__result!) as Record<string, unknown>;
+}
 
 describe("Background Sounds session lifecycle", () => {
   const snapshot = {
