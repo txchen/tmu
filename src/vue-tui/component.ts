@@ -666,6 +666,13 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
     bold: index === selected,
     color: index === selected && !noColor ? "cyan" : undefined,
   }, () => `${index === selected ? "› " : "  "}${label.padEnd(20)}${value}`);
+  const soundRow = (sound: string) => h(Box, { flexDirection: "row" }, () => [
+    h(Text, {
+      bold: selected === 1,
+      color: selected === 1 && !noColor ? "cyan" : undefined,
+    }, () => `${selected === 1 ? "› " : "  "}${"Sound".padEnd(20)}${sound}`),
+    h(Text, { dimColor: true }, () => " · Press Enter to choose"),
+  ]);
   if (state.status === "hidden") return null;
   if (state.status === "candidate" || state.status === "probing") {
     return h(Box, { flexDirection: "column", flexGrow: 1, paddingX: 2, paddingY: 1 }, () => [
@@ -691,7 +698,7 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
     h(Text, { bold: true }, () => "Background Sounds · macOS"),
     h(Text, () => ""),
     row(0, "Background Sounds", snapshotValue.enabled ? "● On" : "○ Off"),
-    row(1, "Sound", `${snapshotValue.sound.label} · Enter to choose`),
+    soundRow(snapshotValue.sound.label),
     row(2, "Volume", `[${"■".repeat(filled)}${"·".repeat(10 - filled)}] ${snapshotValue.volumePercent}%${pendingVolume === null ? "" : ` → ${pendingVolume}% pending`}`),
     h(Text, { dimColor: true }, () => `  ${"State".padEnd(20)}${busy ? "Refreshing from macOS…" : stale ? "Stale · press u to retry" : "Confirmed from macOS"}`),
     stale ? h(Text, { color: noColor ? undefined : "red" }, () => state.error) : null,

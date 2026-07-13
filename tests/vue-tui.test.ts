@@ -55,7 +55,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("u");
     await sleep(0);
     expect(terminal.lastFrame()).toContain("Background Sounds   ● On");
-    expect(terminal.lastFrame()).toContain("Sound               Rain · Enter to choose");
+    expect(terminal.lastFrame()).toContain("Sound               Rain · Press Enter to choose");
     expect(terminal.lastFrame()).toContain("60%");
     expect(terminal.lastFrame()).toContain("Confirmed from macOS");
     await terminal.stdin.write("?");
@@ -98,7 +98,7 @@ describe("TMU top-level surface smoke", () => {
     const frame = terminal.lastFrame()!;
     expect(frame).toContain("Background Sounds · macOS");
     expect(frame).toContain("Background Sounds   ○ Off");
-    expect(frame).toContain("Sound               Rain · Enter to choose");
+    expect(frame).toContain("Sound               Rain · Press Enter to choose");
     expect(frame).toContain("Confirmed from macOS");
     expect(frame.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
   });
@@ -135,7 +135,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\r");
 
     expect(writes).toEqual(["sound-16"]);
-    expect(terminal.lastFrame()).toContain("Sound 16 · Enter to choose");
+    expect(terminal.lastFrame()).toContain("Sound 16 · Press Enter to choose");
   });
 
   test("scrolls the one-column picker when terminal height cannot show all 16 sounds", async () => {
@@ -227,7 +227,7 @@ describe("TMU top-level surface smoke", () => {
 
     expect(writes).toEqual(["enabled:true", "sound:Ocean", "volume:50"]);
     expect(terminal.lastFrame()).toContain("● On");
-    expect(terminal.lastFrame()).toContain("Ocean · Enter to choose");
+    expect(terminal.lastFrame()).toContain("Ocean · Press Enter to choose");
     expect(terminal.lastFrame()).toContain("50%");
     expect(coordinator.uiState.background.selectedRow).toBe(2);
     await terminal.stdin.write("k");
