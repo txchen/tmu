@@ -5,6 +5,14 @@ import { tmpdir } from "node:os";
 import { createDefaultTmuConfig, loadTmuConfig } from "../src/config";
 
 describe("TMU Config", () => {
+  test("isolates default persistence inside the test state directory", () => {
+    const config = createDefaultTmuConfig();
+
+    expect(process.env.XDG_STATE_HOME).toBeTruthy();
+    expect(config.persistence.lastPlaylistSnapshotPath)
+      .toBe(join(process.env.XDG_STATE_HOME!, "tmu", "last-playlists.json"));
+  });
+
   test("contains YouTube settings without Provider selection or removed source config", () => {
     const config = createDefaultTmuConfig();
     expect(config).not.toHaveProperty("youtubeCache");
@@ -28,5 +36,14 @@ describe("TMU Config", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("keeps a missing Playlist snapshot beside a configured legacy Queue snapshot", () => {
+    const config = createDefaultTmuConfig({
+      persistence: { lastQueueSnapshotPath: "/tmp/tmu-test-state/last-queue.json" },
+    });
+
+    expect(config.persistence.lastPlaylistSnapshotPath)
+      .toBe("/tmp/tmu-test-state/last-playlists.json");
   });
 });

@@ -142,10 +142,10 @@ function mergeConfig(base: TmuConfig, overrides: TmuConfigInput): TmuConfig {
 function normalizeConfigInput(input: TmuConfigInput): TmuConfigInput {
   const maybeYoutube = input.youtube as (TmuConfig["youtube"] & { cookies_from_browser?: string }) | undefined;
   const persistence = input.persistence;
-  const normalizedPersistence = persistence?.lastPlaylistSnapshotPath && !persistence.lastPlaylistSnapshotPath
+  const normalizedPersistence = persistence?.lastQueueSnapshotPath && !persistence.lastPlaylistSnapshotPath
     ? {
       ...persistence,
-      lastPlaylistSnapshotPath: join(dirname(persistence.lastPlaylistSnapshotPath), "last-playlists.json"),
+      lastPlaylistSnapshotPath: join(dirname(persistence.lastQueueSnapshotPath), "last-playlists.json"),
     }
     : persistence;
   if (!maybeYoutube?.cookies_from_browser) {
