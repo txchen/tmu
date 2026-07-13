@@ -713,9 +713,7 @@ async function routeBackground(input: string, key: InputKey, coordinator: AppCoo
   if (state.status !== "ready") return true;
   const row = coordinator.uiState.background.selectedRow;
   if (row === 0) {
-    if (key.leftArrow) await coordinator.setBackgroundSoundsEnabled(false);
-    else if (key.rightArrow) await coordinator.setBackgroundSoundsEnabled(true);
-    else await coordinator.setBackgroundSoundsEnabled(!state.snapshot.enabled);
+    if (key.return) await coordinator.setBackgroundSoundsEnabled(!state.snapshot.enabled);
   }
   else if (row === 1 && key.return) {
     const activeIndex = state.snapshot.sounds.findIndex((sound) => sound.id === state.snapshot.sound.id);
@@ -1162,8 +1160,8 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
     title: "BACKGROUND SOUNDS",
     rows: [
       ["j/k, ↑/↓", "Move selection"], ["u", "Refresh or retry macOS state"],
-      ["Enter on Sound", "Open sound picker"], ["←/→", "Set enabled state or adjust volume"],
-      ["Enter", "Toggle enabled state or choose sound"],
+      ["Enter on On/Off", "Activate or deactivate Background Sounds"],
+      ["Enter on Sound", "Open sound picker"], ["←/→ on Volume", "Adjust Background Sounds volume"],
     ],
   }];
   return [
@@ -1305,9 +1303,11 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
             ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
             : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.activeTab === "background"
-            ? ui.background.selectedRow === 1
-              ? [["j/k", "Move"], ["Enter", "Choose Sound"], ["u", "Refresh"], ["?", "Help"]]
-              : [["j/k", "Move"], ["←/→", "Adjust"], ["Enter", "Activate"], ["u", "Refresh"], ["?", "Help"]]
+            ? ui.background.selectedRow === 0
+              ? [["j/k", "Move"], ["Enter", "Activate/Deactivate"], ["u", "Refresh"], ["?", "Help"]]
+              : ui.background.selectedRow === 1
+                ? [["j/k", "Move"], ["Enter", "Choose Sound"], ["u", "Refresh"], ["?", "Help"]]
+                : [["j/k", "Move"], ["←/→", "Adjust Volume"], ["u", "Refresh"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];

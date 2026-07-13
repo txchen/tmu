@@ -196,7 +196,10 @@ describe("TMU top-level surface smoke", () => {
     await coordinator.enterBackgroundSounds();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
 
+    expect(terminal.lastFrame()).toContain("Enter Activate/Deactivate");
     await terminal.stdin.write("\x1b[C");
+    expect(writes).toEqual([]);
+    await terminal.stdin.write("\r");
     await terminal.stdin.write("j");
     await terminal.stdin.write("\x1b[C");
     expect(writes).toEqual(["enabled:true"]);
@@ -208,6 +211,8 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\r");
     expect(writes).toEqual(["enabled:true", "sound:Ocean"]);
     await terminal.stdin.write("j");
+    expect(terminal.lastFrame()).toContain("←/→ Adjust Volume");
+    expect(terminal.lastFrame()).not.toContain("Enter Activate");
     await terminal.stdin.write("\x1b[C");
     expect(terminal.lastFrame()).toContain("45% → 50% pending");
     await sleep(175);
@@ -221,6 +226,8 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b[A");
     expect(coordinator.uiState.background.selectedRow).toBe(0);
     await terminal.stdin.write("\x1b[D");
+    expect(writes.at(-1)).toBe("volume:50");
+    await terminal.stdin.write("\r");
     expect(writes.at(-1)).toBe("enabled:false");
 
     await terminal.stdin.write("j");
