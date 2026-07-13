@@ -27,26 +27,29 @@ function soundOption(sound) {
   return { id: id, label: label };
 }
 
-function discoverSounds(settings, bundle) {
+function discoverSounds(settings) {
   const soundClass = $.NSClassFromString("HUComfortSound");
-  if (!soundClass || !responds(soundClass, "soundWithName:path:andGroup:")) {
-    throw new Error("The framework sound factory is unavailable");
+  const assetManagerClass = $.NSClassFromString("HUComfortSoundsAssetManager");
+  if (!soundClass || !responds(soundClass, "comfortSoundWithAsset:") || !assetManagerClass) {
+    throw new Error("The framework installed-sound inventory is unavailable");
   }
-  const fileManager = $.NSFileManager.defaultManager;
+  const assetManager = assetManagerClass.alloc.init;
+  const assetController = assetManager.assetController;
+  if (!assetController || !responds(assetController, "refreshInstalledAssetsSynchronously")) {
+    throw new Error("The framework installed-asset inventory is unavailable");
+  }
   const selected = settings.selectedComfortSound;
   const values = [selected];
-  const resourcePaths = ObjC.unwrap(bundle.pathsForResourcesOfTypeInDirectory("m4a", ""));
-  for (const resourcePathValue of Array.isArray(resourcePaths) ? resourcePaths : []) {
-    const resourcePath = stringValue(resourcePathValue);
-    const name = stringValue($(resourcePath).lastPathComponent.stringByDeletingPathExtension);
-    if (name) values.push(soundClass.soundWithNamePathAndGroup(name, resourcePath, 0));
+  const installedAssets = ObjC.unwrap(assetController.refreshInstalledAssetsSynchronously);
+  for (const asset of Array.isArray(installedAssets) ? installedAssets : []) {
+    values.push(soundClass.comfortSoundWithAsset(asset));
   }
   const seen = {};
   const sounds = [];
   const objects = {};
   for (const sound of values) {
     const path = stringValue(sound.path);
-    const usable = Boolean(path) && Boolean(fileManager.fileExistsAtPath(path));
+    const usable = responds(sound, "isInstalled") && Boolean(sound.isInstalled) && Boolean(path);
     if (!usable) continue;
     const option = soundOption(sound);
     if (!seen[option.id]) {
@@ -58,9 +61,9 @@ function discoverSounds(settings, bundle) {
   return { sounds: sounds, objects: objects };
 }
 
-function readSnapshot(settings, bundle) {
+function readSnapshot(settings) {
   const selected = soundOption(settings.selectedComfortSound);
-  const discovered = discoverSounds(settings, bundle);
+  const discovered = discoverSounds(settings);
   const sounds = discovered.sounds;
   if (!sounds.some(function (sound) { return sound.id === selected.id; })) {
     throw new Error("The selected sound is not immediately usable");
@@ -103,11 +106,11 @@ function run(argv) {
       let id;
       try { id = JSON.parse(argv[1]); } catch (_) { return failure("contract-mismatch", "Invalid sound id"); }
       if (typeof id !== "string" || !id) return failure("contract-mismatch", "Invalid sound id");
-      const discovered = discoverSounds(settings, bundle);
+      const discovered = discoverSounds(settings);
       if (!discovered.objects[id]) return failure("unavailable", "Open System Settings to download this Background Sound, then refresh.");
       settings.setSelectedComfortSound(discovered.objects[id]);
     }
-    return envelope(true, { snapshot: readSnapshot(settings, bundle) });
+    return envelope(true, { snapshot: readSnapshot(settings) });
   } catch (error) {
     return failure("contract-mismatch", error && error.message ? error.message : error);
   }

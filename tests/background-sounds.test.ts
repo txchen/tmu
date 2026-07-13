@@ -23,6 +23,27 @@ describe("Background Sounds runtime boundary", () => {
     expect(response).toMatchObject({ protocolVersion: 1, ok: false, code: "unavailable" });
   });
 
+  test("bundled helper excludes catalog sounds whose files exist but are not installed", async () => {
+    const response = await runBundledHelperWithCatalog();
+    expect(response).toMatchObject({
+      protocolVersion: 1,
+      ok: true,
+      snapshot: {
+        sound: { id: "Rain" },
+        sounds: [{ id: "Rain" }],
+      },
+    });
+  });
+
+  test("bundled helper includes sounds from the installed MobileAsset inventory", async () => {
+    const response = await runBundledHelperWithCatalog(true);
+    expect(response).toMatchObject({
+      protocolVersion: 1,
+      ok: true,
+      snapshot: { sounds: [{ id: "Rain" }, { id: "Ocean" }] },
+    });
+  });
+
   test.each([
     ["linux", "25.5.0", false],
     ["darwin", "24.9.0", false],
@@ -162,6 +183,58 @@ async function runBundledHelper(options: { missingSelector?: string; available?:
     NSSelectorFromString: (selector: string) => selector,
     NSBundle: { bundleWithPath: () => ({ load: true }) },
     NSClassFromString: (name: string) => name === "HUComfortSoundsSettings" ? { sharedInstance: settings } : null,
+  });
+  const context: {
+    ObjC: { import: () => undefined; unwrap: (value: unknown) => unknown };
+    $: typeof dollar;
+    __result?: string;
+  } = {
+    ObjC: { import: () => undefined, unwrap: (value: unknown) => value },
+    $: dollar,
+  };
+  runInNewContext(`${source}\nglobalThis.__result = run(["probe"]);`, context);
+  return JSON.parse(context.__result!) as Record<string, unknown>;
+}
+
+async function runBundledHelperWithCatalog(includeInstalledAsset = false): Promise<Record<string, unknown>> {
+  const source = await readFile(new URL("../src/background-sounds.jxa", import.meta.url), "utf8");
+  const option = (name: string, installed: boolean) => ({
+    name,
+    localizedName: name,
+    path: `/sounds/${name}.m4a`,
+    isInstalled: installed,
+    respondsToSelector: (selector: string) => selector === "isInstalled",
+  });
+  const selected = option("Rain", true);
+  const required = new Set([
+    "comfortSoundsAvailable", "comfortSoundsEnabled", "setComfortSoundsEnabled:",
+    "selectedComfortSound", "setSelectedComfortSound:", "relativeVolume", "setRelativeVolume:",
+  ]);
+  const settings = {
+    comfortSoundsAvailable: true,
+    comfortSoundsEnabled: false,
+    selectedComfortSound: selected,
+    relativeVolume: 0.45,
+    respondsToSelector: (selector: string) => required.has(selector),
+  };
+  const soundClass = {
+    respondsToSelector: (selector: string) => selector === "comfortSoundWithAsset:",
+    comfortSoundWithAsset: (asset: { name: string }) => option(asset.name, true),
+  };
+  const assetController = {
+    respondsToSelector: (selector: string) => selector === "refreshInstalledAssetsSynchronously",
+    refreshInstalledAssetsSynchronously: includeInstalledAsset ? [{ name: "Ocean" }] : [],
+  };
+  const assetManagerClass = { alloc: { init: { assetController } } };
+  const dollar = Object.assign((value: unknown) => ({
+    lastPathComponent: { stringByDeletingPathExtension: String(value).split("/").at(-1)?.replace(/\.m4a$/, "") },
+  }), {
+    NSSelectorFromString: (selector: string) => selector,
+    NSBundle: { bundleWithPath: () => ({ load: true, pathsForResourcesOfTypeInDirectory: () => ["/sounds/Ocean.m4a"] }) },
+    NSFileManager: { defaultManager: { fileExistsAtPath: () => true } },
+    NSClassFromString: (name: string) => name === "HUComfortSoundsSettings" ? { sharedInstance: settings }
+      : name === "HUComfortSound" ? soundClass
+        : name === "HUComfortSoundsAssetManager" ? assetManagerClass : null,
   });
   const context: {
     ObjC: { import: () => undefined; unwrap: (value: unknown) => unknown };
