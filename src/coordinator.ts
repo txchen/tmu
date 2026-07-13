@@ -219,6 +219,9 @@ export class AppCoordinator {
         case "switchPlaylist":
           await this.switchPlaylist(intent.playlistId);
           return;
+        case "deletePlaylist":
+          await this.deletePlaylist(intent.playlistId);
+          return;
       }
     } finally {
       this.notifyStateChanged();
@@ -675,6 +678,28 @@ export class AppCoordinator {
       throw new Error(this.appState.lastEvent);
     }
     this.appState.lastEvent = `created Playlist ${name.trim()}`;
+  }
+
+  private async deletePlaylist(playlistId: string): Promise<void> {
+    const collection = this.playlists.snapshot();
+    if (collection.playlists.length === 1) {
+      this.recordOperationFeedback("warning", "cannot delete the sole remaining Playlist");
+      return;
+    }
+    const deletedIndex = collection.playlists.findIndex((playlist) => playlist.id === playlistId);
+    if (deletedIndex < 0) throw new Error(`Playlist is missing: ${playlistId}`);
+    const deleted = collection.playlists[deletedIndex]!;
+    let replacementId = collection.activePlaylistId;
+    if (playlistId === collection.activePlaylistId) {
+      replacementId = collection.playlists[deletedIndex + 1]?.id ?? collection.playlists[deletedIndex - 1]!.id;
+      if (!await this.switchPlaylist(replacementId)) return;
+    }
+    this.playlists.removeInactive(playlistId);
+    this.syncQueueState();
+    const remaining = this.playlists.snapshot().playlists;
+    const replacementIndex = Math.min(deletedIndex, remaining.length - 1);
+    this.uiStateStore.dispatch({ type: "selectPlaylist", index: replacementIndex, count: remaining.length });
+    this.recordOperationFeedback("success", `deleted Playlist ${deleted.name}`);
   }
 
   private async switchPlaylist(playlistId: string): Promise<boolean> {

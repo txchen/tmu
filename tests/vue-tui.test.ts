@@ -24,6 +24,153 @@ class StopCountingPlayer extends NoopPlayer {
 }
 
 describe("TMU top-level surface smoke", () => {
+  test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
+    const player = new StopCountingPlayer();
+    const { coordinator } = createTmuApp({ player });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("x");
+    expect(terminal.lastFrame()).toContain("cannot delete the sole remaining Playlist");
+    expect(coordinator.appState.playlists.playlists).toHaveLength(1);
+
+    await terminal.stdin.write("c");
+    await terminal.stdin.write("Road");
+    await terminal.stdin.write("\r");
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("x");
+    expect(terminal.lastFrame()).toContain("Delete Playlist “Road”?");
+    expect(terminal.lastFrame()).toContain("0 Tracks");
+    await terminal.stdin.write("\x1b");
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Road"]);
+    expect(coordinator.appState.playlists.playlists[1]?.id).toBe(coordinator.appState.playlists.activePlaylistId);
+    expect(player.stopCount).toBe(1);
+  });
+
+  test("deletes inactive and Active Playlists with deterministic selection and restart restoration", async () => {
+    const persistence = new InMemoryLastPlaylistSnapshotPersistence();
+    const player = new StopCountingPlayer();
+    const first = createTmuApp({ player, playlistSnapshotPersistence: persistence });
+    await first.coordinator.start();
+    const defaultId = first.coordinator.appState.playlists.activePlaylistId;
+    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("shared", "Shared") });
+    await first.coordinator.dispatch({ type: "createPlaylist", name: "Middle" });
+    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("middle", "Middle Track") });
+    const middleId = first.coordinator.appState.playlists.activePlaylistId;
+    await first.coordinator.dispatch({ type: "createPlaylist", name: "Last" });
+    await first.coordinator.dispatch({ type: "addToQueue", target: cachedTrack("shared", "Shared") });
+    const lastId = first.coordinator.appState.playlists.activePlaylistId;
+    const terminal = await render(createTmuRoot({ coordinator: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("g");
+    await terminal.stdin.write("g");
+    const stopsBeforeInactiveDelete = player.stopCount;
+    await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
+    expect(first.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Middle", "Last"]);
+    expect(first.coordinator.appState.playlists.activePlaylistId).toBe(lastId);
+    expect(player.stopCount).toBe(stopsBeforeInactiveDelete);
+    expect(first.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0 });
+    expect(first.coordinator.appState.playlists.playlists[0]?.entries.map((entry) => entry.track.title)).toEqual(["Middle Track"]);
+    expect(first.coordinator.appState.playlists.playlists[1]?.entries.map((entry) => entry.track.title)).toEqual(["Shared"]);
+
+    await terminal.stdin.write("\r");
+    await terminal.stdin.write("P");
+    const stopsBeforeActiveDelete = player.stopCount;
+    await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
+    expect(first.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Last"]);
+    expect(first.coordinator.appState.playlists.activePlaylistId).toBe(lastId);
+    expect(first.coordinator.appState.queue.entries.map((entry) => entry.track.title)).toEqual(["Shared"]);
+    expect(first.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0, mode: "browse" });
+    expect(player.stopCount).toBe(stopsBeforeActiveDelete + 1);
+
+    const restoredPlayer = new StopCountingPlayer();
+    const restored = createTmuApp({ player: restoredPlayer, playlistSnapshotPersistence: persistence });
+    await restored.coordinator.start();
+    expect(restored.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Last"]);
+    expect(restored.coordinator.appState.playlists.activePlaylistId).toBe(lastId);
+    expect(restored.coordinator.appState.queue.entries.map((entry) => entry.track.identity.stableId)).toEqual(["shared"]);
+    expect(restored.coordinator.appState.playback.status).not.toBe("playing");
+    expect(restoredPlayer.stopCount).toBe(0);
+    expect(defaultId).not.toBe(middleId);
+  });
+
+  test("deleting the last Active Playlist falls back to the previous row", async () => {
+    const player = new StopCountingPlayer();
+    const { coordinator } = createTmuApp({ player });
+    const previousId = coordinator.appState.playlists.activePlaylistId;
+    await coordinator.dispatch({ type: "createPlaylist", name: "Last" });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default"]);
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(previousId);
+    expect(coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 0, mode: "browse" });
+  });
+
+  test("deleting an Active middle row activates the next Playlist", async () => {
+    const player = new StopCountingPlayer();
+    const { coordinator } = createTmuApp({ player });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("default", "Default Track") });
+    await coordinator.dispatch({ type: "createPlaylist", name: "Middle" });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("middle", "Middle Track") });
+    await coordinator.dispatch({ type: "createPlaylist", name: "Last" });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack("last", "Last Track") });
+    const middleId = coordinator.appState.playlists.playlists[1]!.id;
+    const lastId = coordinator.appState.playlists.playlists[2]!.id;
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: middleId });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Last"]);
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(lastId);
+    expect(coordinator.appState.playlists.playlists[0]?.entries.map((entry) => entry.track.title)).toEqual(["Default Track"]);
+    expect(coordinator.appState.playlists.playlists[1]?.entries.map((entry) => entry.track.title)).toEqual(["Last Track"]);
+    expect(coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 1, mode: "browse" });
+  });
+
+  test("Playlist deletion never invokes YouTube Cache deletion", async () => {
+    let cacheDeletionCalls = 0;
+    const track = cachedTrack("kept-in-cache", "Kept in Cache");
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache",
+      listTracks: () => [track], searchTracks: () => [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/kept-in-cache.opus" }),
+      refresh: () => undefined, listCacheEntries: () => [], listIncompleteEntries: () => [],
+      findByIdentity: () => ({
+        track, availability: { status: "available" },
+        metadata: { videoId: "kept-in-cache", title: track.title, uploader: "Cache Artist", cachedAt: "2026-07-12T00:00:00.000Z", mediaFileName: "kept-in-cache.opus", container: "opus" },
+        metadataPath: "/cache/kept-in-cache.json", mediaPath: "/cache/kept-in-cache.opus",
+      }),
+      renameTrack: async () => track,
+      deleteCacheEntry: async () => { cacheDeletionCalls += 1; return true; },
+      cleanupIncompleteEntry: async () => false,
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new NoopPlayer(),
+    });
+    await coordinator.dispatch({ type: "createPlaylist", name: "Disposable" });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+
+    await terminal.stdin.write("P");
+    await terminal.stdin.write("x");
+    await terminal.stdin.write("y");
+
+    expect(cacheDeletionCalls).toBe(0);
+    expect(provider.listTracks()).toEqual([track]);
+  });
+
   test("renames the selected Playlist through modal text capture and keeps it selected", async () => {
     const { coordinator } = createTmuApp();
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });

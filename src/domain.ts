@@ -6,6 +6,7 @@ export const YOUTUBE_CACHE_PROVIDER_ID = "youtube-cache" as const;
 export type ProviderId = typeof YOUTUBE_CACHE_PROVIDER_ID;
 export type ConfirmationKind =
   | "clear-queue"
+  | "delete-playlist"
   | "cancel-download"
   | "remove-pending-download"
   | "delete-cache"
@@ -309,6 +310,7 @@ export type AppIntent =
   | { type: "renamePlaylist"; playlistId: string; name: string }
   | { type: "movePlaylist"; playlistId: string; delta: -1 | 1 }
   | { type: "switchPlaylist"; playlistId: string }
+  | { type: "deletePlaylist"; playlistId: string }
   | { type: "cacheOperation"; operation: "request-delete"; identity: TrackIdentity }
   | { type: "cacheOperation"; operation: "request-cleanup"; stem: string }
   | { type: "cacheOperation"; operation: "confirm" | "cancel" }

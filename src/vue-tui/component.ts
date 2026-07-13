@@ -280,6 +280,13 @@ async function routePlaylistManager(input: string, key: InputKey, coordinator: A
   const selected = playlists[manager.selectedIndex];
   if (key.escape) coordinator.dispatchUi({ type: "dismissPlaylistManager" });
   else if (input === "c") coordinator.dispatchUi({ type: "beginCreatePlaylist" });
+  else if (input === "x") {
+    if (playlists.length === 1 && selected) {
+      await coordinator.dispatch({ type: "deletePlaylist", playlistId: selected.id });
+      coordinator.dispatchUi({ type: "setPlaylistNameError", error: "cannot delete the sole remaining Playlist" });
+    }
+    else if (selected) coordinator.dispatchUi({ type: "requestConfirmation", kind: "delete-playlist", target: selected.id });
+  }
   else if (input === "e") {
     if (selected) coordinator.dispatchUi({ type: "beginRenamePlaylist", name: selected.name });
   } else if (input === "J" || input === "K") {
@@ -636,8 +643,8 @@ function playlistManagerModal(
     h(Text, { bold: true }, () => manager.mode === "create" ? "Create Playlist" : manager.mode === "rename" ? "Rename Playlist" : "Playlist Manager"),
     ...(manager.mode !== "browse"
       ? [h(Text, () => `Name: ${manager.value}│`), manager.error ? h(Text, { color: noColor ? undefined : "red" }, () => `Error: ${manager.error}`) : null]
-      : rows),
-    h(Text, { dimColor: true }, () => manager.mode === "create" ? "Enter Create · Esc Cancel" : manager.mode === "rename" ? "Enter Save · Esc Cancel" : "j/k Move · Enter Switch · c Create · e Rename · J/K Reorder · Esc Close"),
+      : [...rows, manager.error ? h(Text, { color: noColor ? undefined : "red" }, () => manager.error) : null]),
+    h(Text, { dimColor: true }, () => manager.mode === "create" ? "Enter Create · Esc Cancel" : manager.mode === "rename" ? "Enter Save · Esc Cancel" : "j/k Move · Enter Switch · c Create · e Rename · x Delete · J/K Reorder · Esc Close"),
   ]);
 }
 
