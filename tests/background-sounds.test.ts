@@ -187,10 +187,12 @@ async function runBundledHelper(options: { missingSelector?: string; available?:
   const context: {
     ObjC: { import: () => undefined; unwrap: (value: unknown) => unknown };
     $: typeof dollar;
+    Ref: () => object;
     __result?: string;
   } = {
     ObjC: { import: () => undefined, unwrap: (value: unknown) => value },
     $: dollar,
+    Ref: () => ({}),
   };
   runInNewContext(`${source}\nglobalThis.__result = run(["probe"]);`, context);
   return JSON.parse(context.__result!) as Record<string, unknown>;
@@ -218,31 +220,36 @@ async function runBundledHelperWithCatalog(includeInstalledAsset = false): Promi
     respondsToSelector: (selector: string) => required.has(selector),
   };
   const soundClass = {
-    respondsToSelector: (selector: string) => selector === "comfortSoundWithAsset:",
-    comfortSoundWithAsset: (asset: { name: string }) => option(asset.name, true),
+    respondsToSelector: (selector: string) => selector === "soundWithName:path:andGroup:",
+    soundWithNamePathAndGroup: (name: string, path: string) => ({ ...option(String(name), true), path }),
   };
-  const assetController = {
-    respondsToSelector: (selector: string) => selector === "refreshInstalledAssetsSynchronously",
-    refreshInstalledAssetsSynchronously: includeInstalledAsset ? [{ name: "Ocean" }] : [],
+  const properties = {
+    objectForKey: (key: string) => key === "SoundName" ? "Ocean" : key === "SoundGroup" ? 4 : null,
   };
-  const assetManagerClass = { alloc: { init: { assetController } } };
   const dollar = Object.assign((value: unknown) => ({
     lastPathComponent: { stringByDeletingPathExtension: String(value).split("/").at(-1)?.replace(/\.m4a$/, "") },
   }), {
     NSSelectorFromString: (selector: string) => selector,
     NSBundle: { bundleWithPath: () => ({ load: true, pathsForResourcesOfTypeInDirectory: () => ["/sounds/Ocean.m4a"] }) },
-    NSFileManager: { defaultManager: { fileExistsAtPath: () => true } },
+    NSFileManager: { defaultManager: {
+      contentsOfDirectoryAtPathError: () => includeInstalledAsset ? ["ocean.asset"] : [],
+      fileExistsAtPath: () => true,
+    } },
+    NSDictionary: { dictionaryWithContentsOfFile: () => ({
+      objectForKey: (key: string) => key === "MobileAssetProperties" ? properties : null,
+    }) },
     NSClassFromString: (name: string) => name === "HUComfortSoundsSettings" ? { sharedInstance: settings }
-      : name === "HUComfortSound" ? soundClass
-        : name === "HUComfortSoundsAssetManager" ? assetManagerClass : null,
+      : name === "HUComfortSound" ? soundClass : null,
   });
   const context: {
     ObjC: { import: () => undefined; unwrap: (value: unknown) => unknown };
     $: typeof dollar;
+    Ref: () => object;
     __result?: string;
   } = {
     ObjC: { import: () => undefined, unwrap: (value: unknown) => value },
     $: dollar,
+    Ref: () => ({}),
   };
   runInNewContext(`${source}\nglobalThis.__result = run(["probe"]);`, context);
   return JSON.parse(context.__result!) as Record<string, unknown>;

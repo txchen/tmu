@@ -2,6 +2,7 @@ ObjC.import("Foundation");
 
 const PROTOCOL_VERSION = 1;
 const FRAMEWORK = "/System/Library/PrivateFrameworks/HearingUtilities.framework";
+const INSTALLED_ASSET_ROOT = "/System/Library/AssetsV2/com_apple_MobileAsset_ComfortSoundsAssets";
 
 function envelope(ok, body) {
   return JSON.stringify(Object.assign({ protocolVersion: PROTOCOL_VERSION, ok: ok }, body));
@@ -29,27 +30,32 @@ function soundOption(sound) {
 
 function discoverSounds(settings) {
   const soundClass = $.NSClassFromString("HUComfortSound");
-  const assetManagerClass = $.NSClassFromString("HUComfortSoundsAssetManager");
-  if (!soundClass || !responds(soundClass, "comfortSoundWithAsset:") || !assetManagerClass) {
+  if (!soundClass || !responds(soundClass, "soundWithName:path:andGroup:")) {
     throw new Error("The framework installed-sound inventory is unavailable");
   }
-  const assetManager = assetManagerClass.alloc.init;
-  const assetController = assetManager.assetController;
-  if (!assetController || !responds(assetController, "refreshInstalledAssetsSynchronously")) {
-    throw new Error("The framework installed-asset inventory is unavailable");
-  }
+  const fileManager = $.NSFileManager.defaultManager;
   const selected = settings.selectedComfortSound;
   const values = [selected];
-  const installedAssets = ObjC.unwrap(assetController.refreshInstalledAssetsSynchronously);
-  for (const asset of Array.isArray(installedAssets) ? installedAssets : []) {
-    values.push(soundClass.comfortSoundWithAsset(asset));
+  const entries = ObjC.unwrap(fileManager.contentsOfDirectoryAtPathError(INSTALLED_ASSET_ROOT, Ref()));
+  for (const entryValue of Array.isArray(entries) ? entries : []) {
+    const entry = stringValue(entryValue);
+    if (!entry.endsWith(".asset")) continue;
+    const assetRoot = INSTALLED_ASSET_ROOT + "/" + entry;
+    const info = $.NSDictionary.dictionaryWithContentsOfFile(assetRoot + "/Info.plist");
+    const properties = info && info.objectForKey("MobileAssetProperties");
+    const name = properties && stringValue(properties.objectForKey("SoundName"));
+    const group = properties && Number(ObjC.unwrap(properties.objectForKey("SoundGroup")));
+    const assetData = assetRoot + "/AssetData";
+    if (name && Number.isInteger(group) && fileManager.fileExistsAtPath(assetData)) {
+      values.push(soundClass.soundWithNamePathAndGroup(name, assetData, group));
+    }
   }
   const seen = {};
   const sounds = [];
   const objects = {};
   for (const sound of values) {
     const path = stringValue(sound.path);
-    const usable = responds(sound, "isInstalled") && Boolean(sound.isInstalled) && Boolean(path);
+    const usable = Boolean(path) && Boolean(fileManager.fileExistsAtPath(path));
     if (!usable) continue;
     const option = soundOption(sound);
     if (!seen[option.id]) {
