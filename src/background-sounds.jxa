@@ -1,0 +1,94 @@
+ObjC.import("Foundation");
+
+const PROTOCOL_VERSION = 1;
+const FRAMEWORK = "/System/Library/PrivateFrameworks/HearingUtilities.framework";
+
+function envelope(ok, body) {
+  return JSON.stringify(Object.assign({ protocolVersion: PROTOCOL_VERSION, ok: ok }, body));
+}
+
+function failure(code, message) {
+  return envelope(false, { code: code, message: String(message).slice(0, 500) });
+}
+
+function responds(object, selector) {
+  return Boolean(object && object.respondsToSelector($.NSSelectorFromString(selector)));
+}
+
+function stringValue(value) {
+  if (value === undefined || value === null) return "";
+  try { return String(ObjC.unwrap(value)); } catch (_) { return String(value); }
+}
+
+function soundOption(sound) {
+  const id = stringValue(sound.name);
+  const label = stringValue(sound.localizedName) || id;
+  if (!id || !label) throw new Error("A discovered sound has no stable name or label");
+  return { id: id, label: label };
+}
+
+function discoverSounds(settings) {
+  const candidates = ["availableComfortSounds", "comfortSounds", "allComfortSounds"];
+  let collection = null;
+  for (const selector of candidates) {
+    if (responds(settings, selector)) {
+      collection = settings[selector];
+      break;
+    }
+  }
+  if (!collection) throw new Error("No framework sound-inventory selector is available");
+  const raw = ObjC.unwrap(collection);
+  const values = Array.isArray(raw) ? raw : [];
+  const seen = {};
+  const sounds = [];
+  for (const sound of values) {
+    const usable = responds(sound, "isInstalled") ? Boolean(sound.installed)
+      : responds(sound, "installed") ? Boolean(sound.installed) : Boolean(sound.path);
+    if (!usable) continue;
+    const option = soundOption(sound);
+    if (!seen[option.id]) {
+      seen[option.id] = true;
+      sounds.push(option);
+    }
+  }
+  return sounds;
+}
+
+function readSnapshot(settings) {
+  const selected = soundOption(settings.selectedComfortSound);
+  const sounds = discoverSounds(settings);
+  if (!sounds.some(function (sound) { return sound.id === selected.id; })) {
+    throw new Error("The selected sound is not immediately usable");
+  }
+  const volume = Number(settings.relativeVolume);
+  if (!Number.isFinite(volume) || volume < 0 || volume > 1) throw new Error("Invalid relative volume");
+  return {
+    enabled: Boolean(settings.comfortSoundsEnabled),
+    sound: selected,
+    sounds: sounds,
+    volumePercent: Math.round(volume * 100),
+  };
+}
+
+function run(argv) {
+  const command = argv[0];
+  if (command !== "probe" && command !== "read") return failure("contract-mismatch", "Unsupported fixed command");
+  try {
+    const bundle = $.NSBundle.bundleWithPath(FRAMEWORK);
+    if (!bundle || !bundle.load) return failure("framework-load", "HearingUtilities.framework could not be loaded");
+    const settingsClass = $.NSClassFromString("HUComfortSoundsSettings");
+    if (!settingsClass || !settingsClass.sharedInstance) return failure("contract-mismatch", "Background Sounds settings class is unavailable");
+    const settings = settingsClass.sharedInstance;
+    const required = [
+      "comfortSoundsAvailable", "comfortSoundsEnabled", "setComfortSoundsEnabled:",
+      "selectedComfortSound", "setSelectedComfortSound:", "relativeVolume", "setRelativeVolume:",
+    ];
+    for (const selector of required) {
+      if (!responds(settings, selector)) return failure("contract-mismatch", "Required Background Sounds contract is unavailable");
+    }
+    if (!Boolean(settings.comfortSoundsAvailable)) return failure("unavailable", "Enable Background Sounds availability in macOS System Settings");
+    return envelope(true, { snapshot: readSnapshot(settings) });
+  } catch (error) {
+    return failure("contract-mismatch", error && error.message ? error.message : error);
+  }
+}

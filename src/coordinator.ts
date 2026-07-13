@@ -52,6 +52,7 @@ import {
   type YouTubeDownloadBatch,
 } from "./youtube-url-download";
 import { UiStateStore, type UiStateAction } from "./ui-state";
+import { BackgroundSoundsError, type BackgroundSoundsControl } from "./background-sounds";
 
 export type DependencyHealthRefresh = (
   helper: HelperName,
@@ -72,6 +73,7 @@ export type AppCoordinatorOptions = {
   prepareDownloadBatch?: typeof prepareYouTubeDownloadBatch;
   executeDownloadBatch?: typeof executeYouTubeDownloadBatch;
   now?: () => number;
+  backgroundSoundsControl?: BackgroundSoundsControl;
 };
 
 export class AppCoordinator {
@@ -108,6 +110,9 @@ export class AppCoordinator {
   private snapshotSaveBlockedUntilMeaningfulChange = false;
   private snapshotWriteTail: Promise<void> = Promise.resolve();
   private feedbackRevision = 0;
+  private readonly backgroundSoundsControl?: BackgroundSoundsControl;
+  private backgroundSoundsTail: Promise<void> = Promise.resolve();
+  private backgroundSoundsAbort: AbortController | null = null;
 
   constructor(options: AppCoordinatorOptions) {
     this.appState = options.appState;
@@ -123,6 +128,7 @@ export class AppCoordinator {
     this.prepareDownloadBatch = options.prepareDownloadBatch ?? prepareYouTubeDownloadBatch;
     this.executeDownloadBatch = options.executeDownloadBatch ?? executeYouTubeDownloadBatch;
     this.now = options.now ?? Date.now;
+    this.backgroundSoundsControl = options.backgroundSoundsControl;
     this.unsubscribeFromPlayer = this.player.onPlaybackStateChange((playback) => {
       const reachedNaturalEnd = playback.status === "idle" && playback.eof === true;
       this.mergePlayerPlayback(playback);
@@ -154,6 +160,48 @@ export class AppCoordinator {
     await this.restorePlaylistSnapshotOrMigratePlaylist(preferences?.volume);
     this.syncPlaylistContentState();
     this.notifyStateChanged();
+  }
+
+  async enterBackgroundSounds(): Promise<void> {
+    const shouldProbe = this.appState.backgroundSounds.status === "candidate"
+      || this.appState.backgroundSounds.status === "unavailable";
+    await this.runBackgroundSounds(shouldProbe ? "probe" : "read");
+  }
+
+  async refreshBackgroundSounds(): Promise<void> {
+    await this.runBackgroundSounds(this.appState.backgroundSounds.status === "candidate" ? "probe" : "read");
+  }
+
+  async retryBackgroundSounds(): Promise<void> {
+    await this.runBackgroundSounds(this.appState.backgroundSounds.status === "unavailable" ? "probe" : "read");
+  }
+
+  private async runBackgroundSounds(operation: "probe" | "read"): Promise<void> {
+    if (!this.backgroundSoundsControl || this.appState.backgroundSounds.status === "hidden" || this.tornDown) return;
+    const task = async () => {
+      const previous = this.appState.backgroundSounds;
+      this.appState.backgroundSounds = "snapshot" in previous
+        ? { status: "busy", snapshot: previous.snapshot }
+        : { status: "probing" };
+      this.notifyStateChanged();
+      const controller = new AbortController();
+      this.backgroundSoundsAbort = controller;
+      try {
+        const snapshot = await this.backgroundSoundsControl![operation](controller.signal);
+        this.appState.backgroundSounds = { status: "ready", snapshot };
+      } catch (error) {
+        if (this.tornDown && error instanceof BackgroundSoundsError && error.code === "cancelled") return;
+        const message = error instanceof Error ? error.message : "macOS Background Sounds is unavailable.";
+        this.appState.backgroundSounds = "snapshot" in previous
+          ? { status: "degraded", snapshot: previous.snapshot, error: message }
+          : { status: "unavailable", error: message };
+      } finally {
+        if (this.backgroundSoundsAbort === controller) this.backgroundSoundsAbort = null;
+        this.notifyStateChanged();
+      }
+    };
+    this.backgroundSoundsTail = this.backgroundSoundsTail.then(task, task);
+    await this.backgroundSoundsTail;
   }
 
   async dispatch(intent: AppIntent): Promise<void> {
@@ -238,6 +286,7 @@ export class AppCoordinator {
   async teardown(): Promise<void> {
     if (this.tornDown) return;
     this.tornDown = true;
+    this.backgroundSoundsAbort?.abort();
     await this.saveLastPlaylistSnapshot({ meaningful: false });
     this.pendingDownloadBatches.length = 0;
     this.pendingPlaylistConfirmation?.prepared.cancel();
@@ -258,6 +307,7 @@ export class AppCoordinator {
     await this.player.teardown().catch((error) => {
       cleanupFailures.push(error instanceof Error ? error.message : String(error));
     });
+    await this.backgroundSoundsTail.catch(() => undefined);
     for (const failure of cleanupFailures) {
       this.appState.appErrors.push(`Coordinator cleanup failed: ${failure}`);
     }

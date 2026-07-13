@@ -200,7 +200,10 @@ export function createTmuRoot(options: TmuRootOptions) {
           ? ui.library.inputFocused
           : ui.activeTab === "downloader" && ui.downloader.inputFocused;
         if (input === "]" || input === "[") {
-          coordinator.dispatchUi({ type: "switchTab", tab: adjacentTab(ui.activeTab, input === "]" ? 1 : -1) });
+          const nextTab = adjacentTab(ui.activeTab, input === "]" ? 1 : -1,
+            coordinator.appState.backgroundSounds.status !== "hidden");
+          coordinator.dispatchUi({ type: "switchTab", tab: nextTab });
+          if (nextTab === "background") await coordinator.enterBackgroundSounds();
           publication.notify("input");
           return;
         }
@@ -228,13 +231,15 @@ export function createTmuRoot(options: TmuRootOptions) {
         }
         else if (input === " " && !textInputFocused) {
           await coordinator.dispatch({ type: "playerOperation", operation: "toggle-play-pause" });
+        } else if (ui.activeTab === "background" && await routeBackground(input, key, coordinator)) {
+          // Background arrows and refresh take precedence over global arrow aliases.
         } else if (!textInputFocused && await routeGlobalPlayback(input, key, coordinator)) {
           // Global playback action handled before tab-local routing.
         } else if (ui.activeTab === "playback") {
           await routePlayback(input, key, coordinator);
         } else if (ui.activeTab === "library") {
           await routeLibrary(input, key, coordinator, options.openUrl ?? openExternalUrl);
-        } else {
+        } else if (ui.activeTab === "downloader") {
           await routeDownloader(input, key, coordinator);
         }
         publication.notify("input");
@@ -550,13 +555,16 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     height: uiState.terminal.rows,
     position: "relative",
   }, () => [
-    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns),
+    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns,
+      appState.backgroundSounds.status !== "hidden"),
     uiState.notification ? statusBanner(uiState.notification, noColor) : null,
     uiState.activeTab === "playback"
         ? playbackView(snapshot, coordinator, noColor)
       : uiState.activeTab === "library"
         ? libraryView(snapshot, noColor, renderedLibraryResults)
-        : downloaderView(snapshot, noColor),
+        : uiState.activeTab === "downloader"
+          ? downloaderView(snapshot, noColor)
+          : backgroundView(snapshot, noColor),
     nowPlayingBar(snapshot, noColor),
     footer(uiState, incompleteLibrarySelection, noColor),
     uiState.overlays.at(-1) ? shortcutHelpModal(uiState, incompleteLibrarySelection, noColor) : null,
@@ -566,7 +574,8 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
 function modalScreen(snapshot: PublicationSnapshot, noColor: boolean, content: ReturnType<typeof h>, hint = "") {
   const { appState, uiState } = snapshot;
   return h(Box, { flexDirection: "column", width: uiState.terminal.columns, height: uiState.terminal.rows }, () => [
-    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns),
+    tabHeader(uiState.activeTab, noColor, activePlaylistName(appState), uiState.terminal.columns,
+      appState.backgroundSounds.status !== "hidden"),
     h(Box, { flexGrow: 1, justifyContent: "center", alignItems: "center" }, () => content),
     h(Text, { dimColor: true }, () => `Modal open · ${hint}unrelated actions suspended`),
   ]);
@@ -612,7 +621,7 @@ function progressBar(positionSeconds: number, durationSeconds: number): string {
   return `[${"=".repeat(filled)}${"-".repeat(width - filled)}]`;
 }
 
-function tabHeader(active: UiState["activeTab"], noColor: boolean, playlistName = "Default", columns = 100) {
+function tabHeader(active: UiState["activeTab"], noColor: boolean, playlistName = "Default", columns = 100, showBackground = false) {
   const tab = (id: UiState["activeTab"], label: string, width?: number) => h(Text, {
     bold: active === id, inverse: active === id, dimColor: active !== id,
     color: active === id && !noColor ? "cyan" : undefined,
@@ -623,12 +632,65 @@ function tabHeader(active: UiState["activeTab"], noColor: boolean, playlistName 
   const playerWidth = Math.max(12, Math.min(playerLabel.length + (active === "playback" ? 4 : 0), 30, availablePlayerWidth));
   return h(Box, { borderStyle: "round", width: "100%", paddingX: 1 }, () => [
     tab("playback", playerLabel, playerWidth), h(Text, () => "  "), tab("library", "Library"), h(Text, () => "  "),
-    tab("downloader", "Downloads"), h(Spacer),
+    tab("downloader", "Downloads"),
+    ...(showBackground ? [h(Text, () => "  "), tab("background", "Background")] : []), h(Spacer),
     h(Text, { color: noColor ? undefined : "cyan", bold: true }, () => "["),
     h(Text, { dimColor: true }, () => " prev "),
     h(Text, { color: noColor ? undefined : "cyan", bold: true }, () => "]"),
     h(Text, { dimColor: true }, () => " next"),
   ]);
+}
+
+function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
+  const state = snapshot.appState.backgroundSounds;
+  const selected = snapshot.uiState.background.selectedRow;
+  const row = (index: number, label: string, value: string) => h(Text, {
+    bold: index === selected,
+    color: index === selected && !noColor ? "cyan" : undefined,
+  }, () => `${index === selected ? "› " : "  "}${label.padEnd(20)}${value}`);
+  if (state.status === "hidden") return null;
+  if (state.status === "candidate" || state.status === "probing") {
+    return h(Box, { flexDirection: "column", flexGrow: 1, paddingX: 2, paddingY: 1 }, () => [
+      h(Text, { bold: true }, () => "Background Sounds · macOS"),
+      h(Text, { dimColor: true }, () => state.status === "probing" ? "Reading authoritative state from macOS…" : "Enter this tab to read macOS state."),
+    ]);
+  }
+  if (state.status === "unavailable") {
+    return h(Box, { flexDirection: "column", flexGrow: 1, paddingX: 2, paddingY: 1 }, () => [
+      h(Text, { bold: true }, () => "Background Sounds · macOS"),
+      h(Text, { color: noColor ? undefined : "red" }, () => "Background Sounds unavailable"),
+      h(Text, () => state.error),
+      h(Text, { dimColor: true }, () => "Press u to retry."),
+    ]);
+  }
+  if (!("snapshot" in state)) return null;
+  const snapshotValue = state.snapshot;
+  const stale = state.status === "degraded";
+  const busy = state.status === "busy";
+  const filled = Math.round(snapshotValue.volumePercent / 10);
+  return h(Box, { flexDirection: "column", flexGrow: 1, paddingX: 2, paddingY: 1 }, () => [
+    h(Text, { bold: true }, () => "Background Sounds · macOS"),
+    h(Text, () => ""),
+    row(0, "Background Sounds", snapshotValue.enabled ? "● On" : "○ Off"),
+    row(1, "Sound", `‹ ${snapshotValue.sound.label} ›`),
+    row(2, "Volume", `[${"■".repeat(filled)}${"·".repeat(10 - filled)}] ${snapshotValue.volumePercent}%`),
+    h(Text, { dimColor: true }, () => `  ${"State".padEnd(20)}${busy ? "Refreshing from macOS…" : stale ? "Stale · press u to retry" : "Confirmed from macOS"}`),
+    stale ? h(Text, { color: noColor ? undefined : "red" }, () => state.error) : null,
+  ]);
+}
+
+async function routeBackground(input: string, key: InputKey, coordinator: AppCoordinator): Promise<boolean> {
+  if (input === "u") {
+    await coordinator.retryBackgroundSounds();
+    return true;
+  }
+  if (input === "j" || key.downArrow || input === "k" || key.upArrow) {
+    const delta = input === "j" || key.downArrow ? 1 : -1;
+    coordinator.dispatchUi({ type: "setBackgroundSelection", index: coordinator.uiState.background.selectedRow + delta });
+    return true;
+  }
+  // Read-only slice: consume arrows on Settings rows so they never seek the Player.
+  return Boolean(key.leftArrow || key.rightArrow || key.return);
 }
 
 function activePlaylistName(appState: PublicationSnapshot["appState"]): string {
@@ -991,6 +1053,13 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
       ],
     },
   ];
+  if (tab === "background") return [{
+    title: "BACKGROUND SOUNDS",
+    rows: [
+      ["j/k, ↑/↓", "Move selection"], ["u", "Refresh or retry macOS state"],
+      ["←/→, Enter", "Controls are read-only in this release"],
+    ],
+  }];
   return [
     {
       title: "URL INPUT",
@@ -1128,6 +1197,8 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
           ? ui.terminal.columns < 90
             ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
             : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
+          : ui.activeTab === "background"
+            ? [["j/k", "Move"], ["u", "Refresh"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
@@ -1141,8 +1212,8 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   ]);
 }
 
-function adjacentTab(active: UiState["activeTab"], delta: 1 | -1): UiState["activeTab"] {
-  const tabs: UiState["activeTab"][] = ["playback", "library", "downloader"];
+function adjacentTab(active: UiState["activeTab"], delta: 1 | -1, includeBackground = false): UiState["activeTab"] {
+  const tabs: UiState["activeTab"][] = ["playback", "library", "downloader", ...(includeBackground ? ["background" as const] : [])];
   return tabs[(tabs.indexOf(active) + delta + tabs.length) % tabs.length]!;
 }
 
@@ -1159,7 +1230,8 @@ function chordPending(ui: UiState): boolean {
 }
 
 function tabLabel(active: UiState["activeTab"]): string {
-  return active === "playback" ? "Playback" : active === "library" ? "Library" : "YouTube Downloader";
+  return active === "playback" ? "Playback" : active === "library" ? "Library"
+    : active === "downloader" ? "YouTube Downloader" : "Background Sounds";
 }
 
 function publicationCause(reason: AppStateChangeReason): PublicationCause {

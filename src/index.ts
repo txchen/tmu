@@ -1,4 +1,5 @@
 export * from "./app";
+export * from "./background-sounds";
 export * from "./action-registry";
 export * from "./config";
 export * from "./coordinator";

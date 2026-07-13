@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,6 +50,8 @@ describe("Node npm package", () => {
     expect(pkg.devDependencies).toHaveProperty("tsdown");
     expect(packageFiles).toContain("package/dist/cli.js");
     expect(packageFiles).toContain("package/dist/cli.js.map");
+    expect(packageFiles).toContain("package/dist/background-sounds.jxa");
+    expect(await readFile("dist/background-sounds.jxa", "utf8")).toContain("HUComfortSoundsSettings");
     expect((await readFile("dist/cli.js", "utf8")).startsWith("#!/usr/bin/env node\n")).toBe(true);
     await access("dist/cli.js.map");
   });
@@ -112,7 +114,12 @@ function isolatedRuntimeEnv(): Record<string, string> {
 
 async function expectPackedTerminal(command: string, args: string[], env: Record<string, string>): Promise<void> {
   let output = "";
-  const terminal = spawn(command, args, { cols: 100, rows: 24, cwd: root, env });
+  const osascriptSentinel = join(root, `osascript-${Math.random()}.called`);
+  const terminal = spawn(command, args, { cols: 100, rows: 24, cwd: root, env: {
+    ...env,
+    NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${join(process.cwd(), "tests/fixtures/observe-osascript.cjs")}`.trim(),
+    TMU_OSASCRIPT_SENTINEL: osascriptSentinel,
+  } });
   terminal.onData((data) => { output += data; });
   let exited = false;
   const exitPromise = new Promise<{ exitCode: number; signal?: number }>((resolve) => terminal.onExit((event) => {
@@ -123,6 +130,8 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
   try {
     await waitFor(() => output.includes("Player") && output.includes("Library") && output.includes("Downloads"));
     expect(stripAnsi(output)).toContain("[ prev ] next");
+    expect(await exists(osascriptSentinel)).toBe(false);
+    if (process.platform === "linux") expect(stripAnsi(output)).not.toContain("Background");
     output = "";
     terminal.write("]");
     await waitFor(() => output.includes("▸ Library ◂"));
@@ -139,6 +148,10 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
     if (!exited) terminal.kill();
     await withTimeout(exitPromise, 2_000, "Timed out cleaning up packed terminal process");
   }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try { await stat(path); return true; } catch { return false; }
 }
 
 function stripAnsi(value: string): string {

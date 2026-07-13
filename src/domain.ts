@@ -176,6 +176,12 @@ export type PlaylistContent = {
 };
 
 export type AppState = {
+  backgroundSounds:
+    | { status: "hidden" }
+    | { status: "candidate" | "probing" }
+    | { status: "unavailable"; error: string }
+    | { status: "ready" | "busy"; snapshot: import("./background-sounds").BackgroundSoundsSnapshot }
+    | { status: "degraded"; snapshot: import("./background-sounds").BackgroundSoundsSnapshot; error: string };
   config: RedactedTmuConfig;
   configPath: string;
   configSource: "defaults" | "file";
@@ -228,7 +234,7 @@ export type AppState = {
 };
 
 export type UiState = {
-  activeTab: "playback" | "library" | "downloader";
+  activeTab: "playback" | "library" | "downloader" | "background";
   selectedPlaylistIndex: number;
   playlistScroll: number;
   overlays: readonly PickerOverlay[];
@@ -246,6 +252,7 @@ export type UiState = {
     selectedBatchIndex: number;
     scroll: number;
   };
+  background: { selectedRow: number };
   terminal: {
     columns: number;
     rows: number;

@@ -22,6 +22,7 @@ export type UiStateAction =
   | { type: "setDownloaderInput"; value: string }
   | { type: "setDownloaderInputFocus"; focused: boolean }
   | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
+  | { type: "setBackgroundSelection"; index: number }
   | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectPlaylistTrack"; index: number; identities: readonly TrackIdentity[] }
   | { type: "resetPlaylistSelection"; index: number; identities: readonly TrackIdentity[] }
@@ -58,6 +59,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     selectedPlaylistIdentity: null,
     library: { query: "", inputFocused: false, selectedIndex: 0, healthSelectedIndex: 0, scroll: 0 },
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
+    background: { selectedRow: 0 },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
     renameDialog: null,
@@ -119,6 +121,8 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
         ...state,
         downloader: { ...state.downloader, selectedBatchIndex, scroll: visibleScroll(state.downloader.scroll, selectedBatchIndex) },
       }; }
+    case "setBackgroundSelection":
+      return { ...state, background: { selectedRow: clampIndex(action.index, 3) } };
     case "setPendingVimChord":
       return { ...state, pendingVimChord: action.pending ? { key: "g", expiresAtMs: Date.now() + 1_000 } : null };
     case "selectPlaylistTrack": {

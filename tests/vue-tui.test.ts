@@ -24,6 +24,40 @@ class StopCountingPlayer extends NoopPlayer {
 }
 
 describe("TMU top-level surface smoke", () => {
+  test("shows and lazily initializes the candidate Background Sounds Tab with contained retry", async () => {
+    const snapshot = {
+      enabled: true,
+      sound: { id: "Rain", label: "Rain" },
+      sounds: [{ id: "Rain", label: "Rain" }, { id: "Ocean", label: "Ocean" }],
+      volumePercent: 60,
+    } as const;
+    let fail = true;
+    const control = {
+      probe: async () => {
+        if (fail) throw new Error("Open System Settings and retry");
+        return snapshot;
+      },
+      read: async () => snapshot,
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+
+    expect(terminal.lastFrame()).toContain("Background");
+    expect(coordinator.appState.backgroundSounds.status).toBe("candidate");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
+    await terminal.stdin.write("]");
+    await sleep(0);
+    expect(coordinator.uiState.activeTab).toBe("background");
+    expect(terminal.lastFrame()).toContain("Open System Settings and retry");
+    fail = false;
+    await terminal.stdin.write("u");
+    await sleep(0);
+    expect(terminal.lastFrame()).toContain("Background Sounds   ● On");
+    expect(terminal.lastFrame()).toContain("Sound               ‹ Rain ›");
+    expect(terminal.lastFrame()).toContain("60%");
+    expect(terminal.lastFrame()).toContain("Confirmed from macOS");
+  });
   test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
     const player = new StopCountingPlayer();
     const { coordinator } = createTmuApp({ player });

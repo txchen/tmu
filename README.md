@@ -1,12 +1,15 @@
 # TMU
 
+TMU optionally shows a read-only Background Sounds tab on macOS 26.5 and newer. This is a best-effort integration with a private macOS framework: availability is checked lazily when the tab is first opened, failures stay isolated to the tab, and Apple may change the underlying interface in a future macOS release.
+
 TMU is a lean terminal music player focused on downloading YouTube media, caching it on disk, and playing Tracks from that YouTube Cache.
 
-TMU opens on Playback and provides three top-level tabs:
+TMU opens on Playback and provides three standard top-level tabs, plus the optional Background Sounds tab on candidate Macs:
 
 - Playback shows the Active Playlist and its Current Track.
 - Library searches healthy cached Tracks locally and provides Play Now, Play Next, Add to Playlist, opening on YouTube, Cache Deletion, and Cache Health cleanup.
 - YouTube Downloader submits video or playlist URLs to a session-only Download Pipeline without adding Tracks to a TMU Playlist.
+- Background Sounds reads authoritative enabled, sound, and volume state from macOS without affecting TMU playback.
 
 TMU supports multiple persistent, user-named Playlists. Press uppercase `P` outside text entry to open the Playlist Manager, where you can switch (`Enter`), create (`c`), rename (`e`), delete (`x`), and reorder (`J`/`K`) Playlists. The top bar always identifies the Active Playlist; Library and playback actions target only that Playlist. Lowercase `p` remains Previous Track.
 

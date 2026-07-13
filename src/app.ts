@@ -18,6 +18,8 @@ import { FileLastQueueSnapshotPersistence, type LastQueueSnapshotPersistence } f
 import { FileLastPlaylistSnapshotPersistence, type LastPlaylistSnapshotPersistence } from "./playlist-snapshot";
 import type { Player } from "./domain";
 import type { executeYouTubeDownloadBatch, prepareYouTubeDownloadBatch } from "./youtube-url-download";
+import { release } from "node:os";
+import { JxaBackgroundSoundsControl, UnavailableBackgroundSoundsControl, isBackgroundSoundsCandidate, type BackgroundSoundsControl } from "./background-sounds";
 
 export type TmuAppOptions = {
   config?: TmuConfigInput;
@@ -32,6 +34,8 @@ export type TmuAppOptions = {
   dependencyRunner?: DependencyCommandRunner;
   prepareDownloadBatch?: typeof prepareYouTubeDownloadBatch;
   executeDownloadBatch?: typeof executeYouTubeDownloadBatch;
+  backgroundSoundsCandidate?: boolean;
+  backgroundSoundsControl?: BackgroundSoundsControl;
 };
 
 export type TmuRuntimeOptions = {
@@ -46,12 +50,14 @@ export function createTmuApp(options: TmuAppOptions = {}): {
   const config = createDefaultTmuConfig(options.config);
   const dependencyHealth = options.dependencyHealth ?? createDefaultDependencyHealth();
   const providers = createDefaultProviders();
+  const backgroundSoundsCandidate = options.backgroundSoundsCandidate ?? false;
   const coordinator = new AppCoordinator({
     appState: createInitialAppState(providers, {
       config,
       configPath: options.configPath,
       configSource: options.configSource,
       dependencyHealth,
+      backgroundSoundsCandidate,
     }),
     uiState: createInitialUiState(),
     initialPlaylistContent: new MemoryPlaylistContent(),
@@ -63,6 +69,8 @@ export function createTmuApp(options: TmuAppOptions = {}): {
     dependencyRunner: options.dependencyRunner,
     prepareDownloadBatch: options.prepareDownloadBatch,
     executeDownloadBatch: options.executeDownloadBatch,
+    backgroundSoundsControl: options.backgroundSoundsControl
+      ?? (backgroundSoundsCandidate ? new JxaBackgroundSoundsControl() : new UnavailableBackgroundSoundsControl()),
   });
 
   return { coordinator };
@@ -75,6 +83,7 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
   const loaded = await loadTmuConfig({ path: options.configPath });
   const shouldStartPlayer = options.startPlayer ?? true;
   const dependencyHealth = createDefaultDependencyHealth();
+  const backgroundSoundsCandidate = isBackgroundSoundsCandidate(process.platform, release());
   const player = shouldStartPlayer
     ? new MpvPlayer({
       command: loaded.config.helpers.mpv,
@@ -101,6 +110,10 @@ export async function createTmuRuntime(options: TmuRuntimeOptions = {}): Promise
           runner: options.dependencyRunner,
         }),
       dependencyRunner: options.dependencyRunner,
+      backgroundSoundsCandidate,
+      backgroundSoundsControl: backgroundSoundsCandidate
+        ? new JxaBackgroundSoundsControl()
+        : new UnavailableBackgroundSoundsControl(),
     }),
     config: loaded.config,
   };

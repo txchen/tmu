@@ -18,7 +18,7 @@
   },
   "scripts": {
     "benchmark:playback": "npm run build && node dist/playback-benchmark.js",
-    "build": "tsdown",
+    "build": "tsdown && cp src/background-sounds.jxa dist/background-sounds.jxa",
     "prepack": "npm run build",
     "start": "node dist/cli.js",
     "smoke:package": "vitest run tests/packaging-smoke.test.ts",

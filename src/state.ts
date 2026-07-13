@@ -20,6 +20,7 @@ export type InitialAppStateOptions = {
   configPath?: string;
   configSource?: "defaults" | "file";
   dependencyHealth?: DependencyHealthState;
+  backgroundSoundsCandidate?: boolean;
 };
 
 export function createInitialAppState(
@@ -29,6 +30,7 @@ export function createInitialAppState(
   const config = createDefaultTmuConfig(options.config);
 
   return {
+    backgroundSounds: options.backgroundSoundsCandidate ? { status: "candidate" } : { status: "hidden" },
     config: redactTmuConfig(config),
     configPath: options.configPath ?? defaultConfigPath(),
     configSource: options.configSource ?? "defaults",
