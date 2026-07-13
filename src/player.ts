@@ -247,6 +247,18 @@ export class MpvPlayer implements Player {
   }
 
   async stop(): Promise<PlayerPlaybackState> {
+    if (!this.process || !this.ipc) {
+      this.updateState({
+        status: "stopped",
+        positionSeconds: null,
+        durationSeconds: null,
+        paused: null,
+        idle: true,
+        eof: false,
+      });
+      this.clearPositionPoll();
+      return this.state;
+    }
     await this.command(["stop"]);
     this.updateState({
       status: "stopped",

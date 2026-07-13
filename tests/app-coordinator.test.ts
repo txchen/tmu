@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import { AppCoordinator } from "../src/coordinator";
 import { PlaybackFailure, type PlaybackLocator, type PlayerLoadOptions, type PlayerPlaybackState, type Provider, type Track } from "../src/domain";
-import { NoopPlayer } from "../src/player";
+import { MpvPlayer, NoopPlayer, type MpvProcessAdapter } from "../src/player";
 import { MemoryPlaylistContent } from "../src/playlist-content";
 import { InMemoryLastPlaylistSnapshotPersistence } from "../src/playlist-snapshot";
 import { createInitialAppState, createInitialUiState } from "../src/state";
@@ -220,6 +220,33 @@ describe("AppCoordinator with the narrow Provider", () => {
     expect(coordinator.appState.playback).toMatchObject({ status: "paused", positionSeconds: 42, restored: true });
     expect(player.loaded).toHaveLength(1);
     expect(coordinator.appState.playlists.playlists[1]!.entries[0]!.track.identity.stableId).toBe("study");
+  });
+
+  test("creates a Playlist before first playback without requiring mpv IPC", async () => {
+    const adapter: MpvProcessAdapter = {
+      startMpv: () => { throw new Error("mpv must remain dormant"); },
+      waitForIpc: async () => undefined,
+      connectIpc: async () => { throw new Error("mpv must remain dormant"); },
+      cleanupIpc: async () => undefined,
+    };
+    const player = new MpvPlayer({
+      command: "mpv",
+      ipcPath: "/tmp/tmu-dormant-playlist-test.sock",
+      workDir: "/tmp",
+      adapter,
+    });
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({}),
+      uiState: createInitialUiState(),
+      initialPlaylistContent: new MemoryPlaylistContent(),
+      player,
+    });
+
+    await expect(coordinator.dispatch({ type: "createPlaylist", name: "Study" })).resolves.toBeUndefined();
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study"]);
+    expect(coordinator.appState.playlists.activePlaylistId).toBe(coordinator.appState.playlists.playlists[1]!.id);
+    expect(coordinator.appState.playback).toEqual({ status: "idle", currentTrackIdentity: null });
   });
 
   test("rejects invalid Playlist names without changing the Active Playlist", async () => {
