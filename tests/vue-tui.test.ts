@@ -1097,6 +1097,11 @@ describe("TMU top-level surface smoke", () => {
       queue: new MemoryQueue(), player: new NoopPlayer(),
     });
     await coordinator.dispatch({ type: "playNow", target: track });
+    const defaultId = coordinator.appState.playlists.activePlaylistId;
+    await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+    await coordinator.dispatch({ type: "playSelected", identity: track.identity });
     const opened: string[] = [];
     const terminal = await render(createTmuRoot({
       coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
@@ -1144,6 +1149,12 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("will stop.");
     await terminal.stdin.write("y");
     expect(deleted).toBe(true);
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.availability.status))
+      .toEqual(["unavailable", "unavailable"]);
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: coordinator.appState.playlists.playlists[1]!.id });
+    coordinator.dispatchUi({ type: "switchTab", tab: "playback" });
+    await waitFor(() => terminal.lastFrame()!.includes("! Cached"));
+    coordinator.dispatchUi({ type: "switchTab", tab: "library" });
     await terminal.stdin.write("/");
     await terminal.stdin.write("broken00002");
     expect(terminal.lastFrame()).toContain("broken00002");
@@ -1416,7 +1427,12 @@ describe("TMU top-level surface smoke", () => {
           cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "rename00001.opus", container: "opus" },
         metadataPath: "/cache/rename00001.json", mediaPath: "/cache/rename00001.opus",
       }],
-      listIncompleteEntries: () => [], findByIdentity: () => undefined,
+      listIncompleteEntries: () => [], findByIdentity: () => ({
+        track, availability: { status: "available" },
+        metadata: { videoId: "rename00001", title: track.title, uploader: "Channel",
+          cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "rename00001.opus", container: "opus" },
+        metadataPath: "/cache/rename00001.json", mediaPath: "/cache/rename00001.opus",
+      }),
       renameTrack: async (_identity, title) => {
         const normalizedTitle = title.trim();
         if (!normalizedTitle) throw new Error("Track Title must not be empty");
@@ -1425,12 +1441,14 @@ describe("TMU top-level surface smoke", () => {
       },
       deleteCacheEntry: async () => false, cleanupIncompleteEntry: async () => false,
     };
-    const queue = new MemoryQueue();
-    queue.enqueue(track);
-    queue.startAt(0);
     const appState = createInitialAppState({ "youtube-cache": provider });
-    appState.playback = { status: "playing", currentTrackIdentity: track.identity, positionSeconds: 12 };
-    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue, player: new NoopPlayer() });
+    const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), queue: new MemoryQueue(), player: new NoopPlayer() });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+    const defaultId = coordinator.appState.playlists.activePlaylistId;
+    await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+    await coordinator.dispatch({ type: "playSelected", identity: track.identity });
     const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("]");
@@ -1446,6 +1464,8 @@ describe("TMU top-level surface smoke", () => {
 
     expect(coordinator.uiState.renameDialog).toBeNull();
     expect(coordinator.appState.queue.entries[0]?.track.title).toBe("Clear Name");
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.track.title))
+      .toEqual(["Clear Name", "Clear Name"]);
     expect(terminal.lastFrame()).toContain("✓ Clear Name");
     expect(terminal.lastFrame()).toContain("▶ PLAYING · Clear Name");
 

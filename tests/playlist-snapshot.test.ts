@@ -8,6 +8,7 @@ import {
   MemoryQueue,
   createLastPlaylistSnapshot,
   createTmuApp,
+  playlistCollectionFromSnapshot,
   type LastQueueSnapshot,
   type Track,
 } from "../src/index";
@@ -42,6 +43,31 @@ describe("Last Playlist Snapshot persistence", () => {
       [amber.identity],
       [amber.identity],
     ]);
+  });
+
+  test("omits Track records after their final Playlist membership is removed", () => {
+    const collection = new MemoryPlaylistCollection(new MemoryQueue());
+    collection.activeQueue.enqueue(amber);
+    const second = collection.append("Study");
+    second.queue.enqueue(amber);
+    collection.activeQueue.clear();
+
+    expect(createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true }).tracks).toEqual([amber]);
+
+    second.queue.clear();
+    expect(createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true }).tracks).toEqual([]);
+  });
+
+  test("does not persist session Track Availability", () => {
+    const collection = new MemoryPlaylistCollection(new MemoryQueue());
+    collection.activeQueue.enqueue(amber);
+    collection.markAvailability(amber.identity, { status: "unavailable", reason: "mpv playback failed" });
+
+    const restored = playlistCollectionFromSnapshot(
+      createLastPlaylistSnapshot(collection.snapshot(), { percent: 64, ready: true }),
+    );
+
+    expect(restored.playlists[0]?.entries[0]?.availability).toEqual({ status: "unknown" });
   });
 
   test("restores a complete snapshot without autoplay", async () => {

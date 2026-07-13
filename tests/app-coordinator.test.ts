@@ -91,6 +91,114 @@ function harness() {
 }
 
 describe("AppCoordinator with the narrow Provider", () => {
+  test("keeps shared Track metadata and Cache Availability canonical across Playlists", async () => {
+    let track = { ...cachedTrack };
+    let deleted = false;
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache",
+      listTracks: () => deleted ? [] : [track], searchTracks: () => deleted ? [] : [track],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+      refresh: () => undefined, listCacheEntries: () => [], listIncompleteEntries: () => [],
+      findByIdentity: () => deleted ? undefined : ({
+        track, availability: { status: "available" },
+        metadata: { videoId: "cached-track", title: track.title, uploader: "Cache Artist", cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached-track.opus", container: "opus" },
+        metadataPath: "/cache/cached-track.json", mediaPath: "/cache/cached-track.opus",
+      }),
+      renameTrack: async (_identity, title) => (track = { ...track, title }),
+      deleteCacheEntry: async () => { deleted = true; return true; },
+      cleanupIncompleteEntry: async () => false,
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new RecordingPlayer(),
+    });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+    const defaultId = coordinator.appState.playlists.activePlaylistId;
+    await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    await coordinator.dispatch({ type: "addToQueue", target: track });
+
+    await coordinator.dispatch({ type: "renameTrack", identity: track.identity, title: "Canonical Title" });
+
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.track.title))
+      .toEqual(["Canonical Title", "Canonical Title"]);
+    await coordinator.dispatch({ type: "cacheOperation", operation: "request-delete", identity: track.identity });
+    await coordinator.dispatch({ type: "cacheOperation", operation: "confirm" });
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.availability.status))
+      .toEqual(["unavailable", "unavailable"]);
+    expect(coordinator.appState.playlists.playlists.map((playlist) => playlist.entries.map((entry) => entry.track.identity.stableId)))
+      .toEqual([["cached-track"], ["cached-track"]]);
+
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
+  });
+
+  test("shares playback failure Availability so traversal skips the identity in another Playlist", async () => {
+    const player = new PlaybackFailingPlayer();
+    const next = { ...cachedTrack, identity: { ...cachedTrack.identity, stableId: "next-track" }, title: "Next" };
+    const provider: Provider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack, next], searchTracks: () => [],
+      resolvePlaybackLocator: async (identity) => ({ kind: "file", path: `/cache/${identity.stableId}.opus` }),
+    };
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player,
+    });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToQueue", target: next });
+    const defaultId = coordinator.appState.playlists.activePlaylistId;
+    await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
+    await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });
+    await coordinator.dispatch({ type: "addToQueue", target: next });
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
+    await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+
+    player.failPlayback("mpv playback failed: corrupt stream");
+    await waitFor(() => coordinator.appState.playback.currentTrackIdentity?.stableId === "next-track");
+    await coordinator.dispatch({ type: "switchPlaylist", playlistId: coordinator.appState.playlists.playlists[1]!.id });
+    await coordinator.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+    await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
+
+    expect(coordinator.appState.queue.entries[0]?.availability.status).toBe("unavailable");
+    expect(coordinator.appState.playback.currentTrackIdentity).toEqual(next.identity);
+  });
+
+  test("drops shared session playback failures on runtime restart and rescans Cache Availability", async () => {
+    const persistence = new InMemoryLastPlaylistSnapshotPersistence();
+    const provider: YouTubeCacheProvider = {
+      id: "youtube-cache", label: "YouTube Cache", listTracks: () => [cachedTrack], searchTracks: () => [],
+      resolvePlaybackLocator: async () => ({ kind: "file", path: "/cache/cached-track.opus" }),
+      refresh: () => undefined, listCacheEntries: () => [], listIncompleteEntries: () => [],
+      findByIdentity: () => ({
+        track: cachedTrack, availability: { status: "available" },
+        metadata: { videoId: "cached-track", title: cachedTrack.title, uploader: "Cache Artist", cachedAt: "2026-01-01T00:00:00.000Z", mediaFileName: "cached-track.opus", container: "opus" },
+        metadataPath: "/cache/cached-track.json", mediaPath: "/cache/cached-track.opus",
+      }),
+      renameTrack: async () => cachedTrack, deleteCacheEntry: async () => false,
+      cleanupIncompleteEntry: async () => false,
+    };
+    const player = new PlaybackFailingPlayer();
+    const first = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player, playlistSnapshotPersistence: persistence,
+    });
+    await first.dispatch({ type: "addToQueue", target: cachedTrack });
+    await first.dispatch({ type: "createPlaylist", name: "Study" });
+    await first.dispatch({ type: "addToQueue", target: cachedTrack });
+    await first.dispatch({ type: "playSelected", identity: cachedTrack.identity });
+    player.failPlayback("mpv playback failed: corrupt stream");
+    await waitFor(() => first.appState.queue.entries[0]?.availability.status === "unavailable");
+    await first.teardown();
+
+    const restored = new AppCoordinator({
+      appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
+      queue: new MemoryQueue(), player: new RecordingPlayer(), playlistSnapshotPersistence: persistence,
+    });
+    await restored.start();
+
+    expect(restored.appState.playlists.playlists.map((playlist) => playlist.entries[0]?.availability.status))
+      .toEqual(["available", "available"]);
+  });
+
   test("creates and switches independent Playlist playback contexts without autoplay", async () => {
     const { coordinator, player } = harness();
     await coordinator.dispatch({ type: "addToQueue", target: cachedTrack });

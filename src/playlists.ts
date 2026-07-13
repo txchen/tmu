@@ -1,9 +1,11 @@
 import { MemoryQueue } from "./queue";
-import type {
-  PlaylistCollectionState,
-  PlaylistPlaybackStatus,
-  PlaylistState,
-  Queue,
+import {
+  identityKey,
+  type PlaylistCollectionState,
+  type PlaylistPlaybackStatus,
+  type PlaylistState,
+  type Queue,
+  type Track,
 } from "./domain";
 
 type PlaylistRecord = {
@@ -74,6 +76,28 @@ export class MemoryPlaylistCollection {
   updateActivePlayback(update: { positionSeconds: number; playbackStatus: PlaylistPlaybackStatus }): void {
     this.active.positionSeconds = update.playbackStatus === "stopped" ? 0 : normalizePosition(update.positionSeconds);
     this.active.playbackStatus = update.playbackStatus;
+  }
+
+  updateTrack(track: PlaylistState["entries"][number]["track"]): void {
+    for (const record of this.records) record.queue.updateTrack(track);
+  }
+
+  markAvailability(
+    identity: PlaylistState["entries"][number]["track"]["identity"],
+    availability: PlaylistState["entries"][number]["availability"],
+  ): void {
+    for (const record of this.records) record.queue.markAvailability(identity, availability);
+  }
+
+  canonicalTracks(): readonly Track[] {
+    const tracks = new Map<string, Track>();
+    for (const record of this.records) {
+      for (const entry of record.queue.entries) {
+        const key = identityKey(entry.track.identity);
+        if (!tracks.has(key)) tracks.set(key, entry.track);
+      }
+    }
+    return [...tracks.values()];
   }
 
   snapshot(): PlaylistCollectionState {

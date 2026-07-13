@@ -463,7 +463,7 @@ export class AppCoordinator {
     const provider = this.appState.providers[YOUTUBE_CACHE_PROVIDER_ID];
     if (!isYouTubeCacheProvider(provider)) throw new Error("YouTube Cache is unavailable");
     const renamed = await provider.renameTrack(identity, title);
-    this.queue.updateTrack(renamed);
+    this.playlists.updateTrack(renamed);
     this.syncQueueState();
     this.recordOperationFeedback("success", `Renamed to “${renamed.title}”`);
   }
@@ -589,7 +589,7 @@ export class AppCoordinator {
       this.recordOperationFeedback("error", `YouTube Cache entry is missing: ${confirmation.stem}`);
       return;
     }
-    this.queue.markAvailability(identity, {
+    this.playlists.markAvailability(identity, {
       status: "unavailable",
       reason: `YouTube Cache entry was deleted: ${confirmation.stem}`,
     });
@@ -913,20 +913,20 @@ export class AppCoordinator {
     if (!isYouTubeCacheProvider(provider)) return;
 
     provider.refresh();
-    for (const entry of this.queue.entries) {
-      if (entry.track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) continue;
+    for (const track of this.playlists.canonicalTracks()) {
+      if (track.identity.providerId !== YOUTUBE_CACHE_PROVIDER_ID) continue;
 
-      const cacheEntry = provider.findByIdentity(entry.track.identity);
+      const cacheEntry = provider.findByIdentity(track.identity);
       if (!cacheEntry) {
-        this.queue.markAvailability(entry.track.identity, {
+        this.playlists.markAvailability(track.identity, {
           status: "unavailable",
-          reason: `YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
+          reason: `YouTube Cache entry is missing: ${track.identity.stableId}`,
         });
         continue;
       }
 
-      this.queue.updateTrack(cacheEntry.track);
-      this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
+      this.playlists.updateTrack(cacheEntry.track);
+      this.playlists.markAvailability(track.identity, cacheEntry.availability);
     }
   }
 
@@ -958,7 +958,7 @@ export class AppCoordinator {
       return false;
     }
 
-    this.queue.markAvailability(entry.track.identity, { status: "available" });
+    this.playlists.markAvailability(entry.track.identity, { status: "available" });
     this.appState.playback = {
       ...this.player.playback,
       status: "playing",
@@ -1196,13 +1196,13 @@ export class AppCoordinator {
 
     const cacheEntry = provider.findByIdentity(entry.track.identity);
     if (!cacheEntry) {
-      this.queue.markAvailability(entry.track.identity, {
+      this.playlists.markAvailability(entry.track.identity, {
         status: "unavailable",
         reason: `YouTube Cache entry is missing: ${entry.track.identity.stableId}`,
       });
       return;
     }
-    this.queue.markAvailability(entry.track.identity, cacheEntry.availability);
+    this.playlists.markAvailability(entry.track.identity, cacheEntry.availability);
   }
 
   private async togglePlayPause(): Promise<void> {
@@ -1267,7 +1267,7 @@ export class AppCoordinator {
   }
 
   private markUnavailable(entry: QueueEntry, reason: string): void {
-    this.queue.markAvailability(entry.track.identity, { status: "unavailable", reason });
+    this.playlists.markAvailability(entry.track.identity, { status: "unavailable", reason });
     this.appState.playback = {
       status: "error",
       currentTrackIdentity: entry.track.identity,
@@ -1281,7 +1281,7 @@ export class AppCoordinator {
   private recordCurrentTrackPlaybackFailure(message = "mpv playback failed"): void {
     const current = this.currentQueueEntry();
     if (!current) return;
-    this.queue.markAvailability(current.track.identity, { status: "unavailable", reason: message });
+    this.playlists.markAvailability(current.track.identity, { status: "unavailable", reason: message });
     this.appState.appErrors.push(message);
     this.appState.lastEvent = message;
     this.syncQueueState();
