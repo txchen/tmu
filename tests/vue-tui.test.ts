@@ -55,14 +55,14 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("u");
     await sleep(0);
     expect(terminal.lastFrame()).toContain("Background Sounds   ● On");
-    expect(terminal.lastFrame()).toContain("Sound               ‹ Rain ›");
+    expect(terminal.lastFrame()).toContain("Sound               Rain · Enter to choose");
     expect(terminal.lastFrame()).toContain("60%");
     expect(terminal.lastFrame()).toContain("Confirmed from macOS");
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Background Sounds Shortcuts");
     expect(terminal.lastFrame()).toContain("Refresh or retry macOS");
     expect(terminal.lastFrame()).toContain("←/→");
-    expect(terminal.lastFrame()).toContain("Adjust focused sound or");
+    expect(terminal.lastFrame()).toContain("Open sound picker");
     expect(terminal.lastFrame()).toContain("h/l");
     expect(terminal.lastFrame()).not.toContain("h/l, ←/→");
     expect(terminal.lastFrame()).toContain("+/−");
@@ -98,9 +98,45 @@ describe("TMU top-level surface smoke", () => {
     const frame = terminal.lastFrame()!;
     expect(frame).toContain("Background Sounds · macOS");
     expect(frame).toContain("Background Sounds   ○ Off");
-    expect(frame).toContain("Sound               ‹ Rain ›");
+    expect(frame).toContain("Sound               Rain · Enter to choose");
     expect(frame).toContain("Confirmed from macOS");
     expect(frame.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
+  });
+
+  test.each([
+    [120, 30],
+    [80, 24],
+    [60, 20],
+  ])("shows and scrolls the complete Background Sound picker at %sx%s", async (columns, rows) => {
+    const sounds = Array.from({ length: 14 }, (_, index) => ({ id: `sound-${index + 1}`, label: `Sound ${index + 1}` }));
+    let snapshot = { enabled: false, sound: sounds[6]!, sounds, volumePercent: 45 };
+    const writes: string[] = [];
+    const control = {
+      probe: async () => snapshot, read: async () => snapshot,
+      setEnabled: async () => snapshot,
+      setSound: async (id: string) => {
+        writes.push(id);
+        snapshot = { ...snapshot, sound: sounds.find((sound) => sound.id === id)! };
+        return snapshot;
+      },
+      setVolume: async () => snapshot,
+    };
+    const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
+    coordinator.dispatchUi({ type: "switchTab", tab: "background" });
+    await coordinator.enterBackgroundSounds();
+    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\r");
+    expect(terminal.lastFrame()).toContain("Choose Background Sound");
+    expect(terminal.lastFrame()).toContain("Sound 7");
+    await terminal.stdin.write("G");
+    expect(terminal.lastFrame()).toContain("Sound 14");
+    expect(terminal.lastFrame()!.split("\n").every((line) => Array.from(line).length <= columns)).toBe(true);
+    await terminal.stdin.write("\r");
+
+    expect(writes).toEqual(["sound-14"]);
+    expect(terminal.lastFrame()).toContain("Sound 14 · Enter to choose");
   });
 
   test("controls Background Sound settings with focused keys and authoritative confirmation", async () => {
@@ -125,6 +161,14 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b[C");
     await terminal.stdin.write("j");
     await terminal.stdin.write("\x1b[C");
+    expect(writes).toEqual(["enabled:true"]);
+    await terminal.stdin.write("\r");
+    expect(terminal.lastFrame()).toContain("Choose Background Sound");
+    expect(terminal.lastFrame()).toContain("Rain");
+    expect(terminal.lastFrame()).toContain("Ocean");
+    await terminal.stdin.write("\x1b[B");
+    await terminal.stdin.write("\r");
+    expect(writes).toEqual(["enabled:true", "sound:Ocean"]);
     await terminal.stdin.write("j");
     await terminal.stdin.write("\x1b[C");
     expect(terminal.lastFrame()).toContain("45% → 50% pending");
@@ -132,7 +176,7 @@ describe("TMU top-level surface smoke", () => {
 
     expect(writes).toEqual(["enabled:true", "sound:Ocean", "volume:50"]);
     expect(terminal.lastFrame()).toContain("● On");
-    expect(terminal.lastFrame()).toContain("‹ Ocean ›");
+    expect(terminal.lastFrame()).toContain("Ocean · Enter to choose");
     expect(terminal.lastFrame()).toContain("50%");
     expect(coordinator.uiState.background.selectedRow).toBe(2);
     await terminal.stdin.write("k");
@@ -140,6 +184,13 @@ describe("TMU top-level surface smoke", () => {
     expect(coordinator.uiState.background.selectedRow).toBe(0);
     await terminal.stdin.write("\x1b[D");
     expect(writes.at(-1)).toBe("enabled:false");
+
+    await terminal.stdin.write("j");
+    await terminal.stdin.write("\r");
+    expect(terminal.lastFrame()).toContain("Choose Background Sound");
+    await terminal.stdin.write("\x1b");
+    expect(terminal.lastFrame()).not.toContain("Choose Background Sound");
+    expect(writes).toEqual(["enabled:true", "sound:Ocean", "volume:50", "enabled:false"]);
   });
   test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
     const player = new StopCountingPlayer();

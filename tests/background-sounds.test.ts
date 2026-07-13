@@ -393,7 +393,7 @@ describe("Background Sounds session lifecycle", () => {
     const playerAndPersistenceState = JSON.stringify({ playback: coordinator.appState.playback, volume: coordinator.appState.volume, playlists: coordinator.appState.playlists });
     await coordinator.enterBackgroundSounds();
     await coordinator.setBackgroundSoundsEnabled(true);
-    await coordinator.cycleBackgroundSound(1);
+    await coordinator.setBackgroundSound("Rain");
 
     expect(calls).toEqual(["enabled:true", "sound:Rain"]);
     expect(coordinator.appState.backgroundSounds).toMatchObject({ status: "ready", snapshot: { enabled: true, volumePercent: 45 } });

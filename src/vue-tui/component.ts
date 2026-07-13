@@ -169,6 +169,14 @@ export function createTmuRoot(options: TmuRootOptions) {
           publication.notify("input");
           return;
         }
+        if (ui.background.soundPicker) {
+          if (isCtrlC(input, key)) {
+            await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
+            if (!coordinator.appState.downloads.quitConfirmationRequired) app.exit();
+          } else await routeBackgroundSoundPicker(input, key, coordinator);
+          publication.notify("input");
+          return;
+        }
         if (ui.playlistManager) {
           if (isCtrlC(input, key)) {
             await coordinator.dispatch({ type: "playerOperation", operation: "quit" });
@@ -540,6 +548,14 @@ function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noCo
     return modalScreen(snapshot, noColor, renameTrackModal(uiState.renameDialog, noColor), "Enter Save · Esc Cancel · ");
   }
 
+  if (uiState.background.soundPicker && "snapshot" in appState.backgroundSounds) {
+    return modalScreen(snapshot, noColor, backgroundSoundPickerModal(
+      appState.backgroundSounds.snapshot.sounds,
+      uiState.background.soundPicker,
+      noColor,
+    ));
+  }
+
   if (uiState.playlistManager) {
     return modalScreen(snapshot, noColor, playlistManagerModal(appState.playlists, uiState.playlistManager, noColor));
   }
@@ -673,7 +689,7 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
     h(Text, { bold: true }, () => "Background Sounds · macOS"),
     h(Text, () => ""),
     row(0, "Background Sounds", snapshotValue.enabled ? "● On" : "○ Off"),
-    row(1, "Sound", `‹ ${snapshotValue.sound.label} ›`),
+    row(1, "Sound", `${snapshotValue.sound.label} · Enter to choose`),
     row(2, "Volume", `[${"■".repeat(filled)}${"·".repeat(10 - filled)}] ${snapshotValue.volumePercent}%${pendingVolume === null ? "" : ` → ${pendingVolume}% pending`}`),
     h(Text, { dimColor: true }, () => `  ${"State".padEnd(20)}${busy ? "Refreshing from macOS…" : stale ? "Stale · press u to retry" : "Confirmed from macOS"}`),
     stale ? h(Text, { color: noColor ? undefined : "red" }, () => state.error) : null,
@@ -699,9 +715,60 @@ async function routeBackground(input: string, key: InputKey, coordinator: AppCoo
     else if (key.rightArrow) await coordinator.setBackgroundSoundsEnabled(true);
     else await coordinator.setBackgroundSoundsEnabled(!state.snapshot.enabled);
   }
-  else if (row === 1) await coordinator.cycleBackgroundSound(key.leftArrow ? -1 : 1);
+  else if (row === 1 && key.return) {
+    const activeIndex = state.snapshot.sounds.findIndex((sound) => sound.id === state.snapshot.sound.id);
+    coordinator.dispatchUi({ type: "openBackgroundSoundPicker", activeIndex: Math.max(0, activeIndex) });
+  }
   else if (row === 2 && (key.leftArrow || key.rightArrow)) coordinator.adjustBackgroundSoundsVolume(key.leftArrow ? -1 : 1);
   return true;
+}
+
+async function routeBackgroundSoundPicker(input: string, key: InputKey, coordinator: AppCoordinator): Promise<void> {
+  const picker = coordinator.uiState.background.soundPicker;
+  const state = coordinator.appState.backgroundSounds;
+  if (!picker || !("snapshot" in state)) return;
+  if (key.escape || input === "q") {
+    coordinator.dispatchUi({ type: "dismissBackgroundSoundPicker" });
+    return;
+  }
+  const sounds = state.snapshot.sounds;
+  const jump = listJump(input, key, chordPending(coordinator.uiState), sounds.length, picker.selectedIndex);
+  const delta = input === "j" || key.downArrow ? 1 : input === "k" || key.upArrow ? -1 : 0;
+  if (jump.pending !== undefined) coordinator.dispatchUi({ type: "setPendingVimChord", pending: jump.pending });
+  else if (coordinator.uiState.pendingVimChord) coordinator.dispatchUi({ type: "setPendingVimChord", pending: false });
+  if (jump.index !== undefined || delta !== 0 || key.home || key.end) {
+    const index = jump.index ?? (key.home ? 0 : key.end ? sounds.length - 1 : picker.selectedIndex + delta);
+    coordinator.dispatchUi({ type: "selectBackgroundSound", index, count: sounds.length });
+    return;
+  }
+  if (key.return) {
+    const selected = sounds[picker.selectedIndex];
+    coordinator.dispatchUi({ type: "dismissBackgroundSoundPicker" });
+    if (selected && selected.id !== state.snapshot.sound.id) await coordinator.setBackgroundSound(selected.id);
+  }
+}
+
+function backgroundSoundPickerModal(
+  sounds: readonly { id: string; label: string }[],
+  picker: NonNullable<UiState["background"]["soundPicker"]>,
+  noColor: boolean,
+) {
+  const rows = sounds.slice(picker.scroll, picker.scroll + 10).map((sound, offset) => {
+    const index = picker.scroll + offset;
+    return h(Text, {
+      inverse: index === picker.selectedIndex,
+      color: index === picker.selectedIndex && !noColor ? "cyan" : undefined,
+      wrap: "truncate-end",
+    }, () => `${index === picker.selectedIndex ? "›" : " "} ${sound.label}`);
+  });
+  return h(Box, {
+    flexDirection: "column", borderStyle: "round", borderColor: noColor ? undefined : "cyan",
+    paddingX: 2, width: "60%",
+  }, () => [
+    h(Text, { bold: true }, () => "Choose Background Sound"),
+    ...rows,
+    h(Text, { dimColor: true }, () => "j/k or ↑/↓ Move · Enter Choose · Esc Cancel"),
+  ]);
 }
 
 function activePlaylistName(appState: PublicationSnapshot["appState"]): string {
@@ -1068,7 +1135,8 @@ function activeShortcutGroups(tab: UiState["activeTab"], incompleteSelected: boo
     title: "BACKGROUND SOUNDS",
     rows: [
       ["j/k, ↑/↓", "Move selection"], ["u", "Refresh or retry macOS state"],
-      ["←/→", "Adjust focused sound or volume"], ["Enter", "Activate focused control"],
+      ["Enter on Sound", "Open sound picker"], ["←/→", "Set enabled state or adjust volume"],
+      ["Enter", "Toggle enabled state or choose sound"],
     ],
   }];
   return [
@@ -1210,7 +1278,9 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
             ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
             : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.activeTab === "background"
-            ? [["j/k", "Move"], ["←/→", "Adjust"], ["Enter", "Activate"], ["u", "Refresh"], ["?", "Help"]]
+            ? ui.background.selectedRow === 1
+              ? [["j/k", "Move"], ["Enter", "Choose Sound"], ["u", "Refresh"], ["?", "Help"]]
+              : [["j/k", "Move"], ["←/→", "Adjust"], ["Enter", "Activate"], ["u", "Refresh"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];

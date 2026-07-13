@@ -24,6 +24,9 @@ export type UiStateAction =
   | { type: "setDownloaderBatchSelection"; index: number; resultCount: number }
   | { type: "setBackgroundSelection"; index: number }
   | { type: "setBackgroundPendingVolume"; percent: number | null }
+  | { type: "openBackgroundSoundPicker"; activeIndex: number }
+  | { type: "selectBackgroundSound"; index: number; count: number }
+  | { type: "dismissBackgroundSoundPicker" }
   | { type: "setPendingVimChord"; pending: boolean }
   | { type: "selectPlaylistTrack"; index: number; identities: readonly TrackIdentity[] }
   | { type: "resetPlaylistSelection"; index: number; identities: readonly TrackIdentity[] }
@@ -60,7 +63,7 @@ export function createInitialUiState(options: InitialUiStateOptions = {}): UiSta
     selectedPlaylistIdentity: null,
     library: { query: "", inputFocused: false, selectedIndex: 0, healthSelectedIndex: 0, scroll: 0 },
     downloader: { urlInput: "", inputFocused: true, selectedBatchIndex: 0, scroll: 0 },
-    background: { selectedRow: 0, pendingVolumePercent: null },
+    background: { selectedRow: 0, pendingVolumePercent: null, soundPicker: null },
     terminal: { columns, rows, tier: responsiveTier(columns, rows) },
     pendingConfirmation: null,
     renameDialog: null,
@@ -126,6 +129,21 @@ export function reduceUiState(state: UiState, action: UiStateAction): UiState {
       return { ...state, background: { ...state.background, selectedRow: clampIndex(action.index, 3) } };
     case "setBackgroundPendingVolume":
       return { ...state, background: { ...state.background, pendingVolumePercent: action.percent } };
+    case "openBackgroundSoundPicker":
+      return { ...state, background: { ...state.background, soundPicker: {
+        selectedIndex: action.activeIndex,
+        scroll: visibleScroll(0, action.activeIndex),
+      } } };
+    case "selectBackgroundSound": {
+      if (!state.background.soundPicker) return state;
+      const selectedIndex = clampIndex(action.index, action.count);
+      return { ...state, background: { ...state.background, soundPicker: {
+        selectedIndex,
+        scroll: visibleScroll(state.background.soundPicker.scroll, selectedIndex),
+      } } };
+    }
+    case "dismissBackgroundSoundPicker":
+      return { ...state, background: { ...state.background, soundPicker: null } };
     case "setPendingVimChord":
       return { ...state, pendingVimChord: action.pending ? { key: "g", expiresAtMs: Date.now() + 1_000 } : null };
     case "selectPlaylistTrack": {

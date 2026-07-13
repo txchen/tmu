@@ -189,13 +189,10 @@ export class AppCoordinator {
     await this.runBackgroundSounds({ type: "setEnabled", value });
   }
 
-  async cycleBackgroundSound(delta: 1 | -1): Promise<void> {
+  async setBackgroundSound(id: string): Promise<void> {
     const state = this.appState.backgroundSounds;
-    if (state.status !== "ready") return;
-    const current = state.snapshot.sounds.findIndex((sound) => sound.id === state.snapshot.sound.id);
-    const index = (current + delta + state.snapshot.sounds.length) % state.snapshot.sounds.length;
-    const target = state.snapshot.sounds[index];
-    if (target) await this.runBackgroundSounds({ type: "setSound", value: target.id });
+    if (state.status !== "ready" || !state.snapshot.sounds.some((sound) => sound.id === id)) return;
+    await this.runBackgroundSounds({ type: "setSound", value: id });
   }
 
   adjustBackgroundSoundsVolume(delta: 1 | -1): void {

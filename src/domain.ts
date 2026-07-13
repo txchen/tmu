@@ -252,7 +252,11 @@ export type UiState = {
     selectedBatchIndex: number;
     scroll: number;
   };
-  background: { selectedRow: number; pendingVolumePercent: number | null };
+  background: {
+    selectedRow: number;
+    pendingVolumePercent: number | null;
+    soundPicker: null | { selectedIndex: number; scroll: number };
+  };
   terminal: {
     columns: number;
     rows: number;
