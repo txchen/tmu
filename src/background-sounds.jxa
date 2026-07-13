@@ -13,12 +13,17 @@ function failure(code, message) {
 }
 
 function responds(object, selector) {
-  return Boolean(object && object.respondsToSelector($.NSSelectorFromString(selector)));
+  return Boolean(object && typeof object.respondsToSelector === "function"
+    && object.respondsToSelector($.NSSelectorFromString(selector)));
 }
 
 function stringValue(value) {
   if (value === undefined || value === null) return "";
   try { return String(ObjC.unwrap(value)); } catch (_) { return String(value); }
+}
+
+function filePathValue(value) {
+  return responds(value, "path") ? stringValue(value.path) : stringValue(value);
 }
 
 function soundOption(sound) {
@@ -47,14 +52,14 @@ function discoverSounds(settings) {
     const group = properties && Number(ObjC.unwrap(properties.objectForKey("SoundGroup")));
     const assetData = assetRoot + "/AssetData";
     if (name && Number.isInteger(group) && fileManager.fileExistsAtPath(assetData)) {
-      values.push(soundClass.soundWithNamePathAndGroup(name, assetData, group));
+      values.push(soundClass.soundWithNamePathAndGroup(name, $.NSURL.fileURLWithPath(assetData), group));
     }
   }
   const seen = {};
   const sounds = [];
   const objects = {};
   for (const sound of values) {
-    const path = stringValue(sound.path);
+    const path = filePathValue(sound.path);
     const usable = Boolean(path) && Boolean(fileManager.fileExistsAtPath(path));
     if (!usable) continue;
     const option = soundOption(sound);

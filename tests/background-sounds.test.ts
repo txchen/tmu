@@ -36,7 +36,16 @@ describe("Background Sounds runtime boundary", () => {
   });
 
   test("bundled helper includes sounds from the installed MobileAsset inventory", async () => {
-    const response = await runBundledHelperWithCatalog(true);
+    const response = await runBundledHelperWithCatalog({ includeInstalledAsset: true });
+    expect(response).toMatchObject({
+      protocolVersion: 1,
+      ok: true,
+      snapshot: { sounds: [{ id: "Rain" }, { id: "Ocean" }] },
+    });
+  });
+
+  test("bundled helper constructs installed sounds with file URLs", async () => {
+    const response = await runBundledHelperWithCatalog({ includeInstalledAsset: true, requireFileUrl: true });
     expect(response).toMatchObject({
       protocolVersion: 1,
       ok: true,
@@ -198,7 +207,11 @@ async function runBundledHelper(options: { missingSelector?: string; available?:
   return JSON.parse(context.__result!) as Record<string, unknown>;
 }
 
-async function runBundledHelperWithCatalog(includeInstalledAsset = false): Promise<Record<string, unknown>> {
+async function runBundledHelperWithCatalog(options: {
+  includeInstalledAsset?: boolean;
+  requireFileUrl?: boolean;
+} = {}): Promise<Record<string, unknown>> {
+  const { includeInstalledAsset = false, requireFileUrl = false } = options;
   const source = await readFile(new URL("../src/background-sounds.jxa", import.meta.url), "utf8");
   const option = (name: string, installed: boolean) => ({
     name,
@@ -221,7 +234,12 @@ async function runBundledHelperWithCatalog(includeInstalledAsset = false): Promi
   };
   const soundClass = {
     respondsToSelector: (selector: string) => selector === "soundWithName:path:andGroup:",
-    soundWithNamePathAndGroup: (name: string, path: string) => ({ ...option(String(name), true), path }),
+    soundWithNamePathAndGroup: (name: string, path: unknown) => {
+      if (requireFileUrl && (!path || typeof path !== "object" || !("filePath" in path))) {
+        throw new Error("HUComfortSound requires a file URL");
+      }
+      return { ...option(String(name), true), path };
+    },
   };
   const properties = {
     objectForKey: (key: string) => key === "SoundName" ? "Ocean" : key === "SoundGroup" ? 4 : null,
@@ -231,9 +249,15 @@ async function runBundledHelperWithCatalog(includeInstalledAsset = false): Promi
   }), {
     NSSelectorFromString: (selector: string) => selector,
     NSBundle: { bundleWithPath: () => ({ load: true, pathsForResourcesOfTypeInDirectory: () => ["/sounds/Ocean.m4a"] }) },
+    NSURL: { fileURLWithPath: (filePath: string) => ({
+      filePath,
+      path: filePath,
+      respondsToSelector: (selector: string) => selector === "path",
+    }) },
     NSFileManager: { defaultManager: {
       contentsOfDirectoryAtPathError: () => includeInstalledAsset ? ["ocean.asset"] : [],
-      fileExistsAtPath: () => true,
+      fileExistsAtPath: (path: unknown) => !requireFileUrl
+        || (typeof path === "string" && path.startsWith("/")),
     } },
     NSDictionary: { dictionaryWithContentsOfFile: () => ({
       objectForKey: (key: string) => key === "MobileAssetProperties" ? properties : null,
