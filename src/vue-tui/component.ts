@@ -111,6 +111,11 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.notify(publicationCause(reason));
       });
       const app = useApp();
+      const unsubscribeShutdown = coordinator.onDaemonShutdown?.(() => {
+        coordinator.dispatchUi({ type: "setNotification", notification: { level: "error", message: "TMU Daemon is shutting down…" } });
+        publication.notify("state");
+        setTimeout(() => app.exit(), 50);
+      });
       const { columns, rows } = useWindowSize();
       watch([columns, rows], ([nextColumns, nextRows]) => {
         dispatchTerminalResize(coordinator, nextColumns, nextRows);
@@ -124,6 +129,12 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
+        if (isCtrlQ(input, key)) {
+          const impact = await coordinator.requestShutdownChallenge?.();
+          if (impact) coordinator.dispatchUi({ type: "requestConfirmation", kind: "shutdown-daemon", target: impact });
+          publication.notify("input");
+          return;
+        }
         if (coordinator.quitIsClientOnly && (isCtrlC(input, key) || input === "q")) {
           app.exit();
           return;
@@ -259,6 +270,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       }
 
       onScopeDispose(() => {
+        unsubscribeShutdown?.();
         if (notificationTimer) clearTimeout(notificationTimer);
         unsubscribeCoordinator();
         unsubscribePublication();
@@ -1220,7 +1232,7 @@ function globalShortcutGroups(tab: UiState["activeTab"]): ShortcutGroup[] {
     },
     {
       title: "APPLICATION",
-      rows: [["q", "Quit outside input/Help"], ["Ctrl-C", "Quit (confirm downloads)"], ["Enter/q/?/Esc", "Close Help only"]],
+      rows: [["q", "Quit Client outside input/Help"], ["Ctrl-C", "Quit (confirm downloads) — Client only"], ["Ctrl-Q", "Shut down TMU Daemon"], ["Enter/q/?/Esc", "Close Help only"]],
     },
     {
       title: "INPUT CAPTURE",
@@ -1412,4 +1424,8 @@ function nextGraphemeBoundary(value: string, cursor: number): number {
 
 function isCtrlC(input: string, key: InputKey): boolean {
   return input === "\x03" || (key.ctrl === true && input === "c");
+}
+
+function isCtrlQ(input: string, key: InputKey): boolean {
+  return input === "\x11" || (key.ctrl === true && input.toLowerCase() === "q");
 }

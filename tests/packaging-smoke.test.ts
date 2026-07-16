@@ -166,9 +166,31 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
     output = "";
     terminal.write("[");
     await waitFor(() => output.includes("▸ Library ◂"));
+    output = "";
+    terminal.write("\x11");
+    await waitFor(() => stripAnsi(output).includes("Shut down TMU Daemon?") && stripAnsi(output).includes("connected clients"));
+    output = "";
+    terminal.write("n");
+    await waitFor(() => stripAnsi(output).includes("▸ Library ◂") && !stripAnsi(output).includes("Shut down TMU Daemon?"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
     terminal.write("q");
     const exit = await withTimeout(exitPromise, 10_000, "Timed out waiting for packed terminal exit");
-    expect(exit.exitCode).toBe(0);
+    expect(exit.exitCode, stripAnsi(output)).toBe(0);
+    const status = await exec(command, [...args, "daemon", "status"], { cwd: root, env });
+    expect(status.stdout).toContain("TMU Daemon: ready");
+    expect(status.stdout).toContain("Playing Playlist: Default");
+    await expect(exec(command, [...args, "daemon", "stop"], { cwd: root, env })).rejects.toMatchObject({
+      code: 2, stderr: expect.stringContaining("Refusing non-interactive daemon stop"),
+    });
+    const stopTerminal = spawn(command, [...args, "daemon", "stop"], { cols: 100, rows: 24, cwd: root, env });
+    let stopOutput = ""; stopTerminal.onData((data) => { stopOutput += data; });
+    const stopExit = new Promise<{ exitCode: number }>((resolve) => stopTerminal.onExit(resolve));
+    await waitFor(() => stopOutput.includes("Shut down TMU Daemon? [y/N]"));
+    stopTerminal.write("n\r");
+    expect((await withTimeout(stopExit, 5_000, "Timed out cancelling interactive stop")).exitCode).toBe(0);
+    expect(stopOutput).toContain("Shutdown cancelled");
+    const forced = await exec(command, [...args, "daemon", "stop", "--force"], { cwd: root, env });
+    expect(forced.stdout).toContain("Graceful daemon shutdown requested");
   } finally {
     if (!exited) terminal.kill();
     await withTimeout(exitPromise, 2_000, "Timed out cleaning up packed terminal process");

@@ -4,6 +4,7 @@ import { rm } from "node:fs/promises";
 import net from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import type { PlaybackLocator, Player, PlayerLoadOptions, PlayerPlaybackState } from "./domain";
+import { daemonOwnedChildren } from "./child-ownership";
 
 const OBSERVED_MPV_PROPERTIES = ["duration", "pause", "idle-active", "eof-reached"] as const;
 const DEFAULT_POSITION_POLL_MS = 1000;
@@ -667,6 +668,7 @@ export class NodeMpvProcessAdapter implements MpvProcessAdapter {
       cwd: options.cwd,
       stdio: "ignore",
     });
+    daemonOwnedChildren.register(subprocess, "mpv");
     const exited = new Promise<number | null>((resolve, reject) => {
       subprocess.once("error", reject);
       subprocess.once("exit", resolve);

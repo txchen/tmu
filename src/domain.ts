@@ -12,7 +12,8 @@ export type ConfirmationKind =
   | "delete-cache"
   | "cleanup-cache"
   | "accept-playlist"
-  | "quit-downloads";
+  | "quit-downloads"
+  | "shutdown-daemon";
 
 export type PickerOverlay = {
   kind: "shortcut-help";

@@ -404,6 +404,11 @@ export class AppCoordinator {
     }
   }
 
+  /** Bounded by the daemon runtime when ordinary graceful teardown exceeds its budget. */
+  async persistFinalSnapshot(): Promise<void> {
+    await this.saveLastPlaylistSnapshot({ meaningful: false });
+  }
+
   /** Daemon-only download ingress. Ownership ends once a Batch is accepted. */
   startDaemonDownload(url: string, ownerClientId: string): void {
     this.startYouTubeUrlDownload(url, ownerClientId);

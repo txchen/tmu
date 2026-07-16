@@ -24,6 +24,7 @@ export type CommandFeedback = Readonly<{
 }>;
 
 export type DaemonNotice = Readonly<{ message: string; revision: number }>;
+export type DaemonLifecycle = "starting" | "ready" | "terminating" | "stopped";
 
 export type ConfirmationChallenge = Readonly<{
   token: string;
@@ -69,12 +70,16 @@ export interface TuiDaemonClient {
   dispatchUi(action: UiStateAction): Readonly<UiState>;
   playlistTrackIdentities(): readonly TrackIdentity[];
   onStateChange(listener: (reason: AppStateChangeReason) => void): () => void;
+  onDaemonShutdown?(listener: (message: string) => void): () => void;
   enterBackgroundSounds(): Promise<void>;
   retryBackgroundSounds(): Promise<void>;
   setBackgroundSoundsEnabled(value: boolean): Promise<void>;
   setBackgroundSound(id: string): Promise<void>;
   adjustBackgroundSoundsVolume(delta: 1 | -1): void;
   confirmProtected?(kind: ConfirmationChallenge["kind"], targetId: string, intent: AppIntent): Promise<void>;
+  requestShutdownChallenge?(): Promise<string>;
+  confirmShutdown?(): Promise<void>;
+  cancelShutdown?(): Promise<void>;
 }
 
 type ClientRecord = {
@@ -96,6 +101,10 @@ export class InProcessDaemonApplication {
   private lastFingerprint = "";
   private unsubscribe?: () => void;
   private publication?: StatePublicationGate;
+  private lifecycle: DaemonLifecycle = "starting";
+  private shutdownListener?: () => void;
+  private operationalLog?: (message: string) => void;
+  private lastOperationalEvent = "";
 
   constructor(private readonly coordinator: AppCoordinator, private readonly now: () => number = Date.now) {}
 
@@ -114,9 +123,11 @@ export class InProcessDaemonApplication {
     this.publication.subscribe((snapshot) => this.publish(snapshot.appState));
     this.publish(this.publication.publishInitial().appState, true);
     this.unsubscribe = this.coordinator.onStateChange((reason) => this.onCoordinatorChange(reason));
+    this.lifecycle = "ready";
   }
 
   async connect(): Promise<DaemonClient> {
+    if (this.lifecycle !== "ready") throw new Error("TMU Daemon is shutting down");
     if (!this.currentSnapshot) throw new Error("Daemon application has not started");
     const id = crypto.randomUUID();
     const viewedPlaylistId = this.currentSnapshot.state.playlists.playingPlaylistId;
@@ -132,6 +143,7 @@ export class InProcessDaemonApplication {
   }
 
   async teardown(): Promise<void> {
+    this.lifecycle = "stopped";
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.publication?.stop();
@@ -139,6 +151,8 @@ export class InProcessDaemonApplication {
     this.challenges.clear();
     await this.commandTail.catch(() => undefined);
     await this.coordinator.teardown();
+    const cleanupFailure = [...this.coordinator.appState.appErrors].reverse().find((message) => message.startsWith("Coordinator cleanup failed:"));
+    if (cleanupFailure) throw new Error(cleanupFailure);
   }
 
   record(id: string): ClientRecord {
@@ -151,6 +165,7 @@ export class InProcessDaemonApplication {
 
   submit(clientId: string, command: SharedCommand): Promise<CommandFeedback> {
     this.record(clientId);
+    if (this.lifecycle !== "ready") return Promise.resolve(this.deliverFeedback(clientId, crypto.randomUUID(), "error", "TMU Daemon is shutting down"));
     const requestId = crypto.randomUUID();
     const execute = () => this.execute(clientId, requestId, command);
     const result = this.commandTail.then(execute, execute);
@@ -160,6 +175,7 @@ export class InProcessDaemonApplication {
 
   requestChallenge(clientId: string, request: { kind: ConfirmationChallenge["kind"]; targetId: string }): Promise<ConfirmationChallenge> {
     this.record(clientId);
+    if (this.lifecycle !== "ready") return Promise.reject(new Error("TMU Daemon is shutting down"));
     if (request.kind === "accept-playlist" && this.coordinator.playlistDownloadConfirmationOwner !== clientId) {
       return Promise.reject(new Error("Playlist download Confirmation Challenge belongs to another client"));
     }
@@ -200,6 +216,10 @@ export class InProcessDaemonApplication {
       this.commandTail = result.catch(() => undefined);
       return result;
     }
+    if (challenge.kind === "shutdown-daemon") {
+      this.beginShutdown(clientId);
+      return Promise.resolve(this.deliverFeedback(clientId, crypto.randomUUID(), "success", "TMU Daemon shutdown started"));
+    }
     return Promise.resolve(this.deliverFeedback(clientId, crypto.randomUUID(), "success", `confirmed ${challenge.kind}`));
   }
 
@@ -213,6 +233,32 @@ export class InProcessDaemonApplication {
     this.clients.delete(clientId);
     this.coordinator.disconnectDaemonClient(clientId);
     for (const [token, challenge] of this.challenges) if (challenge.clientId === clientId) this.challenges.delete(token);
+  }
+
+  get status(): Readonly<{ lifecycle: DaemonLifecycle; clientCount: number; snapshot: SharedStateSnapshot }> {
+    return { lifecycle: this.lifecycle, clientCount: this.clients.size, snapshot: this.currentSnapshot };
+  }
+
+  onShutdown(listener: () => void): void { this.shutdownListener = listener; }
+  onOperationalLog(listener: (message: string) => void): void { this.operationalLog = listener; }
+
+  async persistFinalSnapshot(): Promise<void> { await this.coordinator.persistFinalSnapshot(); }
+
+  requestOperationalShutdown(): void {
+    if (this.lifecycle !== "ready") return;
+    this.beginShutdown();
+  }
+
+  private beginShutdown(requestingClientId?: string): void {
+    if (this.lifecycle !== "ready") return;
+    this.lifecycle = "terminating";
+    this.challenges.clear();
+    const notice = Object.freeze({
+      message: requestingClientId ? "TMU Daemon is shutting down at a peer client's request" : "TMU Daemon is shutting down",
+      revision: this.revision,
+    });
+    for (const client of this.clients.values()) for (const listener of client.notices) listener(notice);
+    this.shutdownListener?.();
   }
 
   private async execute(clientId: string, requestId: string, command: SharedCommand, confirmed = false): Promise<CommandFeedback> {
@@ -278,10 +324,18 @@ export class InProcessDaemonApplication {
     const feedback = Object.freeze({ requestId, status, message, revision: this.revision });
     const client = this.clients.get(clientId);
     if (client) for (const listener of client.feedback) listener(feedback);
+    if (status !== "success") this.operationalLog?.(`command failure: ${message}`);
     return feedback;
   }
 
-  private onCoordinatorChange(reason: AppStateChangeReason): void { this.publication?.notify(reason); }
+  private onCoordinatorChange(reason: AppStateChangeReason): void {
+    this.publication?.notify(reason);
+    const event = this.coordinator.appState.lastEvent;
+    if (event !== this.lastOperationalEvent && /(?:Download Batch|downloaded|recovery|persist|failed|failure)/i.test(event)) {
+      this.lastOperationalEvent = event;
+      this.operationalLog?.(event);
+    }
+  }
 
   private publish(selected: AppStateSnapshot, force = false): void {
     const { appErrors: _legacyErrors, operationFeedback: _feedback, activePlaylistContent, playlists, ...state } = selected;
@@ -373,6 +427,8 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
   private latestFeedback: AppState["operationFeedback"];
   private readonly errors: string[] = [];
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
+  private readonly shutdownListeners = new Set<(message: string) => void>();
+  private shutdownChallenge?: ConfirmationChallenge;
   constructor(private readonly client: DaemonClient, readonly quitIsClientOnly = true) {
     client.onSnapshot(() => this.notifyState("state"));
     client.onFeedback((feedback) => {
@@ -387,6 +443,7 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
     client.onNotice((notice) => {
       this.errors.splice(0, this.errors.length, notice.message);
       this.notifyState("state");
+      if (notice.message.includes("shutting down")) for (const listener of this.shutdownListeners) listener(notice.message);
     });
   }
   get appState(): AppState {
@@ -423,6 +480,10 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
   }
+  onDaemonShutdown(listener: (message: string) => void): () => void {
+    this.shutdownListeners.add(listener);
+    return () => this.shutdownListeners.delete(listener);
+  }
   async enterBackgroundSounds() { await this.client.submit({ type: "background", operation: "enter" }); }
   async retryBackgroundSounds() { await this.client.submit({ type: "background", operation: "retry" }); }
   async setBackgroundSoundsEnabled(value: boolean) { await this.client.submit({ type: "background", operation: "setEnabled", value }); }
@@ -431,6 +492,21 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
   async confirmProtected(kind: ConfirmationChallenge["kind"], targetId: string, _intent: AppIntent): Promise<void> {
     const challenge = await this.client.requestChallenge({ kind, targetId });
     await this.client.confirmChallenge(challenge.token);
+  }
+  async requestShutdownChallenge(): Promise<string> {
+    this.shutdownChallenge = await this.client.requestChallenge({ kind: "shutdown-daemon", targetId: "daemon" });
+    return this.shutdownChallenge.impact;
+  }
+  async confirmShutdown(): Promise<void> {
+    const challenge = this.shutdownChallenge;
+    if (!challenge) throw new Error("Shutdown Confirmation Challenge is missing");
+    this.shutdownChallenge = undefined;
+    await this.client.confirmChallenge(challenge.token);
+  }
+  async cancelShutdown(): Promise<void> {
+    const challenge = this.shutdownChallenge;
+    this.shutdownChallenge = undefined;
+    if (challenge) await this.client.cancelChallenge(challenge.token);
   }
   private notifyState(reason: AppStateChangeReason): void {
     for (const listener of this.stateListeners) listener(reason);

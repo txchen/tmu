@@ -34,6 +34,10 @@ export function activeConfirmation(coordinator: TuiDaemonClient): ConfirmationDe
   }
   const pending = coordinator.uiState.pendingConfirmation;
   if (!pending) return null;
+  if (pending.kind === "shutdown-daemon") return {
+    kind: pending.kind, title: "Shut down TMU Daemon?", confirmLabel: "Shut down",
+    consequence: pending.target ?? "Playback and downloads will stop and all clients will exit.",
+  };
   if (pending.kind === "delete-playlist") {
     const playlist = app.playlists.playlists.find((candidate) => candidate.id === pending.target);
     if (!playlist) return null;
@@ -76,6 +80,10 @@ export async function activateConfirmation(
     else await coordinator.dispatch(intent);
   };
   switch (confirmation.kind) {
+    case "shutdown-daemon":
+      if (confirmed) await coordinator.confirmShutdown?.();
+      else await coordinator.cancelShutdown?.();
+      return;
     case "delete-playlist":
       if (confirmed && confirmation.target) await protect(confirmation.kind, confirmation.target, { type: "deletePlaylist", playlistId: confirmation.target });
       return;

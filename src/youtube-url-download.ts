@@ -7,6 +7,7 @@ import type {
   DependencyCommandRunner,
 } from "./dependencies";
 import { nodeDependencyCommandRunner } from "./dependencies";
+import { daemonOwnedChildren } from "./child-ownership";
 import { YOUTUBE_CACHE_PROVIDER_ID, type TrackIdentity } from "./domain";
 import {
   createYouTubeCacheProvider,
@@ -559,6 +560,7 @@ function isYouTubeVideoId(value: string): boolean { return /^[A-Za-z0-9_-]{11}$/
 
 export const nodeYouTubeDownloadProcessRunner: YouTubeDownloadProcessRunner = (request) => new Promise((resolve) => {
   const child = spawn(request.command, request.args, { stdio: ["ignore", "pipe", "pipe"] });
+  daemonOwnedChildren.register(child, "yt-dlp");
   const stdoutLines = new LineReader(request.onLine);
   const stderrLines = new LineReader(request.onLine);
   let stdout = ""; let stderr = ""; let errorMessageValue: string | undefined;

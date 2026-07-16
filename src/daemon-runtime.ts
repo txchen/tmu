@@ -1,5 +1,5 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
-import { chmod, lstat, mkdir, open, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -13,12 +13,23 @@ import {
 import { UiStateStore, type UiStateAction } from "./ui-state";
 import { DAEMON_PROTOCOL_VERSION, encodeFrame, FrameDecoder, isRecord } from "./daemon-protocol";
 import { assertExactKeys, validateChallenge, validateFeedback, validateNotice, validateSharedCommand, validateSnapshot, validateUiState } from "./daemon-validation";
+import { daemonOwnedChildren, type OwnedChildRegistry } from "./child-ownership";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const SOCKET_NAME = "daemon.sock";
+const CONTROL_PROTOCOL_VERSION = 1;
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const SHUTDOWN_GRACE_MS = 5_000;
 
 export type DaemonPaths = Readonly<{ runtimeDirectory: string; socketPath: string; lockPath: string; readyPath: string; logPath: string }>;
 export type UnixDaemonServerOptions = Readonly<{ maxOutboundBytes?: number }>;
+export type DaemonOperationalStatus = Readonly<{
+  controlProtocolVersion: number; protocolVersion: number; daemonVersion: string; pid: number; uptimeMs: number;
+  lifecycle: "starting" | "ready" | "terminating" | "stopped"; runtimePath: string; logPath: string;
+  clientCount: number; playingPlaylist: string; currentTrack: string | null; playbackStatus: string;
+  activeDownloads: number; pendingDownloads: number; configPath: string; configSource: "defaults" | "file";
+  recoveryState: string; latestSevereError: string | null; impact: string;
+}>;
 
 export class DaemonProtocolMismatchError extends Error {
   readonly code = "daemon-protocol-mismatch";
@@ -88,6 +99,12 @@ export class UnixDaemonServer {
     if (teardown) await this.application.teardown();
   }
 
+  async forceClose(): Promise<void> {
+    for (const socket of this.sockets) socket.destroy();
+    this.server?.close();
+    await rm(this.paths.socketPath, { force: true });
+  }
+
   private accept(socket: Socket): void {
     this.sockets.add(socket);
     const decoder = new FrameDecoder();
@@ -99,6 +116,10 @@ export class UnixDaemonServer {
       try {
         for (const frame of decoder.push(chunk)) {
           if (!initialized) {
+            if (isRecord(frame) && frame.type === "control") {
+              await this.handleControl(socket, frame);
+              return;
+            }
             const hello = validateHello(frame);
             if (hello.protocolVersion !== DAEMON_PROTOCOL_VERSION) {
               send({ type: "protocolError", expected: DAEMON_PROTOCOL_VERSION, received: hello.protocolVersion });
@@ -128,6 +149,23 @@ export class UnixDaemonServer {
     });
     socket.on("close", () => { this.sockets.delete(socket); client?.disconnect(); });
     socket.on("error", () => undefined);
+  }
+
+  private async handleControl(socket: Socket, frame: Record<string, unknown>): Promise<void> {
+    assertExactKeys(frame, ["type", "controlVersion", "operation"], frame.operation === "stop" ? ["confirmed", "expectedImpact"] : []);
+    if (frame.controlVersion !== CONTROL_PROTOCOL_VERSION || !["status", "stop"].includes(String(frame.operation))) {
+      socket.end(encodeFrame({ type: "controlError", error: "Unsupported TMU daemon control handshake" })); return;
+    }
+    const status = await operationalStatus(this.application, this.paths);
+    if (frame.operation === "stop" && frame.expectedImpact !== status.impact) {
+      socket.end(encodeFrame({ type: "controlError", error: "Daemon impact changed; review status and confirm again" })); return;
+    }
+    socket.write(encodeFrame({ type: "controlStatus", status }));
+    if (frame.operation === "stop") {
+      if (frame.confirmed !== true) { socket.end(); return; }
+      this.application.requestOperationalShutdown();
+    }
+    socket.end();
   }
 }
 
@@ -323,26 +361,109 @@ async function assertPrivateOwnedSocket(socketPath: string): Promise<void> {
   }
 }
 
-export async function runDaemonProcess(): Promise<void> {
+export type BoundedShutdownResult = Readonly<{ clean: boolean; exitCode: 0 | 1; timedOut: boolean; persistenceFailed: boolean; terminated: number[]; refused: number[] }>;
+
+export async function completeBoundedShutdown(options: {
+  cleanup: Promise<void>; forceClose(): Promise<void>; finalPersistence(): Promise<void>; ownedChildren?: OwnedChildRegistry;
+  graceMs?: number; finalPersistenceMs?: number;
+}): Promise<BoundedShutdownResult> {
+  const graceMs = options.graceMs ?? SHUTDOWN_GRACE_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupError = false;
+  const clean = await Promise.race([
+    options.cleanup.then(() => true, () => { cleanupError = true; return false; }),
+    new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), graceMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+  if (clean) return { clean: true, exitCode: 0, timedOut: false, persistenceFailed: false, terminated: [], refused: [] };
+  const children = (options.ownedChildren ?? daemonOwnedChildren).terminateVerified();
+  await options.forceClose().catch(() => undefined);
+  let persistenceFailed = false; let persistenceTimer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    options.finalPersistence().catch(() => { persistenceFailed = true; }),
+    new Promise<void>((resolve) => { persistenceTimer = setTimeout(() => { persistenceFailed = true; resolve(); }, options.finalPersistenceMs ?? 250); }),
+  ]);
+  if (persistenceTimer) clearTimeout(persistenceTimer);
+  return { clean: false, exitCode: 1, timedOut: !cleanupError, persistenceFailed, ...children };
+}
+
+export async function runDaemonProcess(options: { exit?: (code: number) => never } = {}): Promise<void> {
   const paths = await resolveDaemonPaths();
   await appendLog(paths.logPath, `starting pid=${process.pid}`);
   const { coordinator } = await createTmuRuntime();
   const application = new InProcessDaemonApplication(coordinator);
   const server = new UnixDaemonServer(application, paths);
+  let requestStop!: () => void;
+  const stopped = new Promise<void>((resolve) => { requestStop = resolve; });
+  application.onShutdown(requestStop);
+  application.onOperationalLog((message) => { void appendDaemonLog(paths.logPath, message); });
   try {
     await application.start();
     await server.listen();
     await writeFile(paths.readyPath, JSON.stringify({ pid: process.pid, protocolVersion: DAEMON_PROTOCOL_VERSION, startedAt: Date.now() }), { mode: 0o600 });
     await rm(paths.lockPath, { recursive: true, force: true });
     await appendLog(paths.logPath, "ready");
-    await new Promise<void>((resolve) => {
-      const stop = () => resolve(); process.once("SIGTERM", stop); process.once("SIGINT", stop);
-    });
+    const signalStop = () => { application.requestOperationalShutdown(); requestStop(); };
+    process.once("SIGTERM", signalStop); process.once("SIGINT", signalStop);
+    await stopped;
+    await appendDaemonLog(paths.logPath, "shutdown requested");
   } catch (error) {
     await appendLog(paths.logPath, `fatal ${error instanceof Error ? error.message : String(error)}`);
     await rm(paths.lockPath, { recursive: true, force: true });
     throw error;
-  } finally { await server.close(); await rm(paths.readyPath, { force: true }); }
+  } finally {
+    const result = await completeBoundedShutdown({ cleanup: server.close(), forceClose: () => server.forceClose(),
+      finalPersistence: () => application.persistFinalSnapshot() });
+    if (!result.clean) {
+      await appendDaemonLog(paths.logPath, result.timedOut ? "severe graceful shutdown exceeded five-second budget" : "severe shutdown cleanup failed");
+      if (result.persistenceFailed) await appendDaemonLog(paths.logPath, "severe final persistence attempt failed or timed out");
+      if (result.refused.length) await appendDaemonLog(paths.logPath, `refused unverified child cleanup count=${result.refused.length}`);
+      process.exitCode = 1;
+    }
+    await rm(paths.readyPath, { force: true });
+    await appendDaemonLog(paths.logPath, result.clean ? "shutdown complete" : "shutdown cleanup failed");
+    if (!result.clean) (options.exit ?? ((code: number) => process.exit(code)))(1);
+  }
+}
+
+export async function queryDaemonStatus(options: { env?: NodeJS.ProcessEnv; stop?: boolean; expectedImpact?: string } = {}): Promise<DaemonOperationalStatus> {
+  const paths = await resolveDaemonPaths(options.env);
+  await assertPrivateOwnedSocket(paths.socketPath);
+  const socket = createConnection(paths.socketPath);
+  const decoder = new FrameDecoder();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { socket.destroy(); reject(new Error(`TMU Daemon control handshake timed out. See ${paths.logPath}; verify the PID before manual cleanup.`)); }, 5_000);
+    socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+    socket.on("data", (chunk) => {
+      try { for (const message of decoder.push(chunk)) {
+        if (isRecord(message) && message.type === "controlError" && typeof message.error === "string") throw new Error(message.error);
+        if (!isRecord(message) || message.type !== "controlStatus") throw new Error("Invalid TMU Daemon control response");
+        assertExactKeys(message, ["type", "status"]);
+        const status = validateOperationalStatus(message.status);
+        clearTimeout(timer); socket.end(); resolve(status);
+      } } catch (error) { clearTimeout(timer); socket.destroy(); reject(error instanceof Error ? error : new Error(String(error))); }
+    });
+    socket.once("connect", () => socket.write(encodeFrame({ type: "control", controlVersion: CONTROL_PROTOCOL_VERSION,
+      operation: options.stop ? "stop" : "status", ...(options.stop ? { confirmed: true, expectedImpact: options.expectedImpact } : {}) })));
+  });
+}
+
+export function validateOperationalStatus(value: unknown): DaemonOperationalStatus {
+  if (!isRecord(value)) throw new Error("Invalid TMU Daemon control status");
+  assertExactKeys(value, ["controlProtocolVersion", "protocolVersion", "daemonVersion", "pid", "uptimeMs", "lifecycle", "runtimePath", "logPath",
+    "clientCount", "playingPlaylist", "currentTrack", "playbackStatus", "activeDownloads", "pendingDownloads", "configPath", "configSource",
+    "recoveryState", "latestSevereError", "impact"]);
+  const integers = ["controlProtocolVersion", "protocolVersion", "pid", "uptimeMs", "clientCount", "activeDownloads", "pendingDownloads"] as const;
+  for (const key of integers) if (!Number.isInteger(value[key]) || (value[key] as number) < 0) throw new Error(`Invalid TMU Daemon control status: ${key}`);
+  const strings = ["daemonVersion", "runtimePath", "logPath", "playingPlaylist", "playbackStatus", "configPath", "recoveryState", "impact"] as const;
+  for (const key of strings) if (typeof value[key] !== "string") throw new Error(`Invalid TMU Daemon control status: ${key}`);
+  if (value.controlProtocolVersion !== CONTROL_PROTOCOL_VERSION || (value.pid as number) === 0) throw new Error("Invalid TMU Daemon control status: identity");
+  if (!["starting", "ready", "terminating", "stopped"].includes(String(value.lifecycle))) throw new Error("Invalid TMU Daemon control status: lifecycle");
+  if (!["idle", "playing", "paused", "stopped", "error"].includes(String(value.playbackStatus))) throw new Error("Invalid TMU Daemon control status: playbackStatus");
+  if (!["defaults", "file"].includes(String(value.configSource))) throw new Error("Invalid TMU Daemon control status: configSource");
+  if (value.currentTrack !== null && typeof value.currentTrack !== "string") throw new Error("Invalid TMU Daemon control status: currentTrack");
+  if (value.latestSevereError !== null && typeof value.latestSevereError !== "string") throw new Error("Invalid TMU Daemon control status: latestSevereError");
+  return value as DaemonOperationalStatus;
 }
 
 export async function connectOrStartDaemon(options: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {}): Promise<TuiDaemonClient> {
@@ -373,9 +494,39 @@ export async function connectOrStartDaemon(options: { env?: NodeJS.ProcessEnv; t
 
 function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void): () => void { set.add(listener); return () => set.delete(listener); }
 function packageVersion(): string { return process.env.npm_package_version ?? "0.3.0"; }
-async function appendLog(path: string, message: string): Promise<void> {
+export async function appendDaemonLog(path: string, message: string, maximumBytes = LOG_MAX_BYTES): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const handle = await open(path, "a", 0o600); try { await handle.appendFile(`${new Date().toISOString()} ${message}\n`); } finally { await handle.close(); }
+  const safe = redactLogMessage(message);
+  try { if ((await stat(path)).size >= maximumBytes) { await rm(`${path}.1`, { force: true }); await rename(path, `${path}.1`); } } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const handle = await open(path, "a", 0o600); try { await handle.appendFile(`${new Date().toISOString()} ${safe}\n`); } finally { await handle.close(); }
+}
+
+const appendLog = appendDaemonLog;
+
+export function redactLogMessage(message: string): string {
+  return message
+    .replace(/https?:\/\/(?:www\.)?(?:youtube\.com|music\.youtube\.com|youtu\.be)\/\S+/gi, "[redacted-youtube-url]")
+    .replace(/(?:\/[^\s/]+){3,}/g, "[redacted-path]")
+    .replace(/\b(query|input|search)=(?:"[^"]*"|'[^']*'|\S+)/gi, "$1=[redacted]");
+}
+
+async function operationalStatus(application: InProcessDaemonApplication, paths: DaemonPaths): Promise<DaemonOperationalStatus> {
+  const { lifecycle, clientCount, snapshot } = application.status;
+  const state = snapshot.state;
+  const playlist = state.playlists.playlists.find((item) => item.id === state.playlists.playingPlaylistId)!;
+  const identity = state.playback.currentTrackIdentity;
+  const track = identity ? playlist.entries.find((item) => item.track.identity.providerId === identity.providerId && item.track.identity.stableId === identity.stableId)?.track.title ?? identity.stableId : null;
+  const active = state.downloads.activeBatch ? 1 : 0; const pending = state.downloads.pendingBatches.length;
+  let latestSevereError: string | null = null;
+  try {
+    const lines = (await readFile(paths.logPath, "utf8")).split("\n").filter((line) => /\b(?:fatal|severe|persistence.*fail)/i.test(line));
+    latestSevereError = lines.at(-1)?.slice(0, 500) ?? null;
+  } catch { /* A new daemon may not have written a log entry yet. */ }
+  return { controlProtocolVersion: CONTROL_PROTOCOL_VERSION, protocolVersion: DAEMON_PROTOCOL_VERSION, daemonVersion: packageVersion(), pid: process.pid,
+    uptimeMs: Math.round(process.uptime() * 1000), lifecycle, runtimePath: paths.runtimeDirectory, logPath: paths.logPath, clientCount,
+    playingPlaylist: playlist.name, currentTrack: track, playbackStatus: state.playback.status, activeDownloads: active, pendingDownloads: pending,
+    configPath: state.configPath, configSource: state.configSource, recoveryState: "normal", latestSevereError,
+    impact: `Shut down TMU Daemon with ${identity ? "active playback" : "no active playback"}, ${active} active and ${pending} pending downloads, and ${clientCount} connected clients` };
 }
 
 function freezeTree<T>(value: T): T {

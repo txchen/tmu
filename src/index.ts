@@ -2,6 +2,7 @@ export * from "./app";
 export * from "./background-sounds";
 export * from "./action-registry";
 export * from "./config";
+export * from "./child-ownership";
 export * from "./coordinator";
 export * from "./dependencies";
 export * from "./daemon-client";

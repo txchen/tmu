@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import type { TmuConfig } from "./config";
+import { daemonOwnedChildren } from "./child-ownership";
 
 export type HelperName = "mpv" | "yt-dlp";
 
@@ -201,9 +202,9 @@ function helperCommand(config: DependencyCheckConfig, helper: HelperName): strin
   return config.helpers[helper];
 }
 
-export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, args, timeoutMs, signal }) => {
+export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ helper, command, args, timeoutMs, signal }) => {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: timeoutMs, signal }, (error, stdout, stderr) => {
+    const child = execFile(command, args, { timeout: timeoutMs, signal }, (error, stdout, stderr) => {
       const errorCode = (error as (Error & { code?: string | number }) | null)?.code;
       const timedOut = Boolean(
         error
@@ -229,5 +230,6 @@ export const nodeDependencyCommandRunner: DependencyCommandRunner = ({ command, 
             : undefined,
       });
     });
+    daemonOwnedChildren.register(child, helper);
   });
 };
