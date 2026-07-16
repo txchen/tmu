@@ -116,6 +116,11 @@ export function createTmuRoot(options: TmuRootOptions) {
         publication.notify("state");
         setTimeout(() => app.exit(), 50);
       });
+      const connectionLost = shallowRef<string>();
+      const unsubscribeConnectionLost = coordinator.onConnectionLost?.((message) => {
+        connectionLost.value = message;
+        publication.notify("state");
+      });
       const { columns, rows } = useWindowSize();
       watch([columns, rows], ([nextColumns, nextRows]) => {
         dispatchTerminalResize(coordinator, nextColumns, nextRows);
@@ -128,6 +133,10 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
+        if (connectionLost.value) {
+          if (isCtrlC(input, key) || input === "q") app.exit();
+          return;
+        }
         const ui = coordinator.uiState;
         if (isCtrlQ(input, key)) {
           const impact = await coordinator.requestShutdownChallenge?.();
@@ -271,13 +280,20 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       onScopeDispose(() => {
         unsubscribeShutdown?.();
+        unsubscribeConnectionLost?.();
         if (notificationTimer) clearTimeout(notificationTimer);
         unsubscribeCoordinator();
         unsubscribePublication();
         publication.stop();
       });
 
-      return () => render(snapshot.value, coordinator, options.noColor ?? process.env.NO_COLOR !== undefined);
+      return () => connectionLost.value
+        ? h(Box, { flexDirection: "column" }, () => [
+          h(Text, { bold: true }, () => "TMU Daemon connection lost"),
+          h(Text, () => "Shared actions are disabled. TMU will not reconnect or restart the daemon."),
+          h(Text, () => "Press q or Ctrl-C to exit, then run tmu again to recover."),
+        ])
+        : render(snapshot.value, coordinator, options.noColor ?? process.env.NO_COLOR !== undefined);
     },
   });
 }

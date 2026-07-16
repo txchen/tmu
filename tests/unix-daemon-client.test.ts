@@ -21,7 +21,7 @@ async function foregroundDaemon() {
   await application.start();
   const server = new UnixDaemonServer(application, paths);
   await server.listen();
-  return { paths, server };
+  return { paths, server, application };
 }
 
 describe("Unix-socket DaemonClient", () => {
@@ -39,6 +39,33 @@ describe("Unix-socket DaemonClient", () => {
     await expect(UnixDaemonClient.connect(paths.socketPath, { protocolVersion: DAEMON_PROTOCOL_VERSION + 1 }))
       .rejects.toBeInstanceOf(DaemonProtocolMismatchError);
     await server.close();
+  });
+
+  test("reports unexpected socket loss once without reconnecting", async () => {
+    const { paths, server, application } = await foregroundDaemon();
+    const client = await UnixDaemonClient.connect(paths.socketPath);
+    const losses: boolean[] = []; client.onDisconnect((unexpected) => losses.push(unexpected));
+    await server.forceClose();
+    await waitFor(() => losses.length === 1);
+    expect(losses).toEqual([true]);
+    await expect(client.submit({ type: "adjustVolume", delta: 1 })).rejects.toThrow("disconnected");
+    await application.teardown();
+  });
+
+  test("publishes a recovery notice only once from the fresh daemon", async () => {
+    const { paths, server, application } = await foregroundDaemon();
+    application.setRecoveryNotice("Recovered interrupted playback and downloads without autoplay");
+    const first = await UnixDaemonClient.connect(paths.socketPath); const firstNotices: string[] = [];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    first.onNotice((notice) => firstNotices.push(notice.message));
+    await waitFor(() => firstNotices.length === 1);
+    const unsubscribe = first.onNotice((notice) => firstNotices.push(`duplicate:${notice.message}`));
+    unsubscribe();
+    const second = await UnixDaemonClient.connect(paths.socketPath); const secondNotices: string[] = [];
+    second.onNotice((notice) => secondNotices.push(notice.message));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(firstNotices).toEqual(["Recovered interrupted playback and downloads without autoplay"]); expect(secondNotices).toEqual([]);
+    first.disconnect(); second.disconnect(); await server.close();
   });
 
   test("disconnects only a persistently slow client and keeps peers converging", async () => {

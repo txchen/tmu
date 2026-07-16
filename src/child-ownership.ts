@@ -11,11 +11,18 @@ export type OwnedChildRecord = Readonly<{
 }>;
 
 export type ProcessIdentityReader = (pid: number) => string | null;
+export type PersistedChildIdentity = Readonly<{ pid: number; kind: OwnedChildKind; identity: string }>;
 
 /** Tracks only handles spawned by this daemon and verifies OS process identity before fallback termination. */
 export class OwnedChildRegistry {
   private readonly records = new Map<number, OwnedChildRecord>();
   constructor(private readonly readIdentity: ProcessIdentityReader = readProcessIdentity) {}
+  private changeListener?: (records: readonly PersistedChildIdentity[]) => void;
+
+  onChange(listener: (records: readonly PersistedChildIdentity[]) => void): () => void {
+    this.changeListener = listener; listener(this.snapshot());
+    return () => { if (this.changeListener === listener) this.changeListener = undefined; };
+  }
 
   register(child: Pick<ChildProcess, "pid" | "exitCode" | "kill" | "once">, kind: OwnedChildKind): () => void {
     const pid = child.pid;
@@ -24,7 +31,8 @@ export class OwnedChildRegistry {
     if (!identity) return () => undefined;
     const record = { pid, kind, identity, child };
     this.records.set(pid, record);
-    const unregister = () => { if (this.records.get(pid) === record) this.records.delete(pid); };
+    this.changed();
+    const unregister = () => { if (this.records.get(pid) === record) { this.records.delete(pid); this.changed(); } };
     child.once("close", unregister);
     child.once("exit", unregister);
     return unregister;
@@ -40,6 +48,11 @@ export class OwnedChildRegistry {
     }
     return { terminated, refused };
   }
+
+  private snapshot(): PersistedChildIdentity[] {
+    return [...this.records.values()].map(({ pid, kind, identity }) => ({ pid, kind, identity }));
+  }
+  private changed(): void { this.changeListener?.(this.snapshot()); }
 }
 
 export const daemonOwnedChildren = new OwnedChildRegistry();

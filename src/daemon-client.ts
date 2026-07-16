@@ -56,6 +56,8 @@ export interface DaemonClient {
   onSnapshot(listener: (snapshot: SharedStateSnapshot) => void): () => void;
   onFeedback(listener: (feedback: CommandFeedback) => void): () => void;
   onNotice(listener: (notice: DaemonNotice) => void): () => void;
+  takeStartupNotices?(): readonly DaemonNotice[];
+  onDisconnect?(listener: (unexpected: boolean) => void): () => void;
   disconnect(): void;
 }
 
@@ -71,6 +73,7 @@ export interface TuiDaemonClient {
   playlistTrackIdentities(): readonly TrackIdentity[];
   onStateChange(listener: (reason: AppStateChangeReason) => void): () => void;
   onDaemonShutdown?(listener: (message: string) => void): () => void;
+  onConnectionLost?(listener: (message: string) => void): () => void;
   enterBackgroundSounds(): Promise<void>;
   retryBackgroundSounds(): Promise<void>;
   setBackgroundSoundsEnabled(value: boolean): Promise<void>;
@@ -105,6 +108,7 @@ export class InProcessDaemonApplication {
   private shutdownListener?: () => void;
   private operationalLog?: (message: string) => void;
   private lastOperationalEvent = "";
+  private recoveryNotice?: string;
 
   constructor(private readonly coordinator: AppCoordinator, private readonly now: () => number = Date.now) {}
 
@@ -135,8 +139,14 @@ export class InProcessDaemonApplication {
       ui: new UiStateStore(createInitialUiState()), viewedPlaylistId,
       snapshots: new Set(), feedback: new Set(), notices: new Set(),
     });
-    return new InProcessDaemonClient(this, id);
+    const startupNotices = this.recoveryNotice
+      ? [Object.freeze({ message: this.recoveryNotice, revision: this.revision })]
+      : [];
+    this.recoveryNotice = undefined;
+    return new InProcessDaemonClient(this, id, startupNotices);
   }
+
+  setRecoveryNotice(message: string): void { this.recoveryNotice = message; }
 
   async connectTui(): Promise<TuiDaemonClient> {
     return new TuiDaemonClientAdapter(await this.connect(), false);
@@ -401,7 +411,8 @@ export class InProcessDaemonApplication {
 }
 
 class InProcessDaemonClient implements DaemonClient {
-  constructor(private readonly application: InProcessDaemonApplication, readonly id: string) {}
+  constructor(private readonly application: InProcessDaemonApplication, readonly id: string,
+    private readonly startupNotices: DaemonNotice[] = []) {}
   get snapshot() { return this.application.snapshot(); }
   get uiState(): Readonly<ClientUiState> {
     const record = this.application.record(this.id);
@@ -418,7 +429,12 @@ class InProcessDaemonClient implements DaemonClient {
   cancelChallenge(token: string) { return this.application.cancelChallenge(this.id, token); }
   onSnapshot(listener: (snapshot: SharedStateSnapshot) => void) { return subscribe(this.application.record(this.id).snapshots, listener); }
   onFeedback(listener: (feedback: CommandFeedback) => void) { return subscribe(this.application.record(this.id).feedback, listener); }
-  onNotice(listener: (notice: DaemonNotice) => void) { return subscribe(this.application.record(this.id).notices, listener); }
+  onNotice(listener: (notice: DaemonNotice) => void) {
+    const unsubscribe = subscribe(this.application.record(this.id).notices, listener);
+    for (const notice of this.takeStartupNotices()) listener(notice);
+    return unsubscribe;
+  }
+  takeStartupNotices(): readonly DaemonNotice[] { return this.startupNotices.splice(0); }
   disconnect() { this.application.disconnect(this.id); }
 }
 
@@ -428,6 +444,7 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
   private readonly errors: string[] = [];
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private readonly shutdownListeners = new Set<(message: string) => void>();
+  private readonly connectionLostListeners = new Set<(message: string) => void>();
   private shutdownChallenge?: ConfirmationChallenge;
   constructor(private readonly client: DaemonClient, readonly quitIsClientOnly = true) {
     client.onSnapshot(() => this.notifyState("state"));
@@ -444,6 +461,10 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
       this.errors.splice(0, this.errors.length, notice.message);
       this.notifyState("state");
       if (notice.message.includes("shutting down")) for (const listener of this.shutdownListeners) listener(notice.message);
+    });
+    client.onDisconnect?.((unexpected) => {
+      if (!unexpected) return;
+      for (const listener of this.connectionLostListeners) listener("Connection to the TMU Daemon was lost unexpectedly");
     });
   }
   get appState(): AppState {
@@ -483,6 +504,10 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
   onDaemonShutdown(listener: (message: string) => void): () => void {
     this.shutdownListeners.add(listener);
     return () => this.shutdownListeners.delete(listener);
+  }
+  onConnectionLost(listener: (message: string) => void): () => void {
+    this.connectionLostListeners.add(listener);
+    return () => this.connectionLostListeners.delete(listener);
   }
   async enterBackgroundSounds() { await this.client.submit({ type: "background", operation: "enter" }); }
   async retryBackgroundSounds() { await this.client.submit({ type: "background", operation: "retry" }); }

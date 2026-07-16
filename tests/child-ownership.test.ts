@@ -1,6 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import { OwnedChildRegistry } from "../src/child-ownership";
-import { completeBoundedShutdown, validateOperationalStatus } from "../src/daemon-runtime";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { OwnedChildRegistry, readProcessIdentity } from "../src/child-ownership";
+import { completeBoundedShutdown, recoverUnexpectedDaemonExit, resolveDaemonPaths, validateOperationalStatus } from "../src/daemon-runtime";
 
 function child(pid: number) {
   return { pid, exitCode: null as number | null, kill: vi.fn(() => true), once: vi.fn() };
@@ -36,7 +40,52 @@ describe("verified daemon child cleanup", () => {
       forceClose: async () => undefined, finalPersistence: async () => { throw new Error("disk full"); } });
     expect(result).toMatchObject({ clean: false, exitCode: 1, timedOut: false, persistenceFailed: true });
   });
+
+  test("recovers only verified orphan children and recognized temporary downloads", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tmu-recovery-test-"));
+    try {
+      await mkdir(join(root, "run"), { mode: 0o700 });
+      const paths = await resolveDaemonPaths({ XDG_RUNTIME_DIR: join(root, "run"), XDG_STATE_HOME: join(root, "state") });
+      const cache = join(root, "cache"); await mkdir(cache);
+      await mkdir(join(cache, ".partial-track"));
+      await writeFile(join(cache, "complete.opus"), "complete");
+      await writeFile(join(cache, "complete.json"), "{}");
+      await writeFile(paths.metadataPath, JSON.stringify({ version: 1, daemon: { pid: 10, identity: "old-daemon" }, children: [
+        { pid: 11, kind: "mpv", identity: "old-mpv" }, { pid: 12, kind: "yt-dlp", identity: "old-download" },
+      ] }));
+      const identities = new Map([[11, "old-mpv"], [12, "recycled-download"]]); const killed: number[] = [];
+      const result = await recoverUnexpectedDaemonExit(paths, { cacheDirectory: cache,
+        readIdentity: (pid) => identities.get(pid) ?? null, kill: (pid) => { killed.push(pid); } });
+      expect(result).toMatchObject({ recovered: true, terminated: [11], refused: [12], removedTemporaryEntries: 1 });
+      expect(killed).toEqual([11]);
+      expect(await import("node:fs/promises").then(({ readdir }) => readdir(cache))).toEqual(["complete.json", "complete.opus"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  test("terminates a real verified orphan helper", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tmu-real-recovery-test-"));
+    const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    try {
+      await mkdir(join(root, "run"), { mode: 0o700 });
+      const paths = await resolveDaemonPaths({ XDG_RUNTIME_DIR: join(root, "run"), XDG_STATE_HOME: join(root, "state") });
+      const identity = await waitForIdentity(helper.pid!);
+      await writeFile(paths.metadataPath, JSON.stringify({ version: 1, daemon: { pid: 999_999_999, identity: "gone" },
+        children: [{ pid: helper.pid, kind: "yt-dlp", identity }] }));
+      const exited = new Promise<void>((resolve) => helper.once("exit", () => resolve()));
+      expect(await recoverUnexpectedDaemonExit(paths, { cacheDirectory: join(root, "cache") }))
+        .toMatchObject({ terminated: [helper.pid], refused: [] });
+      await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("orphan remained alive")), 2_000))]);
+    } finally { if (helper.exitCode === null) helper.kill("SIGKILL"); await rm(root, { recursive: true, force: true }); }
+  });
 });
+
+async function waitForIdentity(pid: number): Promise<string> {
+  for (let index = 0; index < 100; index += 1) {
+    const identity = readProcessIdentity(pid); if (identity) return identity;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("real helper identity was unavailable");
+}
 
 describe("minimal control response validation", () => {
   const valid = {

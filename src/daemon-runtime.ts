@@ -1,5 +1,5 @@
 import { createServer, createConnection, type Server, type Socket } from "node:net";
-import { chmod, lstat, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -13,7 +13,9 @@ import {
 import { UiStateStore, type UiStateAction } from "./ui-state";
 import { DAEMON_PROTOCOL_VERSION, encodeFrame, FrameDecoder, isRecord } from "./daemon-protocol";
 import { assertExactKeys, validateChallenge, validateFeedback, validateNotice, validateSharedCommand, validateSnapshot, validateUiState } from "./daemon-validation";
-import { daemonOwnedChildren, type OwnedChildRegistry } from "./child-ownership";
+import { daemonOwnedChildren, readProcessIdentity, type OwnedChildRegistry, type PersistedChildIdentity } from "./child-ownership";
+import { defaultYouTubeCacheDirectory } from "./youtube-cache";
+import { writeJsonAtomically } from "./json-persistence";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const SOCKET_NAME = "daemon.sock";
@@ -21,7 +23,7 @@ const CONTROL_PROTOCOL_VERSION = 1;
 const LOG_MAX_BYTES = 5 * 1024 * 1024;
 const SHUTDOWN_GRACE_MS = 5_000;
 
-export type DaemonPaths = Readonly<{ runtimeDirectory: string; socketPath: string; lockPath: string; readyPath: string; logPath: string }>;
+export type DaemonPaths = Readonly<{ runtimeDirectory: string; socketPath: string; lockPath: string; readyPath: string; metadataPath: string; logPath: string }>;
 export type UnixDaemonServerOptions = Readonly<{ maxOutboundBytes?: number }>;
 export type DaemonOperationalStatus = Readonly<{
   controlProtocolVersion: number; protocolVersion: number; daemonVersion: string; pid: number; uptimeMs: number;
@@ -55,7 +57,7 @@ export async function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): 
   await chmod(stateDirectory, 0o700);
   return {
     runtimeDirectory, socketPath: join(runtimeDirectory, SOCKET_NAME), lockPath: join(runtimeDirectory, "startup.lock"),
-    readyPath: join(runtimeDirectory, "ready.json"), logPath: join(stateDirectory, "daemon.log"),
+    readyPath: join(runtimeDirectory, "ready.json"), metadataPath: join(runtimeDirectory, "runtime.json"), logPath: join(stateDirectory, "daemon.log"),
   };
 }
 
@@ -127,11 +129,12 @@ export class UnixDaemonServer {
             }
             client = await this.application.connect();
             initialized = true;
+            const startupNotices = client.takeStartupNotices?.() ?? [];
+            send({ type: "welcome", protocolVersion: DAEMON_PROTOCOL_VERSION, daemonVersion: packageVersion(), clientId: client.id,
+              snapshot: client.snapshot, uiState: client.uiState, startupNotices });
             client.onSnapshot((snapshot) => send({ type: "snapshot", snapshot }, "snapshot"));
             client.onFeedback((feedback) => send({ type: "feedback", feedback }, "control"));
             client.onNotice((notice) => send({ type: "notice", notice }, "control"));
-            send({ type: "welcome", protocolVersion: DAEMON_PROTOCOL_VERSION, daemonVersion: packageVersion(), clientId: client.id,
-              snapshot: client.snapshot, uiState: client.uiState });
             continue;
           }
           const request = validateRequest(frame);
@@ -249,11 +252,16 @@ export class UnixDaemonClient implements DaemonClient {
   private readonly snapshots = new Set<(snapshot: SharedStateSnapshot) => void>();
   private readonly feedback = new Set<(feedback: CommandFeedback) => void>();
   private readonly notices = new Set<(notice: DaemonNotice) => void>();
+  private readonly startupNotices: DaemonNotice[];
+  private readonly disconnects = new Set<(unexpected: boolean) => void>();
   private disconnected = false;
+  private intentionalShutdown = false;
+  private lossDelivered = false;
   private constructor(private readonly socket: Socket, welcome: Record<string, unknown>) {
     this.id = welcome.clientId as string;
     this.snapshot = freezeTree(validateSnapshot(welcome.snapshot));
     this.currentUi = validateUiState(welcome.uiState);
+    this.startupNotices = validateStartupNotices(welcome.startupNotices);
     this.ui = new UiStateStore(this.currentUi);
   }
 
@@ -268,7 +276,9 @@ export class UnixDaemonClient implements DaemonClient {
       socket.once("error", fail);
       socket.on("data", (chunk) => {
         try {
-          for (const message of decoder.push(chunk)) {
+          const messages = decoder.push(chunk);
+          for (let index = 0; index < messages.length; index += 1) {
+            const message = messages[index];
             if (!isRecord(message)) throw new Error("Invalid daemon message");
             if (message.type === "protocolError") {
               assertExactKeys(message, ["type", "expected", "received"]);
@@ -277,13 +287,16 @@ export class UnixDaemonClient implements DaemonClient {
             }
             if (message.type !== "welcome" || message.protocolVersion !== (options.protocolVersion ?? DAEMON_PROTOCOL_VERSION)
               || typeof message.clientId !== "string" || typeof message.daemonVersion !== "string") throw new Error("Invalid daemon welcome");
-            assertExactKeys(message, ["type", "protocolVersion", "daemonVersion", "clientId", "snapshot", "uiState"]);
+            assertExactKeys(message, ["type", "protocolVersion", "daemonVersion", "clientId", "snapshot", "uiState", "startupNotices"]);
             validateSnapshot(message.snapshot); validateUiState(message.uiState);
+            validateStartupNotices(message.startupNotices);
             clearTimeout(timer); socket.off("error", fail);
             const client = new UnixDaemonClient(socket, message);
             socket.removeAllListeners("data");
             client.install(decoder);
+            for (const trailing of messages.slice(index + 1)) client.handle(trailing);
             resolve(client);
+            return;
           }
         } catch (error) { socket.destroy(); fail(error instanceof Error ? error : new Error(String(error))); }
       });
@@ -300,7 +313,12 @@ export class UnixDaemonClient implements DaemonClient {
   async cancelChallenge(token: string) { await this.request("cancelChallenge", { token }); }
   onSnapshot(listener: (snapshot: SharedStateSnapshot) => void) { return subscribe(this.snapshots, listener); }
   onFeedback(listener: (feedback: CommandFeedback) => void) { return subscribe(this.feedback, listener); }
-  onNotice(listener: (notice: DaemonNotice) => void) { return subscribe(this.notices, listener); }
+  onNotice(listener: (notice: DaemonNotice) => void) {
+    const unsubscribe = subscribe(this.notices, listener);
+    for (const notice of this.startupNotices.splice(0)) listener(notice);
+    return unsubscribe;
+  }
+  onDisconnect(listener: (unexpected: boolean) => void) { return subscribe(this.disconnects, listener); }
   disconnect() { this.disconnected = true; this.socket.end(); this.socket.destroy(); }
 
   private request(operation: Request["operation"], payload: unknown): Promise<unknown> {
@@ -316,7 +334,15 @@ export class UnixDaemonClient implements DaemonClient {
       try { for (const message of decoder.push(chunk)) this.handle(message); }
       catch (error) { this.failAll(error instanceof Error ? error : new Error(String(error))); this.socket.destroy(); }
     });
-    this.socket.on("close", () => this.failAll(new Error("TMU Daemon connection closed")));
+    this.socket.on("close", () => {
+      this.failAll(new Error("TMU Daemon connection closed"));
+      if (!this.lossDelivered) {
+        this.lossDelivered = true;
+        const unexpected = !this.disconnected && !this.intentionalShutdown;
+        this.disconnected = true;
+        for (const listener of this.disconnects) listener(unexpected);
+      }
+    });
     this.socket.on("error", (error) => this.failAll(error));
   }
   private handle(value: unknown): void {
@@ -330,7 +356,12 @@ export class UnixDaemonClient implements DaemonClient {
       return;
     }
     if (value.type === "feedback") { assertExactKeys(value, ["type", "feedback"]); const feedback = validateFeedback(value.feedback); for (const fn of this.feedback) fn(feedback); return; }
-    if (value.type === "notice") { assertExactKeys(value, ["type", "notice"]); const notice = validateNotice(value.notice); for (const fn of this.notices) fn(notice); return; }
+    if (value.type === "notice") {
+      assertExactKeys(value, ["type", "notice"]); const notice = validateNotice(value.notice);
+      if (notice.message.includes("shutting down")) this.intentionalShutdown = true;
+      for (const fn of this.notices) fn(notice);
+      return;
+    }
     if (value.type === "response" && typeof value.requestId === "string" && typeof value.ok === "boolean") {
       const pending = this.pending.get(value.requestId); if (!pending) return;
       assertExactKeys(value, ["type", "requestId", "ok", "uiState"], value.ok ? ["result"] : ["error"]);
@@ -363,6 +394,50 @@ async function assertPrivateOwnedSocket(socketPath: string): Promise<void> {
 
 export type BoundedShutdownResult = Readonly<{ clean: boolean; exitCode: 0 | 1; timedOut: boolean; persistenceFailed: boolean; terminated: number[]; refused: number[] }>;
 
+type RuntimeMetadata = Readonly<{ version: 1; daemon: { pid: number; identity: string }; children: readonly PersistedChildIdentity[] }>;
+export type DaemonRecoveryResult = Readonly<{ recovered: boolean; terminated: number[]; refused: number[]; removedTemporaryEntries: number; diagnostics: string[] }>;
+
+export async function recoverUnexpectedDaemonExit(paths: DaemonPaths, options: {
+  cacheDirectory?: string; readIdentity?: (pid: number) => string | null; kill?: (pid: number) => void;
+} = {}): Promise<DaemonRecoveryResult> {
+  let metadata: RuntimeMetadata;
+  try { metadata = validateRuntimeMetadata(JSON.parse(await readFile(paths.metadataPath, "utf8"))); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { recovered: false, terminated: [], refused: [], removedTemporaryEntries: 0, diagnostics: [] };
+    return { recovered: true, terminated: [], refused: [], removedTemporaryEntries: 0, diagnostics: ["runtime metadata was unreadable; no process was signalled"] };
+  }
+  const readIdentity = options.readIdentity ?? readProcessIdentity;
+  if (readIdentity(metadata.daemon.pid) === metadata.daemon.identity) {
+    throw new Error("Verified predecessor TMU Daemon is still running; refusing recovery cleanup");
+  }
+  const terminated: number[] = []; const refused: number[] = []; const diagnostics: string[] = [];
+  for (const child of metadata.children) {
+    if (readIdentity(child.pid) !== child.identity) { refused.push(child.pid); continue; }
+    try { (options.kill ?? ((pid) => process.kill(pid, "SIGKILL")))(child.pid); terminated.push(child.pid); }
+    catch { refused.push(child.pid); diagnostics.push(`could not terminate verified orphan ${child.kind}`); }
+  }
+  let removedTemporaryEntries = 0;
+  try {
+    const cache = options.cacheDirectory ?? defaultYouTubeCacheDirectory();
+    for (const name of await readdir(cache)) {
+      if (!name.startsWith(".partial-") && !/\.json\.\d+\.\d+\.tmp$/.test(name)) continue;
+      await rm(join(cache, name), { recursive: true, force: true }); removedTemporaryEntries += 1;
+    }
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") diagnostics.push("could not fully clean recognized temporary downloads"); }
+  await removeOwnedSocket(paths.socketPath).catch((error) => diagnostics.push(error instanceof Error ? error.message : String(error)));
+  return { recovered: true, terminated, refused, removedTemporaryEntries, diagnostics: diagnostics.slice(0, 20) };
+}
+
+function validateRuntimeMetadata(value: unknown): RuntimeMetadata {
+  if (!isRecord(value) || value.version !== 1 || !isRecord(value.daemon) || !Array.isArray(value.children)
+    || !Number.isInteger(value.daemon.pid) || typeof value.daemon.identity !== "string") throw new Error("invalid runtime metadata");
+  const children = value.children.map((child) => {
+    if (!isRecord(child) || !Number.isInteger(child.pid) || !["mpv", "yt-dlp"].includes(String(child.kind)) || typeof child.identity !== "string") throw new Error("invalid child metadata");
+    return { pid: child.pid as number, kind: child.kind as PersistedChildIdentity["kind"], identity: child.identity };
+  });
+  return { version: 1, daemon: { pid: value.daemon.pid as number, identity: value.daemon.identity }, children };
+}
+
 export async function completeBoundedShutdown(options: {
   cleanup: Promise<void>; forceClose(): Promise<void>; finalPersistence(): Promise<void>; ownedChildren?: OwnedChildRegistry;
   graceMs?: number; finalPersistenceMs?: number;
@@ -390,13 +465,29 @@ export async function completeBoundedShutdown(options: {
 export async function runDaemonProcess(options: { exit?: (code: number) => never } = {}): Promise<void> {
   const paths = await resolveDaemonPaths();
   await appendLog(paths.logPath, `starting pid=${process.pid}`);
+  const recovery = await recoverUnexpectedDaemonExit(paths);
+  if (recovery.recovered) await appendDaemonLog(paths.logPath,
+    `recovery complete terminated=${recovery.terminated.length} refused=${recovery.refused.length} temporary=${recovery.removedTemporaryEntries}`);
+  for (const diagnostic of recovery.diagnostics) await appendDaemonLog(paths.logPath, `severe recovery ${diagnostic}`);
   const { coordinator } = await createTmuRuntime();
   const application = new InProcessDaemonApplication(coordinator);
+  if (recovery.recovered) application.setRecoveryNotice("TMU Daemon recovered from an unexpected exit. Interrupted playback and downloads were stopped; playback was restored without autoplay.");
   const server = new UnixDaemonServer(application, paths);
+  const daemonIdentity = readProcessIdentity(process.pid);
+  if (!daemonIdentity) throw new Error("Could not verify TMU Daemon process identity");
+  const persistRuntime = (children: readonly PersistedChildIdentity[]) => writeJsonAtomically(paths.metadataPath,
+    { version: 1, daemon: { pid: process.pid, identity: daemonIdentity }, children });
+  await persistRuntime([]);
+  let runtimeWriteTail = Promise.resolve();
+  const stopTrackingChildren = daemonOwnedChildren.onChange((children) => {
+    runtimeWriteTail = runtimeWriteTail.then(() => persistRuntime(children)).catch((error) => appendDaemonLog(paths.logPath,
+      `severe runtime metadata persistence failed: ${error instanceof Error ? error.message : String(error)}`));
+  });
   let requestStop!: () => void;
   const stopped = new Promise<void>((resolve) => { requestStop = resolve; });
   application.onShutdown(requestStop);
   application.onOperationalLog((message) => { void appendDaemonLog(paths.logPath, message); });
+  let intentionalStop = false;
   try {
     await application.start();
     await server.listen();
@@ -406,6 +497,7 @@ export async function runDaemonProcess(options: { exit?: (code: number) => never
     const signalStop = () => { application.requestOperationalShutdown(); requestStop(); };
     process.once("SIGTERM", signalStop); process.once("SIGINT", signalStop);
     await stopped;
+    intentionalStop = true;
     await appendDaemonLog(paths.logPath, "shutdown requested");
   } catch (error) {
     await appendLog(paths.logPath, `fatal ${error instanceof Error ? error.message : String(error)}`);
@@ -421,6 +513,9 @@ export async function runDaemonProcess(options: { exit?: (code: number) => never
       process.exitCode = 1;
     }
     await rm(paths.readyPath, { force: true });
+    stopTrackingChildren();
+    await runtimeWriteTail;
+    if (intentionalStop) await rm(paths.metadataPath, { force: true });
     await appendDaemonLog(paths.logPath, result.clean ? "shutdown complete" : "shutdown cleanup failed");
     if (!result.clean) (options.exit ?? ((code: number) => process.exit(code)))(1);
   }
@@ -473,6 +568,7 @@ export async function connectOrStartDaemon(options: { env?: NodeJS.ProcessEnv; t
     const code = (error as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ECONNREFUSED") throw error;
   }
+  const recoveryLock = await reclaimVerifiedStaleStartupLock(paths);
   let winner = false;
   try { await mkdir(paths.lockPath, { mode: 0o700 }); winner = true; } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -485,11 +581,32 @@ export async function connectOrStartDaemon(options: { env?: NodeJS.ProcessEnv; t
   }
   const deadline = Date.now() + (options.timeoutMs ?? STARTUP_TIMEOUT_MS);
   let lastError: unknown;
-  while (Date.now() < deadline) {
-    try { return adaptDaemonClientForTui(await UnixDaemonClient.connect(paths.socketPath, { timeoutMs: 250 })); }
-    catch (error) { lastError = error; await new Promise((resolve) => setTimeout(resolve, 50)); }
+  try {
+    while (Date.now() < deadline) {
+      try { return adaptDaemonClientForTui(await UnixDaemonClient.connect(paths.socketPath, { timeoutMs: 250 })); }
+      catch (error) { lastError = error; await new Promise((resolve) => setTimeout(resolve, 50)); }
+    }
+  } finally {
+    if (recoveryLock) await rm(recoveryLock, { recursive: true, force: true });
   }
   throw new Error(`TMU Daemon failed to become ready. See ${paths.logPath}. ${lastError instanceof Error ? lastError.message : ""}`);
+}
+
+async function reclaimVerifiedStaleStartupLock(paths: DaemonPaths): Promise<string | undefined> {
+  try {
+    const metadata = validateRuntimeMetadata(JSON.parse(await readFile(paths.metadataPath, "utf8")));
+    if (readProcessIdentity(metadata.daemon.pid) === metadata.daemon.identity) return undefined;
+    const recoveryLock = join(paths.runtimeDirectory, "recovery.lock");
+    try { await mkdir(recoveryLock, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return undefined; throw error; }
+    await rm(paths.lockPath, { recursive: true, force: true });
+    return recoveryLock;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      // Unverified metadata must never authorize replacing a possibly live startup owner.
+    }
+    return undefined;
+  }
 }
 
 function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void): () => void { set.add(listener); return () => set.delete(listener); }
@@ -548,3 +665,8 @@ async function removeOwnedSocket(path: string): Promise<void> {
 }
 
 function invalidResponse(): never { throw new Error("Invalid daemon response result"); }
+
+function validateStartupNotices(value: unknown): DaemonNotice[] {
+  if (!Array.isArray(value) || value.length > 1) throw new Error("Invalid daemon startup notices");
+  return value.map((notice) => validateNotice(notice));
+}

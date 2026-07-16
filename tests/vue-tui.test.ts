@@ -24,6 +24,21 @@ class StopCountingPlayer extends NoopPlayer {
 }
 
 describe("TMU top-level surface smoke", () => {
+  test("keeps an unexpectedly disconnected client mounted with shared actions disabled", async () => {
+    const { coordinator } = createTmuApp();
+    let loseConnection!: (message: string) => void;
+    Object.assign(coordinator, { quitIsClientOnly: true, onConnectionLost: (listener: (message: string) => void) => {
+      loseConnection = listener; return () => undefined;
+    } });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
+    loseConnection("lost"); await sleep(0);
+    expect(terminal.lastFrame()).toContain("TMU Daemon connection lost");
+    expect(terminal.lastFrame()).toContain("will not reconnect or restart");
+    const before = coordinator.appState.volume.percent;
+    await terminal.stdin.write("-"); await sleep(0);
+    expect(coordinator.appState.volume.percent).toBe(before);
+  });
+
   test("shows and lazily initializes the candidate Background Sounds Tab with contained retry", async () => {
     const snapshot = {
       enabled: true,
