@@ -16,6 +16,8 @@ describe("supported Node and npm workflow", () => {
       typecheck: expect.any(String),
       test: expect.any(String),
       "smoke:package": expect.any(String),
+      "test:integration": expect.any(String),
+      "test:unit": expect.any(String),
       "benchmark:playback": expect.any(String),
     });
   });
@@ -75,7 +77,8 @@ describe("supported Node and npm workflow", () => {
     for (const command of [
       "npm ci",
       "npm run typecheck",
-      "npm test",
+      "npm run test:unit",
+      "npm run test:integration",
       "npm run build",
       "npm run smoke:package",
     ]) {

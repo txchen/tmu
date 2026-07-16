@@ -1248,7 +1248,7 @@ function globalShortcutGroups(tab: UiState["activeTab"]): ShortcutGroup[] {
     },
     {
       title: "APPLICATION",
-      rows: [["q", "Quit Client outside input/Help"], ["Ctrl-C", "Quit (confirm downloads) — Client only"], ["Ctrl-Q", "Shut down TMU Daemon"], ["Enter/q/?/Esc", "Close Help only"]],
+      rows: [["q", "Quit Client outside input/Help"], ["Ctrl-C", "Quit Client everywhere"], ["Ctrl-Q", "Shutdown Daemon (confirm)"], ["Enter/q/?/Esc", "Close Help only"]],
     },
     {
       title: "INPUT CAPTURE",

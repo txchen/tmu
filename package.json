@@ -1,6 +1,6 @@
 {
   "name": "@txchen/tmu",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "bin": {
     "tmu": "dist/cli.js"
@@ -8,7 +8,8 @@
   "files": [
     "dist",
     "README.md",
-    "CONTEXT.md"
+    "CONTEXT.md",
+    "RELEASE_NOTES.md"
   ],
   "engines": {
     "node": ">=24.0.0"
@@ -22,6 +23,8 @@
     "prepack": "npm run build",
     "start": "node dist/cli.js",
     "smoke:package": "vitest run tests/packaging-smoke.test.ts",
+    "test:integration": "vitest run tests/unix-daemon-client.test.ts tests/daemon-operations.test.ts tests/child-ownership.test.ts",
+    "test:unit": "vitest run --exclude tests/packaging-smoke.test.ts --exclude tests/unix-daemon-client.test.ts --exclude tests/daemon-operations.test.ts --exclude tests/child-ownership.test.ts",
     "test": "vitest run --exclude tests/packaging-smoke.test.ts",
     "typecheck": "tsc --noEmit"
   },

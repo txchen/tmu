@@ -3,6 +3,7 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
   entry: {
     cli: "src/cli.ts",
+    "daemon-process": "src/daemon-process.ts",
     "playback-benchmark": "src/playback-benchmark-cli.ts",
     "background-sounds": "src/background-sounds.ts",
   },

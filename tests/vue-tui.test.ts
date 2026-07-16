@@ -958,7 +958,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("\x1b[6~");
     await terminal.stdin.write("G");
     expect(terminal.lastFrame()).toContain("Ctrl-C");
-    expect(terminal.lastFrame()).toContain("Quit (confirm downloads)");
+    expect(terminal.lastFrame()).toContain("Quit Client everywhere");
 
     for (const suppressed of ["]", " ", "x", "C", "N", "s", "r"] as const) {
       await terminal.stdin.write(suppressed);

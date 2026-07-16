@@ -21,11 +21,31 @@ beforeAll(async () => {
   await mkdir(join(root, "runtime"), { mode: 0o700 });
   const configDir = join(root, "config", "tmu");
   await mkdir(configDir, { recursive: true });
+  const fakeMpv = join(process.cwd(), "tests", "fixtures", "fake-mpv.mjs");
+  await chmod(fakeMpv, 0o755);
   await writeFile(join(configDir, "config.json"), JSON.stringify({
     helpers: {
-      mpv: join(root, "missing-external-tools", "mpv"),
+      mpv: fakeMpv,
       ytDlp: join(root, "missing-external-tools", "yt-dlp"),
     },
+  }));
+  const cacheDir = join(root, "cache", "tmu", "youtube-cache");
+  const stateDir = join(root, "state", "tmu");
+  await mkdir(cacheDir, { recursive: true });
+  await mkdir(stateDir, { recursive: true });
+  const videoId = "package0001";
+  await writeFile(join(cacheDir, `${videoId}.opus`), "packaged playback fixture");
+  await writeFile(join(cacheDir, `${videoId}.json`), JSON.stringify({
+    videoId, title: "Packaged Playback", uploader: "TMU", durationSeconds: 600,
+    cachedAt: "2026-07-16T00:00:00.000Z", mediaFileName: `${videoId}.opus`, container: "opus",
+  }));
+  const playlistId = "00000000-0000-4000-8000-000000000114";
+  await writeFile(join(stateDir, "last-playlists.json"), JSON.stringify({
+    version: 2, playingPlaylistId: playlistId,
+    playlists: [{ id: playlistId, name: "Default", trackIdentities: [{ providerId: "youtube-cache", stableId: videoId }],
+      currentTrackIdentity: null, positionSeconds: 0, playbackStatus: "stopped", repeatAll: false }],
+    tracks: [{ identity: { providerId: "youtube-cache", stableId: videoId }, title: "Packaged Playback", artist: "TMU",
+      durationSeconds: 600, providerLabel: "YouTube Cache" }], volume: { percent: 100, ready: true },
   }));
   const { stdout } = await exec("npm", ["pack", "--silent", "--pack-destination", root]);
   tarball = join(root, stdout.trim().split("\n").at(-1) ?? "");
@@ -67,6 +87,8 @@ describe("Node npm package", () => {
     expect(pkg.devDependencies).toHaveProperty("tsdown");
     expect(packageFiles).toContain("package/dist/cli.js");
     expect(packageFiles).toContain("package/dist/cli.js.map");
+    expect(packageFiles).toContain("package/dist/daemon-process.js");
+    expect(packageFiles).toContain("package/dist/daemon-process.js.map");
     expect(packageFiles).toContain("package/dist/background-sounds.js");
     expect(packageFiles).toContain("package/dist/background-sounds.jxa");
     const packagedHelper = join(packedRoot, "dist", "background-sounds.jxa");
@@ -83,6 +105,7 @@ describe("Node npm package", () => {
   test("packs only distribution output and user documentation", () => {
     expect(packageFiles).toContain("package/README.md");
     expect(packageFiles).toContain("package/CONTEXT.md");
+    expect(packageFiles).toContain("package/RELEASE_NOTES.md");
     expect(packageFiles.some((file) => file.startsWith("package/src/"))).toBe(false);
     expect(packageFiles.some((file) => file.startsWith("package/tests/"))).toBe(false);
   });
@@ -106,13 +129,24 @@ describe("Node npm package", () => {
     });
   });
 
-  test("runs the packed CLI through npx and an isolated global installation without External Tools", async () => {
+  test("exposes only the normal launch and status/stop operational commands", async () => {
+    for (const args of [["daemon", "start"], ["--tmu-daemon-process"], ["legacy"], ["daemon", "status", "extra"], ["daemon", "stop", "--kill"]]) {
+      await expect(exec(process.execPath, ["dist/cli.js", ...args])).rejects.toMatchObject({
+        code: 2,
+        stderr: expect.stringContaining("Usage: tmu"),
+      });
+    }
+  });
+
+  test("runs daemon-owned playback through npx and an isolated global packaged installation", async () => {
     const globalPrefix = join(root, "global");
     await exec("npm", ["install", "--global", "--prefix", globalPrefix, tarball]);
 
     const env = isolatedRuntimeEnv();
-    await expectPackedTerminal(join(globalPrefix, "bin", "tmu"), [], env);
-    await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env);
+    const installedTmu = join(globalPrefix, "bin", "tmu");
+    await expectPackedTerminal(installedTmu, [], env, "q");
+    await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env, "ctrl-c");
+    await expectPackagedConnectionLoss(installedTmu, env);
   }, 30_000);
 
   test("public source surface contains no removed provider or legacy input-router modules", async () => {
@@ -137,7 +171,7 @@ function isolatedRuntimeEnv(): Record<string, string> {
   };
 }
 
-async function expectPackedTerminal(command: string, args: string[], env: Record<string, string>): Promise<void> {
+async function expectPackedTerminal(command: string, args: string[], env: Record<string, string>, quit: "q" | "ctrl-c"): Promise<void> {
   let output = "";
   const osascriptSentinel = join(root, `osascript-${Math.random()}.called`);
   const terminal = spawn(command, args, { cols: 100, rows: 24, cwd: root, env: {
@@ -157,6 +191,11 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
     expect(stripAnsi(output)).toContain("[ prev ] next");
     expect(await exists(osascriptSentinel)).toBe(false);
     if (process.platform === "linux") expect(stripAnsi(output)).not.toContain("Background");
+    expect(output).toContain("\x1b[?1049h");
+    expect(stripAnsi(output)).toContain("Packaged Playback");
+    output = "";
+    terminal.write("\r");
+    await new Promise((resolve) => setTimeout(resolve, 500));
     output = "";
     terminal.write("]");
     await waitFor(() => output.includes("▸ Library ◂"));
@@ -173,12 +212,15 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
     terminal.write("n");
     await waitFor(() => stripAnsi(output).includes("▸ Library ◂") && !stripAnsi(output).includes("Shut down TMU Daemon?"));
     await new Promise((resolve) => setTimeout(resolve, 100));
-    terminal.write("q");
+    terminal.write(quit === "q" ? "q" : "\x03");
     const exit = await withTimeout(exitPromise, 10_000, "Timed out waiting for packed terminal exit");
     expect(exit.exitCode, stripAnsi(output)).toBe(0);
+    expect(output).toContain("\x1b[?1049l");
     const status = await exec(command, [...args, "daemon", "status"], { cwd: root, env });
     expect(status.stdout).toContain("TMU Daemon: ready");
     expect(status.stdout).toContain("Playing Playlist: Default");
+    expect(status.stdout).toContain("Current Track: Packaged Playback");
+    expect(status.stdout).toContain("Playback: playing");
     await expect(exec(command, [...args, "daemon", "stop"], { cwd: root, env })).rejects.toMatchObject({
       code: 2, stderr: expect.stringContaining("Refusing non-interactive daemon stop"),
     });
@@ -194,6 +236,34 @@ async function expectPackedTerminal(command: string, args: string[], env: Record
   } finally {
     if (!exited) terminal.kill();
     await withTimeout(exitPromise, 2_000, "Timed out cleaning up packed terminal process");
+  }
+}
+
+async function expectPackagedConnectionLoss(command: string, env: Record<string, string>): Promise<void> {
+  let output = "";
+  const terminal = spawn(command, [], { cols: 100, rows: 24, cwd: root, env });
+  terminal.onData((data) => { output += data; });
+  const exitPromise = new Promise<{ exitCode: number }>((resolve) => terminal.onExit(resolve));
+  try {
+    await waitFor(() => stripAnsi(output).includes("Packaged Playback"));
+    const ready = JSON.parse(await readFile(join(root, "runtime", "tmu", "ready.json"), "utf8")) as { pid: number };
+    process.kill(ready.pid, "SIGKILL");
+    await waitFor(() => stripAnsi(output).includes("TMU Daemon connection lost"));
+    expect(stripAnsi(output)).toContain("Press q or Ctrl-C to exit");
+    terminal.write("q");
+    expect((await withTimeout(exitPromise, 5_000, "Timed out exiting connection-lost TUI")).exitCode).toBe(0);
+    expect(output).toContain("\x1b[?1049l");
+    await expect(exec(command, ["daemon", "status"], { cwd: root, env })).rejects.toMatchObject({ code: 1 });
+
+    const recovery = spawn(command, [], { cols: 100, rows: 24, cwd: root, env });
+    let recoveryOutput = ""; recovery.onData((data) => { recoveryOutput += data; });
+    const recoveryExit = new Promise<{ exitCode: number }>((resolve) => recovery.onExit(resolve));
+    await waitFor(() => stripAnsi(recoveryOutput).includes("Packaged Playback"));
+    recovery.write("q");
+    expect((await withTimeout(recoveryExit, 5_000, "Timed out exiting recovered TUI")).exitCode).toBe(0);
+    await exec(command, ["daemon", "stop", "--force"], { cwd: root, env });
+  } finally {
+    terminal.kill();
   }
 }
 

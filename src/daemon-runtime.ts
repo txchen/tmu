@@ -575,8 +575,8 @@ export async function connectOrStartDaemon(options: { env?: NodeJS.ProcessEnv; t
   }
   if (winner) {
     await rm(paths.readyPath, { force: true });
-    const entry = fileURLToPath(new URL("./cli.js", import.meta.url));
-    const child = spawn(process.execPath, [entry, "--tmu-daemon-process"], { detached: true, stdio: "ignore", env: options.env ?? process.env });
+    const entry = fileURLToPath(new URL("./daemon-process.js", import.meta.url));
+    const child = spawn(process.execPath, [entry], { detached: true, stdio: "ignore", env: options.env ?? process.env });
     child.unref();
   }
   const deadline = Date.now() + (options.timeoutMs ?? STARTUP_TIMEOUT_MS);
@@ -610,7 +610,7 @@ async function reclaimVerifiedStaleStartupLock(paths: DaemonPaths): Promise<stri
 }
 
 function subscribe<T>(set: Set<(value: T) => void>, listener: (value: T) => void): () => void { set.add(listener); return () => set.delete(listener); }
-function packageVersion(): string { return process.env.npm_package_version ?? "0.3.0"; }
+function packageVersion(): string { return process.env.npm_package_version ?? "0.4.0"; }
 export async function appendDaemonLog(path: string, message: string, maximumBytes = LOG_MAX_BYTES): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const safe = redactLogMessage(message);

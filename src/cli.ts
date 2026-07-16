@@ -3,7 +3,7 @@
 export {};
 
 import { main } from "./main";
-import { queryDaemonStatus, runDaemonProcess, type DaemonOperationalStatus } from "./daemon-runtime";
+import { queryDaemonStatus, type DaemonOperationalStatus } from "./daemon-runtime";
 import { createInterface } from "node:readline/promises";
 
 const minimumNodeMajor = 24;
@@ -13,14 +13,19 @@ if (!Number.isFinite(nodeMajor) || nodeMajor < minimumNodeMajor) {
   process.stderr.write(`TMU requires Node.js ${minimumNodeMajor} or newer (running ${process.versions.node}).\n`);
   process.exitCode = 1;
 } else {
-  if (process.argv[2] === "--tmu-daemon-process") await runDaemonProcess();
+  if (process.argv.length === 2) await main();
   else if (process.argv[2] === "daemon") await daemonCommand(process.argv.slice(3));
-  else await main();
+  else {
+    process.stderr.write("Usage: tmu | tmu daemon status | tmu daemon stop [--force]\n");
+    process.exitCode = 2;
+  }
 }
 
 async function daemonCommand(args: string[]): Promise<void> {
   const operation = args[0];
-  if (operation !== "status" && operation !== "stop") {
+  const valid = operation === "status" ? args.length === 1
+    : operation === "stop" && (args.length === 1 || (args.length === 2 && args[1] === "--force"));
+  if (!valid) {
     process.stderr.write("Usage: tmu daemon status | tmu daemon stop [--force]\n"); process.exitCode = 2; return;
   }
   try {
