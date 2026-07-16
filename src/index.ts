@@ -5,6 +5,8 @@ export * from "./config";
 export * from "./coordinator";
 export * from "./dependencies";
 export * from "./daemon-client";
+export * from "./daemon-protocol";
+export * from "./daemon-runtime";
 export * from "./domain";
 export * from "./json-persistence";
 export * from "./youtube-cache";

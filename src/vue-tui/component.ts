@@ -124,6 +124,10 @@ export function createTmuRoot(options: TmuRootOptions) {
 
       async function routeInput(input: string, key: InputKey): Promise<void> {
         const ui = coordinator.uiState;
+        if (coordinator.quitIsClientOnly && (isCtrlC(input, key) || input === "q")) {
+          app.exit();
+          return;
+        }
         if (ui.terminal.tier === "terminal-too-small" && !isCtrlC(input, key)) return;
         const confirmation = activeConfirmation(coordinator);
         if (confirmation) {

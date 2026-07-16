@@ -60,9 +60,11 @@ export interface DaemonClient {
 
 /** The only application-facing surface consumed by the terminal UI. */
 export interface TuiDaemonClient {
+  readonly quitIsClientOnly?: boolean;
   readonly appState: AppState;
   readonly uiState: Readonly<UiState>;
   readonly viewedPlaylistId?: string;
+  disconnect?(): void;
   dispatch(intent: AppIntent): Promise<void>;
   dispatchUi(action: UiStateAction): Readonly<UiState>;
   playlistTrackIdentities(): readonly TrackIdentity[];
@@ -126,7 +128,7 @@ export class InProcessDaemonApplication {
   }
 
   async connectTui(): Promise<TuiDaemonClient> {
-    return new InProcessTuiDaemonClient(await this.connect());
+    return new TuiDaemonClientAdapter(await this.connect(), false);
   }
 
   async teardown(): Promise<void> {
@@ -358,12 +360,12 @@ class InProcessDaemonClient implements DaemonClient {
   disconnect() { this.application.disconnect(this.id); }
 }
 
-class InProcessTuiDaemonClient implements TuiDaemonClient {
+export class TuiDaemonClientAdapter implements TuiDaemonClient {
   private feedbackRevision = 0;
   private latestFeedback: AppState["operationFeedback"];
   private readonly errors: string[] = [];
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
-  constructor(private readonly client: DaemonClient) {
+  constructor(private readonly client: DaemonClient, readonly quitIsClientOnly = true) {
     client.onSnapshot(() => this.notifyState("state"));
     client.onFeedback((feedback) => {
       this.feedbackRevision += 1;
@@ -394,6 +396,7 @@ class InProcessTuiDaemonClient implements TuiDaemonClient {
   }
   get uiState(): Readonly<UiState> { return this.client.uiState; }
   get viewedPlaylistId(): string { return this.client.uiState.viewedPlaylistId; }
+  disconnect(): void { this.client.disconnect(); }
   async dispatch(intent: AppIntent): Promise<void> {
     if (intent.type === "switchPlaylist") {
       await this.client.submit({ type: "viewPlaylist", playlistId: intent.playlistId });
@@ -424,6 +427,10 @@ class InProcessTuiDaemonClient implements TuiDaemonClient {
   private notifyState(reason: AppStateChangeReason): void {
     for (const listener of this.stateListeners) listener(reason);
   }
+}
+
+export function adaptDaemonClientForTui(client: DaemonClient): TuiDaemonClient {
+  return new TuiDaemonClientAdapter(client);
 }
 
 function subscribe<T>(listeners: Set<(value: T) => void>, listener: (value: T) => void): () => void {

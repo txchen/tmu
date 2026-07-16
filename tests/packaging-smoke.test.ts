@@ -18,6 +18,7 @@ beforeAll(async () => {
     await chmod(join("node_modules", "node-pty", "prebuilds", `darwin-${process.arch}`, "spawn-helper"), 0o755);
   }
   root = await mkdtemp(join(tmpdir(), "tmu-package-contract-"));
+  await mkdir(join(root, "runtime"), { mode: 0o700 });
   const configDir = join(root, "config", "tmu");
   await mkdir(configDir, { recursive: true });
   await writeFile(join(configDir, "config.json"), JSON.stringify({
@@ -36,6 +37,17 @@ beforeAll(async () => {
 }, 30_000);
 
 afterAll(async () => {
+  if (root) {
+    try {
+      const ready = JSON.parse(await readFile(join(root, "runtime", "tmu", "ready.json"), "utf8")) as { pid?: number };
+      if (ready.pid) {
+        process.kill(ready.pid, "SIGTERM");
+        await waitFor(() => {
+          try { process.kill(ready.pid!, 0); return false; } catch { return true; }
+        }, 2_000);
+      }
+    } catch { /* daemon was not started or already exited */ }
+  }
   if (root) await rm(root, { recursive: true, force: true });
 });
 
@@ -121,6 +133,7 @@ function isolatedRuntimeEnv(): Record<string, string> {
     XDG_CONFIG_HOME: join(root, "config"),
     XDG_STATE_HOME: join(root, "state"),
     XDG_CACHE_HOME: join(root, "cache"),
+    XDG_RUNTIME_DIR: join(root, "runtime"),
   };
 }
 

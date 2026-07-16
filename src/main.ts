@@ -1,15 +1,13 @@
 import { createApp } from "@vue-tui/runtime";
-import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
 import { dispatchTerminalResize } from "./vue-tui/resize";
-import { InProcessDaemonApplication, type TuiDaemonClient } from "./daemon-client";
+import type { TuiDaemonClient } from "./daemon-client";
+import { connectOrStartDaemon } from "./daemon-runtime";
 
 export async function main(): Promise<void> {
-  const { coordinator } = await createTmuRuntime();
-  const daemon = new InProcessDaemonApplication(coordinator);
-  await daemon.start();
-  const client = await daemon.connectTui();
-  await runTmu(client, () => daemon.teardown());
+  process.stderr.write("Connecting to TMU Daemon…\n");
+  const client = await connectOrStartDaemon();
+  await runTmu(client, async () => client.disconnect?.());
 }
 
 export async function runTmu(client: TuiDaemonClient, teardown: () => Promise<void> = async () => undefined): Promise<void> {
