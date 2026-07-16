@@ -8,6 +8,58 @@ TMU is a lean terminal music player focused on downloading YouTube media, cachin
 The working name for the new lean TUI music player being planned in this repository.
 _Avoid_: cliamp clone, lightweight cliamp
 
+**TMU Daemon**:
+The long-lived, per-user TMU process that owns shared playback, downloads, Playlists, persistence, and other application state independently of any connected terminal. It stays running without TUI Clients and stops only when explicitly shut down or when its host system terminates it.
+_Avoid_: server, background client, idle worker
+
+**Daemon Recovery**:
+The creation of a fresh TMU Daemon by a new explicit `tmu` launch after its predecessor ended unexpectedly, cleaning up verified orphan playback and download resources and restoring the latest durable checkpoint without autoplay. A disconnected TUI Client neither starts recovery nor reconnects; it remains on a connection-lost error screen until the user exits it.
+_Avoid_: daemon resume, mpv adoption, seamless failover
+
+**TUI Client**:
+A terminal-local TMU interface connected to the TMU Daemon, owning only that terminal's navigation and other UI State. A newly connected client opens on the Playback Tab with the Playing Playlist as its Viewed Playlist; its UI State is discarded on disconnect rather than restored as a durable client session.
+_Avoid_: TMU instance, daemon session, terminal daemon
+
+**Quit Client**:
+The `q`, `Ctrl-C`, terminal hangup, or connection-close action that closes only the current TUI Client and leaves the TMU Daemon and all shared playback and downloads running. Text entry, modals, and active downloads never intercept `Ctrl-C` with a daemon-level confirmation.
+_Avoid_: quit TMU, stop playback, shutdown
+
+**Shutdown Daemon**:
+The explicit operation available through `Ctrl-Q` in every TUI Client and through `tmu daemon stop`, showing the current playback, download, and connected-client impact before confirmation, then gracefully stopping the TMU Daemon and all daemon-owned work and disconnecting every client. The command-line form requires an interactive confirmation unless `--force` explicitly skips only that confirmation; clients are peers and no client owns the daemon.
+_Avoid_: quit, close tab, idle shutdown
+
+**Shared Command**:
+A TUI Client request to change daemon-owned state, identified by stable domain identities and accepted once its complete frame is validated and enqueued in the single ordered sequence. Shortcut commands express relative intent against the latest state, explicit controls may set absolute values, and terminal-local row indexes never cross the Daemon Connection.
+_Avoid_: UI action, remote method call, client mutation
+
+**State Revision**:
+The daemon's monotonically increasing identity for a committed shared state. A destructive confirmation names the revision whose impact the user approved so the daemon can require renewed confirmation after a relevant intervening change.
+_Avoid_: timestamp, client version, file version
+
+**Confirmation Challenge**:
+A daemon-issued, client-bound and single-use description of a protected Shared Command's target and current impact at a State Revision. Shutdown Daemon, Playlist and Cache destruction, Download Batch cancellation or removal, and acceptance of a playlist-sized download require a challenge; ordinary playback, editing, single-Track Playlist removal, and Quit Client do not.
+_Avoid_: confirmation flag, client prompt state, approval boolean
+
+**Shared State Snapshot**:
+The immutable, serializable view of daemon-owned App State published with a State Revision to every TUI Client on connection and after committed changes, subject to low-power progress cadence. It contains no Provider, Player, persistence implementation, or client-owned UI State.
+_Avoid_: UI State, event log, daemon object graph
+
+**Command Feedback**:
+The success, validation failure, or stale-confirmation result returned only to the TUI Client that submitted a Shared Command. Its presentation is temporary client-owned UI State rather than shared App State.
+_Avoid_: shared notification, App Error, state change
+
+**Daemon Notice**:
+A daemon-lifecycle or other system-wide message delivered to every connected TUI Client, such as recovery or intentional shutdown by another client. It is distinct from a shared state fact and from client-specific Command Feedback.
+_Avoid_: command result, toast history, App Error
+
+**Operational Error**:
+A daemon failure represented either beside the shared capability that remains degraded, as Command Feedback, or as a Daemon Notice and bounded log record. TMU does not keep an unbounded global App Error history or replay obsolete error notifications to new clients.
+_Avoid_: App Error array, permanent toast, exception history
+
+**Daemon Connection**:
+The version-negotiated, same-user local connection between one TUI Client and the TMU Daemon. An unexpected disconnect leaves the client on a non-operational connection-lost screen until the user quits; only a later explicit `tmu` launch may create a replacement daemon.
+_Avoid_: remote session, web connection, public socket
+
 **Provider**:
 A narrow boundary that lists and searches Tracks and resolves them for playback. The YouTube Cache is the only current Provider, while the abstraction remains as an extension point for possible future sources.
 _Avoid_: backend, source
@@ -53,7 +105,7 @@ The TUI-owned, session-only state for navigation and view-local interaction, suc
 _Avoid_: app state, playback state
 
 **TMU Config**:
-The configuration file for YouTube download settings, low-power cadence, and dependency policy. It does not choose among Providers or configure the YouTube Cache location in the MVP.
+The daemon-owned configuration loaded once when the TMU Daemon starts for YouTube download settings, low-power cadence, and dependency policy. TUI Clients never load independent copies, and file changes take effect only after an explicit daemon restart rather than through hot reload.
 _Avoid_: separate credentials store, secret database
 
 **External Tools**:
@@ -93,11 +145,11 @@ The only workflow for adding media to the YouTube Cache. Each submission accepts
 _Avoid_: YouTube search, YouTube browsing, YouTube streaming, YouTube provider playback
 
 **Download Batch**:
-The sequential work created by one submitted YouTube URL, processing its Tracks one at a time in source order. Successes survive item failures, unavailable playlist entries, or cancellation; batch cancellation stops remaining work in that batch and removes the interrupted item's partial files, while the final result distinguishes downloaded, already-cached, failed, and cancelled work.
+The daemon-owned sequential work created after accepting one submitted YouTube URL, processing its Tracks one at a time in source order independently of the submitting TUI Client's later lifetime. A playlist submission becomes a Download Batch only after its client-bound Confirmation Challenge is accepted; disconnect before that point cancels the submission.
 _Avoid_: Playlist, Music Collection, transaction
 
 **Download Pipeline**:
-The session-bound FIFO sequence of submitted Download Batches, with at most one active Track download across all batches. It may run alongside playback without changing playback state; cancelling the active batch continues to the next pending batch, and pending batches may be removed before they start without affecting the cache. Its sequence, status, progress, and session summaries are shown in the YouTube Downloader rather than the Playback Tab. Quitting with work requires confirmation before cancelling all active and pending work. Summaries and failures are not persisted.
+The daemon-lifetime FIFO sequence of submitted Download Batches, with at most one active Track download across all batches. It continues without connected TUI Clients, retains at most the 500 most recent bounded summaries, and is not restored after Daemon Recovery; complete Cache Entries already committed remain available.
 _Avoid_: Queue, parallel downloads, download playlist
 
 **Low-Power TUI**:
@@ -108,16 +160,20 @@ _Avoid_: efficient UI, battery friendly UI
 A durably identified, user-named, ordered collection of Tracks that directly owns its playback order, Current Track, saved position, stopped-or-resumable state, and Repeat All setting. A Track may belong to multiple Playlists but appears at most once per Playlist by Track Identity; names are trimmed, non-empty, unique after case-folding, and at most 16 Unicode characters.
 _Avoid_: Queue, collection, mix
 
-**Active Playlist**:
-The Playlist currently visible, identified in the top bar, and targeted by playback and Library actions. Switching away from Playing or Paused saves a resumable position, while explicitly Stopped remains at `0:00`; switching restores the destination Playlist without autoplay, selects its Current Track or first Track, and resets scroll to reveal it.
-_Avoid_: selected playlist, current queue
+**Playing Playlist**:
+The one daemon-owned Playlist whose Current Track, playback order, saved position, and Repeat All setting govern the shared Player. Starting a Track from another Playlist makes that Playlist the Playing Playlist; merely viewing another Playlist never changes playback.
+_Avoid_: Active Playlist, Viewed Playlist, current queue
+
+**Viewed Playlist**:
+The Playlist a particular TUI Client is browsing and targeting with Playlist and Library actions. Each client starts by viewing the Playing Playlist, then owns changes to its Viewed Playlist only for the lifetime of that client; changing it never changes the Playing Playlist or another client's view.
+_Avoid_: Active Playlist, Playing Playlist, selected playlist
 
 **Playlist Manager**:
-The global modal opened with `P` outside text entry for switching, creating, renaming, deleting, and persistently ordering Playlists. Opening always selects and reveals the Active Playlist; each row shows its Active marker, name, and Track count. Vim navigation and `Enter` switch, `c` creates at the end and immediately activates, `e` renames, `x` requests confirmed deletion, and `J`/`K` reorder. Create and rename enter text-edit mode where `Enter` submits, `Esc` returns, validation errors stay inline, and printable command characters become name text. A successful rename returns with that row selected; confirmed deletion stays open and selects the replacement row, or the previous row after deleting the last; `Enter` on the already Active Playlist only closes the manager without changing playback.
+The TUI Client modal opened with `P` outside text entry for changing its Viewed Playlist and for creating, renaming, deleting, and persistently ordering shared Playlists. Creating switches only the creator's Viewed Playlist to the new Playlist and never changes the Playing Playlist or another client's view.
 _Avoid_: Playlist Switcher, playlist tab, playlist pane
 
 **Delete Playlist**:
-The confirmed removal of a Playlist and its Track memberships, identified by name and Track count in the confirmation, without changing the YouTube Cache. Deleting the Active Playlist stops playback and activates the next Playlist in manager order, or the previous one when it occupied the last row; the sole remaining Playlist cannot be deleted.
+The confirmed removal of a Playlist and its Track memberships without changing the YouTube Cache. Deleting the Playing Playlist stops shared playback and makes the next Playlist in manager order, or the previous one when deleting the last row, the new Playing Playlist without autoplay; every client viewing the deleted Playlist moves to the same replacement, and the sole remaining Playlist cannot be deleted.
 _Avoid_: Clear Playlist, delete queue
 
 **Default Playlist**:
@@ -125,7 +181,7 @@ The initial Playlist created by TMU, initially named `Default`, which receives a
 _Avoid_: default queue, system queue
 
 **Current Track**:
-The one Track in the Active Playlist designated for playback. Switching Playlists stops playback and makes the destination Playlist's remembered Current Track current without autoplay.
+The one Track in the Playing Playlist designated for shared playback. Merely changing a TUI Client's Viewed Playlist does not change the Current Track.
 _Avoid_: separate playing Track, selected Track as playback state
 
 **Resume**:
@@ -137,11 +193,11 @@ The playback action that halts the Player, keeps the Current Track, and resets i
 _Avoid_: clearing Current Track, preserving the stopped position
 
 **Playback Tab**:
-The default TUI surface opened by TMU's only launch form, `tmu`, with a focusable Playlist Pane, an optional non-focusable Selected Track Preview, and a distinct Now Playing Bar at the bottom. At medium and wide widths the Playlist and preview form an approximately 2:1 left/right split; at narrow widths the preview stacks below the Playlist. Launch always starts on the Playback Tab and restores the Last Playlist Snapshot without autoplay. The Playback Tab remains visible when the Active Playlist is empty, keeps Playlist Pane focus, shows no Current Track, and belongs to the same top-level tab set as Library and YouTube Downloader.
+The default TUI surface opened by TMU's only launch form, `tmu`, with a focusable Playlist Pane for that client's Viewed Playlist, an optional non-focusable Selected Track Preview, and a distinct Now Playing Bar for shared playback. At medium and wide widths the Playlist and preview form an approximately 2:1 left/right split; at narrow widths the preview stacks below the Playlist.
 _Avoid_: dashboard, browse home, always-visible search
 
 **Playlist Pane**:
-The focusable list in the Playback Tab, showing the Active Playlist's ordered Tracks together with their selection, current, and playback status. It is the Playback Tab's only focus target and occupies the larger portion of the layout when shown beside the Selected Track Preview.
+The focusable list in the Playback Tab, showing the TUI Client's Viewed Playlist and its terminal-local selection. It marks shared playback only when the Viewed Playlist is also the Playing Playlist.
 _Avoid_: Queue Pane, library pane, browser pane
 
 **Selected Track Preview**:
@@ -149,11 +205,11 @@ A compact, non-focusable metadata area for the selected Playlist Track. It appea
 _Avoid_: Playing Track Pane, Current Track details, focusable inspector
 
 **Now Playing Bar**:
-The non-focusable area immediately above the contextual shortcut footer on every Top-Level Tab, representing the Current Track and its playback status independently from selection in the active tab. It is absent when there is no Current Track and distinguishes restored playback that can Resume at a saved position from an explicitly Stopped Track that will start from the beginning.
+The non-focusable area immediately above the contextual shortcut footer on every Top-Level Tab, identifying the Playing Playlist and representing its Current Track and shared playback status independently from the client's Viewed Playlist and selection.
 _Avoid_: Selected Track Preview, focusable playback pane, animated playback panel
 
 **Library**:
-The top-level tab for finding Cache Entries already present in the YouTube Cache. It is entirely local and uses Cache Search to produce one list containing healthy playable Tracks and visibly unhealthy incomplete Cache Entries. Its Play Now, Play Next, and Add to Playlist actions target only the Active Playlist; adding to another Playlist requires switching first.
+The top-level tab for finding Cache Entries already present in the YouTube Cache. It is entirely local and uses Cache Search to produce one list containing healthy playable Tracks and visibly unhealthy incomplete Cache Entries. Its Play Now, Play Next, and Add to Playlist actions explicitly target that TUI Client's Viewed Playlist.
 _Avoid_: provider browser, local library, download status
 
 **YouTube Downloader**:
@@ -161,7 +217,7 @@ The top-level tab for submitting YouTube or YouTube Music video and playlist URL
 _Avoid_: Library, Playlist status, playback list
 
 **Top-Level Tabs**:
-The primary TUI structure containing Playback, Library, and YouTube Downloader, plus the optional macOS-only Background Sounds Tab on candidate Macs. They are labeled `Player`, `Library`, `Downloads`, and, when present, `Background` in a compact top bar that also identifies the Active Playlist. `[` and `]` switch cyclically to the previous and next visible tab, including while ordinary tab text inputs are focused; literal brackets are therefore unavailable in those inputs, and there are no numeric tab shortcuts. A modal text editor such as Rename Track suspends tab switching and accepts brackets as content. Tab and Shift+Tab move focus only among panes within the active tab. Tabs are switched intentionally by the user and are not restored across restarts; the Playback Tab remains the default listening surface, Library is for cached music discovery, YouTube Downloader is for download submission and status, and Background is for macOS-owned Background Sound state. Global playback shortcuts continue to work across tabs except where a focused text input or modal intentionally captures keys.
+The primary TUI structure containing Playback, Library, and YouTube Downloader, plus the optional macOS-only Background Sounds Tab on candidate Macs. A compact top bar identifies the TUI Client's Viewed Playlist, while the Now Playing Bar independently identifies the Playing Playlist; `[` and `]` switch cyclically among visible tabs.
 _Avoid_: overlay-first UI, provider tabs, hidden download status
 
 **Vim Navigation**:
@@ -173,31 +229,31 @@ TMU's keyboard-discovery layer: a small footer shows only the most relevant acti
 _Avoid_: permanent shortcut wall, undocumented keymap
 
 **Play Next**:
-The TUI action that moves or inserts a Track into the next Active Playlist position without duplicates and never starts playback. The Current Track stays in place; an empty Playlist receives the Track at its head.
+The TUI action that moves or inserts a Track into the next position of the explicitly targeted Viewed Playlist without duplicates and never starts playback. The target Playlist's remembered Current Track stays in place; an empty Playlist receives the Track at its head.
 _Avoid_: enqueue, add to end, play now, autoplay
 
 **Add to Playlist**:
-The Library action that adds a cached Track to the end of the Active Playlist only when it is not already present, without starting playback, moving an existing entry, or changing the Current Track. It is distinct from downloading, which never adds Tracks to a Playlist by itself.
+The Library action that adds a cached Track to the end of the explicitly targeted Viewed Playlist only when it is not already present, without starting playback, moving an existing entry, or changing the Current Track. It is distinct from downloading, which never adds Tracks to a Playlist by itself.
 _Avoid_: Add to Queue, Play Now, Play Next
 
 **Play Now**:
-The TUI action that deduplicates a Track into the Active Playlist, makes it Current, and starts it from the beginning immediately. A different former Current Track remains immediately before it so Previous returns to that Track; without a Current Track, it goes at the Playlist head.
+The TUI action that deduplicates a Track into the explicitly targeted Viewed Playlist, makes that Playlist the Playing Playlist, makes the Track Current, and starts it from the beginning immediately.
 _Avoid_: autoplay, resume, play next
 
 **Play Selected**:
-The Playback Tab action that makes the selected existing Playlist Track Current and starts it from the beginning without changing Playlist order. Previous and Next Track then follow the selected Track's existing neighbors. Library uses Play Now instead because its Track may not yet be in the Active Playlist.
+The Playback Tab action that makes the Viewed Playlist the Playing Playlist, makes its selected existing Playlist Track Current, and starts it from the beginning without changing Playlist order. Previous and Next Track then follow that Playlist's neighbors.
 _Avoid_: Play Now, Resume, Play Next, Playlist reorder
 
 **Clear Playlist**:
-The destructive TUI action that, after explicit confirmation, stops playback, clears the Current Track, and removes every Track membership from the Active Playlist without changing the YouTube Cache. Cancelling the confirmation leaves both Playlist and playback unchanged.
+The protected TUI action that removes every Track membership from the explicitly targeted Viewed Playlist without changing the YouTube Cache. Its Confirmation Challenge states whether the target is also the Playing Playlist, in which case confirmation stops shared playback and clears the Current Track.
 _Avoid_: unconfirmed clear, automatic advance after clear
 
 **Randomize Playlist**:
-The one-shot Playlist action that visibly randomizes every Track in the Active Playlist, including the Current Track. The Current Track keeps playing without interruption and remains Current at its new visible index; playback then follows the resulting visible order and Play Next remains literally next. Randomize Playlist is not a playback mode: it has no enabled state, toggle, or status indicator.
+The one-shot action that visibly randomizes every Track in the explicitly targeted Viewed Playlist. If it is also the Playing Playlist, the Current Track keeps playing without interruption at its new visible index and subsequent playback follows the new order; Randomize Playlist is not a playback mode.
 _Avoid_: Shuffle mode, hidden random playback order
 
 **Next Track**:
-The playback action that starts the next playable Track in visible Active Playlist order, skipping unavailable Tracks without removing them. Repeat All wraps through that visible order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Playlist.
+The playback action that starts the next playable Track in Playing Playlist order, skipping unavailable Tracks without removing them. Repeat All wraps through that order; with Repeat All off and no later playable Track, Next Track retains the Current Track, stops playback, and resets its resumable position to the beginning, matching natural completion of the Playlist.
 _Avoid_: clearing Current Track at Playlist end, silently removing unavailable Tracks
 
 **Previous Track**:
@@ -209,5 +265,5 @@ The session-wide, Track Identity-based ability of a Track to resolve and play, s
 _Avoid_: silently removed track, hidden playback error
 
 **Last Playlist Snapshot**:
-The atomic persistence record containing every Playlist in user-defined order, each Playlist's playback state, and the Active Playlist identity. Only when it is absent does TMU migrate the legacy Queue snapshot into the Default Playlist; invalid data is quarantined rather than reviving legacy state, while write failures leave in-memory operation working, warn visibly, and retry later.
+The atomic daemon-owned persistence record containing every Playlist in user-defined order, each Playlist's playback state, and the Playing Playlist identity. Semantic playback changes save immediately and continuous playback checkpoints about every 30 seconds; it never contains a TUI Client's Viewed Playlist or other UI State.
 _Avoid_: Last Queue Snapshot, app database, library index
