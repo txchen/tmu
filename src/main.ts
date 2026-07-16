@@ -2,11 +2,19 @@ import { createApp } from "@vue-tui/runtime";
 import { createTmuRoot } from "./vue-tui/component";
 import { dispatchTerminalResize } from "./vue-tui/resize";
 import type { TuiDaemonClient } from "./daemon-client";
-import { connectOrStartDaemon } from "./daemon-runtime";
+import { connectOrStartDaemon, DaemonProtocolMismatchError } from "./daemon-runtime";
 
 export async function main(): Promise<void> {
   process.stderr.write("Connecting to TMU Daemon…\n");
-  const client = await connectOrStartDaemon();
+  let client: TuiDaemonClient;
+  try {
+    client = await connectOrStartDaemon();
+  } catch (error) {
+    if (!(error instanceof DaemonProtocolMismatchError)) throw error;
+    process.stderr.write(`Incompatible TMU Daemon: ${error.message}\n`);
+    process.exitCode = 1;
+    return;
+  }
   await runTmu(client, async () => client.disconnect?.());
 }
 

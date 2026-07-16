@@ -160,6 +160,9 @@ export class InProcessDaemonApplication {
 
   requestChallenge(clientId: string, request: { kind: ConfirmationChallenge["kind"]; targetId: string }): Promise<ConfirmationChallenge> {
     this.record(clientId);
+    if (request.kind === "accept-playlist" && this.coordinator.playlistDownloadConfirmationOwner !== clientId) {
+      return Promise.reject(new Error("Playlist download Confirmation Challenge belongs to another client"));
+    }
     const challenge: StoredChallenge = Object.freeze({
       ...request, clientId, token: crypto.randomUUID(), revision: this.revision,
       impact: this.challengeImpact(request.kind, request.targetId), expiresAt: this.now() + 30_000,
@@ -208,6 +211,7 @@ export class InProcessDaemonApplication {
 
   disconnect(clientId: string): void {
     this.clients.delete(clientId);
+    this.coordinator.disconnectDaemonClient(clientId);
     for (const [token, challenge] of this.challenges) if (challenge.clientId === clientId) this.challenges.delete(token);
   }
 
@@ -245,6 +249,10 @@ export class InProcessDaemonApplication {
         else if (command.operation === "setSound") await this.coordinator.setBackgroundSound(String(command.value));
         else this.coordinator.adjustBackgroundSoundsVolume(command.value === -1 ? -1 : 1);
         return this.deliverFeedback(clientId, requestId, "success", `completed Background Sounds ${command.operation}`);
+      }
+      if (command.intent.type === "downloadOperation" && command.intent.operation === "start") {
+        this.coordinator.startDaemonDownload(command.intent.url, clientId);
+        return this.deliverFeedback(clientId, requestId, "success", "submitted YouTube URL to the Download Pipeline");
       }
       if (!confirmed && isProtectedIntent(command.intent)) {
         throw new Error(`${command.intent.type} requires a Confirmation Challenge`);

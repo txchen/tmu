@@ -592,6 +592,28 @@ describe("AppCoordinator with the narrow Provider", () => {
     ]);
   });
 
+  test("Download Pipeline retains 500 completed summaries and bounds failure text", async () => {
+    const { coordinator: base } = harness();
+    const coordinator = new AppCoordinator({
+      appState: createInitialAppState(base.appState.providers), uiState: createInitialUiState(),
+      initialPlaylistContent: new MemoryPlaylistContent(), player: new RecordingPlayer(),
+      refreshDependencyHealth: async (_helper, current) => current,
+      prepareDownloadBatch: async (url) => ({ kind: "ready", batch: { sourceUrl: url, kind: "single", entries: [] } }),
+      executeDownloadBatch: async () => ({
+        downloaded: 0, alreadyCached: 0, failed: 1, cancelled: 0,
+        failures: [{ index: 0, message: "x".repeat(2_000) }],
+      }),
+    });
+    for (let index = 0; index < 501; index += 1) {
+      await coordinator.dispatch({ type: "downloadOperation", operation: "start", url: `https://youtu.be/${index}` });
+    }
+    await waitFor(() => coordinator.appState.downloads.summaries.at(-1)?.id === 501);
+    expect(coordinator.appState.downloads.summaries).toHaveLength(500);
+    expect(coordinator.appState.downloads.summaries[0]?.id).toBe(2);
+    expect(coordinator.appState.downloads.summaries[0]?.failures[0]?.message.length).toBe(1_024);
+    await coordinator.teardown();
+  });
+
   test("quit with Download Pipeline work requires confirmation before cancelling all work", async () => {
     const player = new RecordingPlayer();
     const coordinator = new AppCoordinator({

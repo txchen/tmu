@@ -25,8 +25,20 @@ export async function exerciseDaemonClientContract(harness: DaemonClientContract
   expect(first.snapshot.revision).toBe(second.snapshot.revision);
   expect(first.uiState.viewedPlaylistId).not.toBe(second.uiState.viewedPlaylistId);
   first.dispatchUi({ type: "switchTab", tab: "library" });
+  first.dispatchUi({ type: "setLibraryQuery", query: "private search" });
+  first.dispatchUi({ type: "setDownloaderInput", value: "https://youtu.be/client-local" });
+  first.dispatchUi({ type: "openOverlay", kind: "shortcut-help" });
+  first.dispatchUi({ type: "setNotification", notification: { level: "success", message: "local only" } });
   expect(first.uiState.activeTab).toBe("library");
   expect(second.uiState.activeTab).toBe("playback");
+  expect(first.uiState.library.query).toBe("private search");
+  expect(second.uiState.library.query).toBe("");
+  expect(first.uiState.downloader.urlInput).toContain("client-local");
+  expect(second.uiState.downloader.urlInput).toBe("");
+  expect(first.uiState.overlays).toHaveLength(1);
+  expect(second.uiState.overlays).toEqual([]);
+  expect(first.uiState.notification?.message).toBe("local only");
+  expect(second.uiState.notification).toBeNull();
 
   const revisionBeforeVolume = first.snapshot.revision;
   await Promise.all([
@@ -50,6 +62,8 @@ export async function exerciseDaemonClientContract(harness: DaemonClientContract
   const singleUse = await first.requestChallenge({ kind: "delete-playlist", targetId: first.uiState.viewedPlaylistId });
   await harness.command(second, { type: "adjustVolume", delta: 5 });
   await expect(first.confirmChallenge(singleUse.token)).resolves.toMatchObject({ status: "success" });
+  expect(first.uiState.viewedPlaylistId).toBe(first.snapshot.state.playlists.playingPlaylistId);
+  expect(second.uiState.viewedPlaylistId).toBe(first.snapshot.state.playlists.playingPlaylistId);
   await expect(first.confirmChallenge(singleUse.token)).resolves.toMatchObject({ status: "stale-confirmation" });
 
   const accepted = harness.command(first, { type: "adjustVolume", delta: 5 });

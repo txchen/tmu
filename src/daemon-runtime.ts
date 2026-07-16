@@ -18,6 +18,17 @@ const STARTUP_TIMEOUT_MS = 15_000;
 const SOCKET_NAME = "daemon.sock";
 
 export type DaemonPaths = Readonly<{ runtimeDirectory: string; socketPath: string; lockPath: string; readyPath: string; logPath: string }>;
+export type UnixDaemonServerOptions = Readonly<{ maxOutboundBytes?: number }>;
+
+export class DaemonProtocolMismatchError extends Error {
+  readonly code = "daemon-protocol-mismatch";
+  constructor(readonly expected: number, readonly received: number) {
+    super(`TMU Daemon protocol mismatch (daemon ${expected}, client ${received}). Restart TMU so the daemon and client use the same protocol.`);
+    this.name = "DaemonProtocolMismatchError";
+  }
+}
+
+const DEFAULT_MAX_OUTBOUND_BYTES = 1024 * 1024;
 
 export async function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): Promise<DaemonPaths> {
   const uid = process.getuid?.() ?? userInfo().uid;
@@ -54,7 +65,11 @@ type Request = { type: "request"; requestId: string; operation: "submit" | "requ
 export class UnixDaemonServer {
   private server?: Server;
   private readonly sockets = new Set<Socket>();
-  constructor(private readonly application: InProcessDaemonApplication, readonly paths: DaemonPaths) {}
+  constructor(
+    private readonly application: InProcessDaemonApplication,
+    readonly paths: DaemonPaths,
+    private readonly options: UnixDaemonServerOptions = {},
+  ) {}
 
   async listen(): Promise<void> {
     await removeOwnedSocket(this.paths.socketPath);
@@ -78,7 +93,8 @@ export class UnixDaemonServer {
     const decoder = new FrameDecoder();
     let client: DaemonClient | undefined;
     let initialized = false;
-    const send = (message: unknown) => { if (!socket.destroyed) socket.write(encodeFrame(message)); };
+    const outbound = new SocketOutboundBuffer(socket, this.options.maxOutboundBytes ?? DEFAULT_MAX_OUTBOUND_BYTES);
+    const send = (message: unknown, kind: OutboundKind = "control") => outbound.send(message, kind);
     socket.on("data", async (chunk) => {
       try {
         for (const frame of decoder.push(chunk)) {
@@ -90,9 +106,9 @@ export class UnixDaemonServer {
             }
             client = await this.application.connect();
             initialized = true;
-            client.onSnapshot((snapshot) => send({ type: "snapshot", snapshot }));
-            client.onFeedback((feedback) => send({ type: "feedback", feedback }));
-            client.onNotice((notice) => send({ type: "notice", notice }));
+            client.onSnapshot((snapshot) => send({ type: "snapshot", snapshot }, "snapshot"));
+            client.onFeedback((feedback) => send({ type: "feedback", feedback }, "control"));
+            client.onNotice((notice) => send({ type: "notice", notice }, "control"));
             send({ type: "welcome", protocolVersion: DAEMON_PROTOCOL_VERSION, daemonVersion: packageVersion(), clientId: client.id,
               snapshot: client.snapshot, uiState: client.uiState });
             continue;
@@ -112,6 +128,47 @@ export class UnixDaemonServer {
     });
     socket.on("close", () => { this.sockets.delete(socket); client?.disconnect(); });
     socket.on("error", () => undefined);
+  }
+}
+
+type OutboundKind = "snapshot" | "control";
+type OutboundFrame = { bytes: Buffer; kind: OutboundKind };
+
+class SocketOutboundBuffer {
+  private blocked = false;
+  private queuedBytes = 0;
+  private readonly queue: OutboundFrame[] = [];
+
+  constructor(private readonly socket: Socket, private readonly maxBytes: number) {
+    socket.on("drain", () => this.flush());
+  }
+
+  send(message: unknown, kind: OutboundKind): void {
+    if (this.socket.destroyed) return;
+    const frame = { bytes: encodeFrame(message), kind };
+    if (!this.blocked && this.queue.length === 0) {
+      this.blocked = !this.socket.write(frame.bytes);
+      return;
+    }
+    if (kind === "snapshot") {
+      const existing = this.queue.findIndex((item) => item.kind === "snapshot");
+      if (existing >= 0) {
+        this.queuedBytes -= this.queue[existing]!.bytes.length;
+        this.queue[existing] = frame;
+      } else this.queue.push(frame);
+    } else this.queue.push(frame);
+    this.queuedBytes += frame.bytes.length;
+    if (this.queuedBytes > this.maxBytes) this.socket.destroy(new Error("TMU Daemon disconnected a slow client"));
+  }
+
+  private flush(): void {
+    if (this.socket.destroyed) return;
+    this.blocked = false;
+    while (!this.blocked && this.queue.length > 0) {
+      const frame = this.queue.shift()!;
+      this.queuedBytes -= frame.bytes.length;
+      this.blocked = !this.socket.write(frame.bytes);
+    }
   }
 }
 
@@ -163,6 +220,7 @@ export class UnixDaemonClient implements DaemonClient {
   }
 
   static async connect(socketPath: string, options: { protocolVersion?: number; timeoutMs?: number } = {}): Promise<UnixDaemonClient> {
+    await assertPrivateOwnedSocket(socketPath);
     const socket = createConnection(socketPath);
     const decoder = new FrameDecoder();
     const timeoutMs = options.timeoutMs ?? 5_000;
@@ -177,7 +235,7 @@ export class UnixDaemonClient implements DaemonClient {
             if (message.type === "protocolError") {
               assertExactKeys(message, ["type", "expected", "received"]);
               if (!Number.isInteger(message.expected) || !Number.isInteger(message.received)) throw new Error("Invalid protocol error");
-              throw new Error(`TMU Daemon protocol mismatch (expected ${message.expected}, received ${message.received})`);
+              throw new DaemonProtocolMismatchError(message.expected as number, message.received as number);
             }
             if (message.type !== "welcome" || message.protocolVersion !== (options.protocolVersion ?? DAEMON_PROTOCOL_VERSION)
               || typeof message.clientId !== "string" || typeof message.daemonVersion !== "string") throw new Error("Invalid daemon welcome");
@@ -225,7 +283,14 @@ export class UnixDaemonClient implements DaemonClient {
   }
   private handle(value: unknown): void {
     if (!isRecord(value) || typeof value.type !== "string") throw new Error("Invalid daemon message");
-    if (value.type === "snapshot") { assertExactKeys(value, ["type", "snapshot"]); this.snapshot = freezeTree(validateSnapshot(value.snapshot)); for (const fn of this.snapshots) fn(this.snapshot); return; }
+    if (value.type === "snapshot") {
+      assertExactKeys(value, ["type", "snapshot"]);
+      const snapshot = validateSnapshot(value.snapshot);
+      if (snapshot.revision <= this.snapshot.revision) return;
+      this.snapshot = freezeTree(snapshot);
+      for (const fn of this.snapshots) fn(this.snapshot);
+      return;
+    }
     if (value.type === "feedback") { assertExactKeys(value, ["type", "feedback"]); const feedback = validateFeedback(value.feedback); for (const fn of this.feedback) fn(feedback); return; }
     if (value.type === "notice") { assertExactKeys(value, ["type", "notice"]); const notice = validateNotice(value.notice); for (const fn of this.notices) fn(notice); return; }
     if (value.type === "response" && typeof value.requestId === "string" && typeof value.ok === "boolean") {
@@ -248,6 +313,14 @@ export class UnixDaemonClient implements DaemonClient {
     throw new Error("Invalid daemon message");
   }
   private failAll(error: Error): void { for (const item of this.pending.values()) item.reject(error); this.pending.clear(); }
+}
+
+async function assertPrivateOwnedSocket(socketPath: string): Promise<void> {
+  const entry = await lstat(socketPath);
+  const uid = process.getuid?.() ?? userInfo().uid;
+  if (!entry.isSocket() || entry.uid !== uid || (entry.mode & 0o077) !== 0) {
+    throw new Error(`Unsafe TMU Daemon socket: ${socketPath}`);
+  }
 }
 
 export async function runDaemonProcess(): Promise<void> {

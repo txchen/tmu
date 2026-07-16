@@ -101,12 +101,14 @@ export class AppCoordinator {
     sourceUrl: string;
     prepared: Extract<PrepareYouTubeDownloadBatchResult, { kind: "confirmation-required" }>;
     settle(): void;
+    ownerClientId?: string;
   } | null = null;
   private readonly pendingDownloadBatches: Array<{ id: number; batch: YouTubeDownloadBatch }> = [];
   private activeDownloadBatch: { id: number; batch: YouTubeDownloadBatch; controller: AbortController } | null = null;
   private nextDownloadBatchId = 1;
   private downloadSubmissionTail: Promise<void> = Promise.resolve();
   private activeDownloadPreparation: AbortController | null = null;
+  private readonly downloadOwners = new Map<string, { pending: number; disconnected: boolean }>();
   private readonly unsubscribeFromPlayer: () => void;
   private readonly stateListeners = new Set<(reason: AppStateChangeReason) => void>();
   private activeDownloadTask: Promise<void> | null = null;
@@ -402,6 +404,25 @@ export class AppCoordinator {
     }
   }
 
+  /** Daemon-only download ingress. Ownership ends once a Batch is accepted. */
+  startDaemonDownload(url: string, ownerClientId: string): void {
+    this.startYouTubeUrlDownload(url, ownerClientId);
+    this.notifyStateChanged();
+  }
+
+  disconnectDaemonClient(clientId: string): void {
+    const owner = this.downloadOwners.get(clientId);
+    if (owner) owner.disconnected = true;
+    if (this.pendingPlaylistConfirmation?.ownerClientId === clientId) {
+      this.cancelPlaylistDownload();
+      this.notifyStateChanged();
+    }
+  }
+
+  get playlistDownloadConfirmationOwner(): string | undefined {
+    return this.pendingPlaylistConfirmation?.ownerClientId;
+  }
+
   onStateChange(listener: (reason: AppStateChangeReason) => void): () => void {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
@@ -632,16 +653,25 @@ export class AppCoordinator {
     }
   }
 
-  private startYouTubeUrlDownload(url: string): void {
+  private startYouTubeUrlDownload(url: string, ownerClientId?: string): void {
+    if (ownerClientId) {
+      const owner = this.downloadOwners.get(ownerClientId) ?? { pending: 0, disconnected: false };
+      owner.pending += 1;
+      this.downloadOwners.set(ownerClientId, owner);
+    }
     const id = this.nextDownloadBatchId++;
     this.appState.downloads.preparingSubmissions += 1;
     this.appState.lastEvent = "preparing YouTube URL Download Batch";
-    const submission = this.downloadSubmissionTail.then(() => this.prepareSubmittedDownload(id, url))
+    const submission = this.downloadSubmissionTail.then(() => this.prepareSubmittedDownload(id, url, ownerClientId))
       .catch((error) => {
         this.appState.lastEvent = error instanceof Error ? error.message : String(error);
       })
       .finally(() => {
         this.appState.downloads.preparingSubmissions -= 1;
+        if (ownerClientId) {
+          const owner = this.downloadOwners.get(ownerClientId);
+          if (owner && --owner.pending === 0) this.downloadOwners.delete(ownerClientId);
+        }
         this.notifyStateChanged();
       });
     this.downloadSubmissionTail = submission;
@@ -1105,7 +1135,7 @@ export class AppCoordinator {
     this.syncPlaylistContentState();
     return true;
   }
-  private async prepareSubmittedDownload(id: number, url: string): Promise<void> {
+  private async prepareSubmittedDownload(id: number, url: string, ownerClientId?: string): Promise<void> {
     if (this.tornDown) return;
     await this.refreshHelperDependency("yt-dlp");
     if (this.tornDown) return;
@@ -1133,8 +1163,12 @@ export class AppCoordinator {
       return;
     }
     if (prepared.kind === "confirmation-required") {
+      if (ownerClientId && this.downloadOwners.get(ownerClientId)?.disconnected) {
+        prepared.cancel();
+        return;
+      }
       await new Promise<void>((settle) => {
-        this.pendingPlaylistConfirmation = { id, sourceUrl: url, prepared, settle };
+        this.pendingPlaylistConfirmation = { id, sourceUrl: url, prepared, settle, ...(ownerClientId ? { ownerClientId } : {}) };
         this.appState.downloads.confirmation = prepared.confirmation;
         this.appState.lastEvent = `confirm playlist ${prepared.confirmation.title} (${prepared.confirmation.itemCount} items)`;
         this.notifyStateChanged();
@@ -1162,7 +1196,12 @@ export class AppCoordinator {
       cancelled: summary.cancelled,
     };
     this.appState.downloads.summary = categoricalSummary;
-    this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary, failures: summary.failures });
+    const failures = summary.failures.map((failure) => ({
+      ...failure,
+      message: boundDownloadFailure(failure.message),
+    }));
+    this.appState.downloads.summaries.push({ id, sourceUrl: batch.sourceUrl, ...categoricalSummary, failures });
+    this.appState.downloads.summaries.splice(0, Math.max(0, this.appState.downloads.summaries.length - 500));
     this.recordOperationFeedback(
       summary.failed > 0 || summary.cancelled > 0 ? "warning" : "success",
       `Download Batch complete: ${summary.downloaded} downloaded, ${summary.alreadyCached} already cached, ${summary.failed} failed, ${summary.cancelled} cancelled`,
@@ -1512,6 +1551,13 @@ export class AppCoordinator {
   private notifyStateChanged(reason: AppStateChangeReason = "state"): void {
     for (const listener of this.stateListeners) listener(reason);
   }
+}
+
+const MAX_DOWNLOAD_FAILURE_LENGTH = 1_024;
+
+function boundDownloadFailure(message: string): string {
+  if (message.length <= MAX_DOWNLOAD_FAILURE_LENGTH) return message;
+  return `${message.slice(0, MAX_DOWNLOAD_FAILURE_LENGTH - 1)}…`;
 }
 
 function mutationChangedIndependentBackgroundValues(

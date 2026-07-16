@@ -80,4 +80,79 @@ describe("DaemonClient contract", () => {
     await expect(client.confirmChallenge(abandoned.token)).rejects.toThrow("disconnected");
     await daemon.teardown();
   });
+
+  test("daemon-owned single downloads survive client disconnect while unconfirmed playlists do not", async () => {
+    const executed: string[] = [];
+    const cancelled: string[] = [];
+    const { coordinator } = createTmuApp({
+      refreshDependencyHealth: async (_helper, current) => current,
+      prepareDownloadBatch: async (url) => url.includes("playlist") ? {
+        kind: "confirmation-required" as const,
+        confirmation: { title: "Shared Mix", itemCount: 2 },
+        confirm: () => ({ sourceUrl: url, kind: "playlist" as const, entries: [] }),
+        cancel: () => { cancelled.push(url); return { kind: "cancelled" as const }; },
+      } : { kind: "ready" as const, batch: { sourceUrl: url, kind: "single" as const, entries: [] } },
+      executeDownloadBatch: async (batch) => {
+        executed.push(batch.sourceUrl);
+        return { downloaded: 1, alreadyCached: 0, failed: 0, cancelled: 0, failures: [] };
+      },
+    });
+    const daemon = new InProcessDaemonApplication(coordinator);
+    await daemon.start();
+
+    const single = await daemon.connect();
+    await single.submit({ type: "intent", intent: { type: "downloadOperation", operation: "start", url: "https://youtu.be/single" } });
+    single.disconnect();
+    await waitFor(() => executed.includes("https://youtu.be/single"));
+
+    const playlist = await daemon.connect();
+    await playlist.submit({ type: "intent", intent: { type: "downloadOperation", operation: "start", url: "https://youtube.com/playlist?list=PL1" } });
+    await waitFor(() => playlist.snapshot.state.downloads.confirmation !== undefined);
+    playlist.disconnect();
+    await waitFor(() => coordinator.appState.downloads.confirmation === undefined);
+    expect(cancelled).toEqual(["https://youtube.com/playlist?list=PL1"]);
+    expect(executed).not.toContain("https://youtube.com/playlist?list=PL1");
+    await daemon.teardown();
+  });
+
+  test("confirmed playlist downloads survive their accepting client", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const executed: string[] = [];
+    const url = "https://youtube.com/playlist?list=PL2";
+    const { coordinator } = createTmuApp({
+      refreshDependencyHealth: async (_helper, current) => current,
+      prepareDownloadBatch: async () => ({
+        kind: "confirmation-required", confirmation: { title: "Accepted Mix", itemCount: 3 },
+        confirm: () => ({ sourceUrl: url, kind: "playlist", entries: [] }),
+        cancel: () => ({ kind: "cancelled" }),
+      }),
+      executeDownloadBatch: async (batch) => {
+        executed.push(batch.sourceUrl); await gate;
+        return { downloaded: 3, alreadyCached: 0, failed: 0, cancelled: 0, failures: [] };
+      },
+    });
+    const daemon = new InProcessDaemonApplication(coordinator); await daemon.start();
+    const owner = await daemon.connect();
+    const peer = await daemon.connect();
+    await owner.submit({ type: "intent", intent: { type: "downloadOperation", operation: "start", url } });
+    await waitFor(() => owner.snapshot.state.downloads.confirmation !== undefined);
+    await expect(peer.requestChallenge({ kind: "accept-playlist", targetId: "playlist" })).rejects.toThrow("another client");
+    const challenge = await owner.requestChallenge({ kind: "accept-playlist", targetId: "playlist" });
+    await owner.confirmChallenge(challenge.token);
+    owner.disconnect();
+    await waitFor(() => executed.length === 1);
+    expect(peer.snapshot.state.downloads.activeBatch?.kind).toBe("playlist");
+    release();
+    await waitFor(() => peer.snapshot.state.downloads.summaries.length === 1);
+    await daemon.teardown();
+  });
 });
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
