@@ -163,6 +163,47 @@ export class AppCoordinator {
     return this.playlistIdentities();
   }
 
+  /** Daemon-side creation does not change the shared Playing Playlist. */
+  async createSharedPlaylist(name: string): Promise<string> {
+    const beforeSnapshot = this.snapshotFingerprint();
+    const playlist = this.playlists.append(name);
+    this.appState.lastEvent = `created Playlist ${name.trim()}`;
+    this.syncPlaylistContentState();
+    this.notifyStateChanged();
+    await this.saveLastPlaylistSnapshot({ meaningful: beforeSnapshot !== this.snapshotFingerprint() });
+    return playlist.id;
+  }
+
+  /** Applies identity-based list work without changing the Playing Playlist. */
+  async dispatchPlaylistIntent(playlistId: string, intent: AppIntent): Promise<void> {
+    if (playlistId === this.playlists.activePlaylistId) {
+      await this.dispatch(intent);
+      return;
+    }
+    const content = this.playlists.content(playlistId);
+    if (intent.type === "addToPlaylist") content.add(intent.target);
+    else if (intent.type === "playNext") content.playNext([intent.target]);
+    else if (intent.type === "clearPlaylist") content.clear();
+    else if (intent.type === "playerOperation" && intent.operation === "randomize-playlist") content.randomize();
+    else if (intent.type === "removePlaylistTrack") {
+      const index = content.entries.findIndex((entry) => sameIdentity(entry.track.identity, intent.identity));
+      if (index >= 0) content.remove(index);
+    } else if (intent.type === "movePlaylistTrack") {
+      const index = content.entries.findIndex((entry) => sameIdentity(entry.track.identity, intent.identity));
+      if (index >= 0) content.move(index, clampIndex(index + intent.delta, content.entries.length));
+    } else if (intent.type === "playSelected" || intent.type === "playNow") {
+      if (!await this.switchPlaylist(playlistId)) return;
+      await this.dispatch(intent);
+      return;
+    } else {
+      throw new Error(`${intent.type} cannot target a non-Playing Playlist`);
+    }
+    this.appState.lastEvent = `updated Playlist ${playlistId}`;
+    this.syncPlaylistContentState();
+    this.notifyStateChanged();
+    await this.saveLastPlaylistSnapshot({ meaningful: true });
+  }
+
   async start(): Promise<void> {
     const preferences = await this.restoreAppPreferences();
     await this.restorePlaylistSnapshotOrMigratePlaylist(preferences?.volume);

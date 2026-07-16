@@ -2,22 +2,23 @@ import { createApp } from "@vue-tui/runtime";
 import { createTmuRuntime } from "./app";
 import { createTmuRoot } from "./vue-tui/component";
 import { dispatchTerminalResize } from "./vue-tui/resize";
-import type { AppCoordinator } from "./coordinator";
+import { InProcessDaemonApplication, type TuiDaemonClient } from "./daemon-client";
 
 export async function main(): Promise<void> {
   const { coordinator } = await createTmuRuntime();
-  await runTmu(coordinator);
+  const daemon = new InProcessDaemonApplication(coordinator);
+  await daemon.start();
+  const client = await daemon.connectTui();
+  await runTmu(client, () => daemon.teardown());
 }
 
-export async function runTmu(coordinator: AppCoordinator): Promise<void> {
-  await coordinator.start();
-
-  const app = createApp(createTmuRoot({ coordinator }));
+export async function runTmu(client: TuiDaemonClient, teardown: () => Promise<void> = async () => undefined): Promise<void> {
+  const app = createApp(createTmuRoot({ client }));
   const handlePtyResize = () => {
     dispatchTerminalResize(
-      coordinator,
-      process.stdout.columns ?? coordinator.uiState.terminal.columns,
-      process.stdout.rows ?? coordinator.uiState.terminal.rows,
+      client,
+      process.stdout.columns ?? client.uiState.terminal.columns,
+      process.stdout.rows ?? client.uiState.terminal.rows,
     );
   };
   process.on("SIGWINCH", handlePtyResize);
@@ -27,7 +28,7 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
     if (terminating) return;
     terminating = true;
     app.unmount();
-    void coordinator.teardown().finally(() => process.exit(exitCode));
+    void teardown().finally(() => process.exit(exitCode));
   };
   const handleSigint = () => terminateFromSignal(130);
   const handleSigterm = () => terminateFromSignal(143);
@@ -69,6 +70,6 @@ export async function runTmu(coordinator: AppCoordinator): Promise<void> {
     process.off("uncaughtException", handleUncaughtException);
     process.off("unhandledRejection", handleUnhandledRejection);
     app.unmount();
-    await coordinator.teardown();
+    await teardown();
   }
 }

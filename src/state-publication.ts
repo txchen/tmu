@@ -1,4 +1,5 @@
 import type { AppState, Track, UiState } from "./domain";
+import type { IncompleteYouTubeCacheEntry, YouTubeCacheEntry } from "./youtube-cache";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -12,6 +13,8 @@ export type ProviderStateSnapshot = {
   readonly id: string;
   readonly label: string;
   readonly tracks: readonly DeepReadonly<Track>[];
+  readonly cacheEntries?: readonly DeepReadonly<YouTubeCacheEntry>[];
+  readonly incompleteEntries?: readonly DeepReadonly<IncompleteYouTubeCacheEntry>[];
 };
 
 export type AppStateSnapshot = DeepReadonly<Omit<AppState, "providers">> & {
@@ -68,11 +71,14 @@ export function selectAppStateSnapshot(appState: AppState): AppStateSnapshot {
   const snapshot = {
     ...structuredClone(serializableState),
     providers: Object.fromEntries(
-      Object.entries(providers).map(([providerId, provider]) => [providerId, {
-        id: provider.id,
-        label: provider.label,
-        tracks: structuredClone(provider.listTracks()),
-      }]),
+      Object.entries(providers).map(([providerId, provider]) => {
+        const cache = provider as Partial<import("./youtube-cache").YouTubeCacheProvider>;
+        return [providerId, {
+          id: provider.id, label: provider.label, tracks: structuredClone(provider.listTracks()),
+          ...(typeof cache.listCacheEntries === "function" ? { cacheEntries: structuredClone(cache.listCacheEntries()) } : {}),
+          ...(typeof cache.listIncompleteEntries === "function" ? { incompleteEntries: structuredClone(cache.listIncompleteEntries()) } : {}),
+        }];
+      }),
     ),
   } as AppStateSnapshot;
   return deepFreeze(snapshot);

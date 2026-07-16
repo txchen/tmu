@@ -1,6 +1,7 @@
 import { Box, Spacer, Text as RuntimeText, useApp, useInput, useWindowSize } from "@vue-tui/runtime";
 import { computed, defineComponent, h, inject, onScopeDispose, provide, shallowRef, unref, watch, type Ref } from "vue";
-import type { AppCoordinator, AppStateChangeReason } from "../coordinator";
+import type { AppStateChangeReason } from "../coordinator";
+import type { TuiDaemonClient } from "../daemon-client";
 import type { UiState } from "../domain";
 import {
   StatePublicationGate,
@@ -19,7 +20,7 @@ import {
 import { openExternalUrl, youtubeTrackUrl, type ExternalUrlOpener } from "../open-external-url";
 
 export type TmuRootOptions = {
-  coordinator: AppCoordinator;
+  client: TuiDaemonClient;
   openUrl?: ExternalUrlOpener;
   measureCellWidth?: (value: string) => number;
   noColor?: boolean;
@@ -44,7 +45,7 @@ export function createTmuRoot(options: TmuRootOptions) {
   return defineComponent({
     name: "TmuRoot",
     setup() {
-      const { coordinator } = options;
+      const coordinator = options.client;
       coordinator.dispatchUi({
         type: "syncPlaylist",
         identities: coordinator.playlistTrackIdentities(),
@@ -222,7 +223,7 @@ export function createTmuRoot(options: TmuRootOptions) {
         }
         if (!textInputFocused && input === "P") {
           const activeIndex = coordinator.appState.playlists.playlists.findIndex(
-            (playlist) => playlist.id === coordinator.appState.playlists.activePlaylistId,
+            (playlist) => playlist.id === (coordinator.viewedPlaylistId ?? coordinator.appState.playlists.activePlaylistId),
           );
           coordinator.dispatchUi({ type: "openPlaylistManager", activeIndex: Math.max(0, activeIndex) });
           publication.notify("input");
@@ -265,7 +266,7 @@ export function createTmuRoot(options: TmuRootOptions) {
   });
 }
 
-async function routePlaylistManager(input: string, key: InputKey, coordinator: AppCoordinator): Promise<void> {
+async function routePlaylistManager(input: string, key: InputKey, coordinator: TuiDaemonClient): Promise<void> {
   const manager = coordinator.uiState.playlistManager;
   if (!manager) return;
   if (manager.mode !== "browse") {
@@ -347,7 +348,7 @@ function editTextValue(value: string, cursor: number, input: string, key: InputK
 async function routeGlobalPlayback(
   input: string,
   key: InputKey,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
 ): Promise<boolean> {
   if (input === "n") await coordinator.dispatch({ type: "playerOperation", operation: "next-track" });
   else if (input === "p") await coordinator.dispatch({ type: "playerOperation", operation: "previous-track" });
@@ -364,7 +365,7 @@ async function routeGlobalPlayback(
 async function routePlayback(
   input: string,
   key: InputKey,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
 ): Promise<void> {
   const identities = coordinator.playlistTrackIdentities();
   const jump = listJump(input, key, chordPending(coordinator.uiState), identities.length, coordinator.uiState.selectedPlaylistIndex);
@@ -406,7 +407,7 @@ async function routePlayback(
 async function routeLibrary(
   input: string,
   key: InputKey,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
   openUrl: ExternalUrlOpener,
 ): Promise<void> {
   const provider = coordinator.appState.providers["youtube-cache"];
@@ -482,7 +483,7 @@ async function routeLibrary(
 async function routeDownloader(
   input: string,
   key: InputKey,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
 ): Promise<void> {
   const downloads = coordinator.appState.downloads;
   const pipelineCount = downloads.pendingBatches.length + downloads.summaries.length + (downloads.activeBatch ? 1 : 0);
@@ -532,7 +533,7 @@ async function routeDownloader(
   }
 }
 
-function render(snapshot: PublicationSnapshot, coordinator: AppCoordinator, noColor: boolean) {
+function render(snapshot: PublicationSnapshot, coordinator: TuiDaemonClient, noColor: boolean) {
   const { appState, uiState } = snapshot;
   if (uiState.terminal.tier === "terminal-too-small") {
     return h(Box, { flexDirection: "column" }, () => [
@@ -600,7 +601,12 @@ function modalScreen(snapshot: PublicationSnapshot, noColor: boolean, content: R
 }
 
 function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
-  const { playback, activePlaylistContent, volume } = snapshot.appState;
+  const { playback, volume } = snapshot.appState;
+  const activePlaylistContent = snapshot.appState.playlists.playlists.find(
+    (playlist) => playlist.id === snapshot.appState.playlists.activePlaylistId,
+  ) ?? snapshot.appState.playlists.playlists[0] ?? {
+    entries: [], currentIndex: -1, repeatAll: false, positionSeconds: 0, playbackStatus: "stopped" as const,
+  };
   if (!playback.currentTrackIdentity) return null;
   const current = activePlaylistContent.entries.find((entry) =>
     entry.track.identity.providerId === playback.currentTrackIdentity?.providerId
@@ -623,7 +629,7 @@ function nowPlayingBar(snapshot: PublicationSnapshot, noColor: boolean) {
     ? ` ${progressBar(playback.positionSeconds ?? 0, duration)} ${elapsed}/${formatDuration(duration)}`
     : ` ${elapsed}`;
   const volumeLabel = volume.ready ? `Vol ${volume.percent}%` : "Vol —";
-  const repeat = activePlaylistContent.repeatAll ? " · ↻ ALL" : "";
+  const repeat = (activePlaylistContent.repeatAll || snapshot.appState.activePlaylistContent.repeatAll) ? " · ↻ ALL" : "";
   return h(Box, { width: "100%", flexDirection: "row" }, () => [
     h(Text, {
       bold: true, color: noColor ? undefined : semantics.color, flexShrink: 0,
@@ -705,7 +711,7 @@ function backgroundView(snapshot: PublicationSnapshot, noColor: boolean) {
   ]);
 }
 
-async function routeBackground(input: string, key: InputKey, coordinator: AppCoordinator): Promise<boolean> {
+async function routeBackground(input: string, key: InputKey, coordinator: TuiDaemonClient): Promise<boolean> {
   if (input === "u") {
     await coordinator.retryBackgroundSounds();
     return true;
@@ -736,7 +742,7 @@ async function routeBackground(input: string, key: InputKey, coordinator: AppCoo
   return true;
 }
 
-async function routeBackgroundSoundPicker(input: string, key: InputKey, coordinator: AppCoordinator): Promise<void> {
+async function routeBackgroundSoundPicker(input: string, key: InputKey, coordinator: TuiDaemonClient): Promise<void> {
   const picker = coordinator.uiState.background.soundPicker;
   const state = coordinator.appState.backgroundSounds;
   if (!picker || !("snapshot" in state)) return;
@@ -828,7 +834,7 @@ function playlistManagerModal(
 
 function playbackView(
   snapshot: PublicationSnapshot,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
   noColor: boolean,
 ) {
   const { uiState } = snapshot;
@@ -1264,7 +1270,7 @@ function wrapHelpText(value: string, width: number): string[] {
   return lines;
 }
 
-function routeShortcutHelp(input: string, key: InputKey, coordinator: AppCoordinator): void {
+function routeShortcutHelp(input: string, key: InputKey, coordinator: TuiDaemonClient): void {
   const overlay = coordinator.uiState.overlays.at(-1);
   if (!overlay) return;
   const incomplete = selectedLibraryEntryIsIncomplete(coordinator);
@@ -1283,14 +1289,14 @@ function routeShortcutHelp(input: string, key: InputKey, coordinator: AppCoordin
   coordinator.dispatchUi({ type: "setOverlayScroll", scroll: Math.max(0, Math.min(layout.maxScroll, scroll)) });
 }
 
-function clampShortcutHelpScroll(coordinator: AppCoordinator): void {
+function clampShortcutHelpScroll(coordinator: TuiDaemonClient): void {
   const overlay = coordinator.uiState.overlays.at(-1);
   if (!overlay) return;
   const layout = shortcutHelpLayout(coordinator.uiState, selectedLibraryEntryIsIncomplete(coordinator));
   coordinator.dispatchUi({ type: "setOverlayScroll", scroll: Math.min(overlay.scroll, layout.maxScroll) });
 }
 
-function selectedLibraryEntryIsIncomplete(coordinator: AppCoordinator): boolean {
+function selectedLibraryEntryIsIncomplete(coordinator: TuiDaemonClient): boolean {
   if (coordinator.uiState.activeTab !== "library") return false;
   const results = libraryResults(coordinator.appState.providers["youtube-cache"], coordinator.uiState.library.query);
   return results[coordinator.uiState.library.selectedIndex]?.kind === "incomplete";
@@ -1373,7 +1379,7 @@ type InputKey = {
   end?: boolean;
 };
 
-function editRenameDialog(input: string, key: InputKey, coordinator: AppCoordinator): void {
+function editRenameDialog(input: string, key: InputKey, coordinator: TuiDaemonClient): void {
   const dialog = coordinator.uiState.renameDialog;
   if (!dialog) return;
   const next = editTextValue(dialog.value, dialog.cursor, input, key);

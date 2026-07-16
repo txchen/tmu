@@ -33,6 +33,12 @@ export class MemoryPlaylistCollection {
     return this.activeId;
   }
 
+  content(id: string): PlaylistContent {
+    const record = this.records.find((playlist) => playlist.id === id);
+    if (!record) throw new Error(`Playlist is missing: ${id}`);
+    return record.content;
+  }
+
   get activePlayback(): Pick<PlaylistRecord, "positionSeconds" | "playbackStatus"> {
     return { positionSeconds: this.active.positionSeconds, playbackStatus: this.active.playbackStatus };
   }

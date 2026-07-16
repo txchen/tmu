@@ -1,4 +1,4 @@
-import type { AppCoordinator } from "../coordinator";
+import type { TuiDaemonClient } from "../daemon-client";
 import type { ConfirmationKind, UiState } from "../domain";
 
 export type ConfirmationDescriptor = {
@@ -10,7 +10,7 @@ export type ConfirmationDescriptor = {
   batchId?: number;
 };
 
-export function activeConfirmation(coordinator: AppCoordinator): ConfirmationDescriptor | null {
+export function activeConfirmation(coordinator: TuiDaemonClient): ConfirmationDescriptor | null {
   const app = coordinator.appState;
   if (app.downloads.quitConfirmationRequired) return {
     kind: "quit-downloads", title: "Quit TMU?", confirmLabel: "Quit",
@@ -69,30 +69,37 @@ export function matchingConfirmationChoice(ui: UiState, confirmation: Confirmati
 export async function activateConfirmation(
   confirmation: ConfirmationDescriptor,
   confirmed: boolean,
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
 ): Promise<void> {
+  const protect = async (kind: ConfirmationDescriptor["kind"], targetId: string, intent: Parameters<TuiDaemonClient["dispatch"]>[0]) => {
+    if (coordinator.confirmProtected) await coordinator.confirmProtected(kind, targetId, intent);
+    else await coordinator.dispatch(intent);
+  };
   switch (confirmation.kind) {
     case "delete-playlist":
-      if (confirmed && confirmation.target) await coordinator.dispatch({ type: "deletePlaylist", playlistId: confirmation.target });
+      if (confirmed && confirmation.target) await protect(confirmation.kind, confirmation.target, { type: "deletePlaylist", playlistId: confirmation.target });
       return;
-    case "clear-playlist": if (confirmed) await coordinator.dispatch({ type: "clearPlaylist" }); return;
+    case "clear-playlist": if (confirmed) await protect(confirmation.kind, coordinator.viewedPlaylistId ?? coordinator.appState.playlists.activePlaylistId, { type: "clearPlaylist" }); return;
     case "cancel-download":
-      if (confirmed) await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-active" });
+      if (confirmed) await protect(confirmation.kind, String(confirmation.batchId ?? "active"), { type: "downloadOperation", operation: "cancel-active" });
       return;
     case "remove-pending-download":
       if (confirmed && confirmation.batchId !== undefined) {
-        await coordinator.dispatch({ type: "downloadOperation", operation: "remove-pending", batchId: confirmation.batchId });
+        await protect(confirmation.kind, String(confirmation.batchId), { type: "downloadOperation", operation: "remove-pending", batchId: confirmation.batchId });
       }
       return;
     case "delete-cache":
     case "cleanup-cache":
-      await coordinator.dispatch({ type: "cacheOperation", operation: confirmed ? "confirm" : "cancel" });
+      if (confirmed) await protect(confirmation.kind, confirmation.target ?? "cache-entry", { type: "cacheOperation", operation: "confirm" });
+      else await coordinator.dispatch({ type: "cacheOperation", operation: "cancel" });
       return;
     case "accept-playlist":
-      await coordinator.dispatch({ type: "downloadOperation", operation: confirmed ? "confirm-playlist" : "cancel-playlist" });
+      if (confirmed) await protect(confirmation.kind, confirmation.target ?? "playlist-download", { type: "downloadOperation", operation: "confirm-playlist" });
+      else await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-playlist" });
       return;
     case "quit-downloads":
-      await coordinator.dispatch({ type: "downloadOperation", operation: confirmed ? "confirm-quit" : "cancel-quit" });
+      if (confirmed) await protect(confirmation.kind, "download-pipeline", { type: "downloadOperation", operation: "confirm-quit" });
+      else await coordinator.dispatch({ type: "downloadOperation", operation: "cancel-quit" });
       return;
   }
 }

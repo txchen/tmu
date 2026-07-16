@@ -41,7 +41,7 @@ describe("TMU top-level surface smoke", () => {
       setEnabled: async () => snapshot, setSound: async () => snapshot, setVolume: async () => snapshot,
     };
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("Background");
     expect(coordinator.appState.backgroundSounds.status).toBe("candidate");
@@ -94,7 +94,7 @@ describe("TMU top-level surface smoke", () => {
     coordinator.dispatchUi({ type: "switchTab", tab: "background" });
     await coordinator.enterBackgroundSounds();
 
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns, rows });
     const frame = terminal.lastFrame()!;
     expect(frame).toContain("Background Sounds · macOS");
     expect(frame).toContain("Background Sounds   ○ Off");
@@ -120,7 +120,7 @@ describe("TMU top-level surface smoke", () => {
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     coordinator.dispatchUi({ type: "switchTab", tab: "background" });
     await coordinator.enterBackgroundSounds();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns, rows });
 
     await terminal.stdin.write("j");
     await terminal.stdin.write("\r");
@@ -155,7 +155,7 @@ describe("TMU top-level surface smoke", () => {
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     coordinator.dispatchUi({ type: "switchTab", tab: "background" });
     await coordinator.enterBackgroundSounds();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 16 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 60, rows: 16 });
 
     await terminal.stdin.write("j");
     await terminal.stdin.write("\r");
@@ -196,7 +196,7 @@ describe("TMU top-level surface smoke", () => {
     const { coordinator } = createTmuApp({ backgroundSoundsCandidate: true, backgroundSoundsControl: control });
     coordinator.dispatchUi({ type: "switchTab", tab: "background" });
     await coordinator.enterBackgroundSounds();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("Enter Activate/Deactivate");
     await terminal.stdin.write("\x1b[C");
@@ -248,7 +248,7 @@ describe("TMU top-level surface smoke", () => {
   test("requests descriptive Playlist deletion, cancels safely, and protects the sole Playlist", async () => {
     const player = new StopCountingPlayer();
     const { coordinator } = createTmuApp({ player });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("x");
@@ -282,7 +282,7 @@ describe("TMU top-level surface smoke", () => {
     await first.coordinator.dispatch({ type: "createPlaylist", name: "Last" });
     await first.coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack("shared", "Shared") });
     const lastId = first.coordinator.appState.playlists.activePlaylistId;
-    const terminal = await render(createTmuRoot({ coordinator: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("g");
@@ -324,7 +324,7 @@ describe("TMU top-level surface smoke", () => {
     const { coordinator } = createTmuApp({ player });
     const previousId = coordinator.appState.playlists.activePlaylistId;
     await coordinator.dispatch({ type: "createPlaylist", name: "Last" });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("x");
@@ -346,7 +346,7 @@ describe("TMU top-level surface smoke", () => {
     const middleId = coordinator.appState.playlists.playlists[1]!.id;
     const lastId = coordinator.appState.playlists.playlists[2]!.id;
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: middleId });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("x");
@@ -382,7 +382,7 @@ describe("TMU top-level surface smoke", () => {
     });
     await coordinator.dispatch({ type: "createPlaylist", name: "Disposable" });
     await coordinator.dispatch({ type: "addToPlaylist", target: track });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("x");
@@ -394,7 +394,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("renames the selected Playlist through modal text capture and keeps it selected", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("e");
@@ -414,7 +414,7 @@ describe("TMU top-level surface smoke", () => {
     await coordinator.dispatch({ type: "createPlaylist", name: "Study" });
     const initialPlaylistId = coordinator.appState.playlists.playlists[0]!.id;
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: initialPlaylistId });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("e");
@@ -448,7 +448,7 @@ describe("TMU top-level surface smoke", () => {
     await first.coordinator.dispatch({ type: "createPlaylist", name: "Road" });
     const activeId = first.coordinator.appState.playlists.activePlaylistId;
     const stopCountBeforeReorder = player.stopCount;
-    const terminal = await render(createTmuRoot({ coordinator: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: first.coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("K");
@@ -468,7 +468,7 @@ describe("TMU top-level surface smoke", () => {
     const restored = createTmuApp({ playlistSnapshotPersistence: persistence });
     await restored.coordinator.start();
     expect(restored.coordinator.appState.playlists.playlists.map((playlist) => playlist.name)).toEqual(["Default", "Study", "Road"]);
-    const restoredTerminal = await render(createTmuRoot({ coordinator: restored.coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const restoredTerminal = await render(createTmuRoot({ client: restored.coordinator, noColor: true }), { columns: 80, rows: 24 });
     await restoredTerminal.stdin.write("P");
     expect(restored.coordinator.uiState.playlistManager).toMatchObject({ selectedIndex: 2 });
     expect(restoredTerminal.lastFrame()).toContain("› * Road · 0");
@@ -481,7 +481,7 @@ describe("TMU top-level surface smoke", () => {
     }
     const initialPlaylistId = coordinator.appState.playlists.playlists[0]!.id;
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: initialPlaylistId });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("P");
     await terminal.stdin.write("G");
@@ -495,7 +495,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("opens Playlist Manager globally, captures create input, and shows the Active Playlist on every tab", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
     for (const tab of ["playback", "library", "downloader"] as const) {
       coordinator.dispatchUi({ type: "switchTab", tab });
       if (tab === "downloader") coordinator.dispatchUi({ type: "setDownloaderInputFocus", focused: false });
@@ -532,7 +532,7 @@ describe("TMU top-level surface smoke", () => {
     const activeId = coordinator.appState.playlists.activePlaylistId;
     const defaultId = coordinator.appState.playlists.playlists[0]!.id;
     coordinator.dispatchUi({ type: "switchTab", tab: "library" });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 60, rows: 20 });
     await terminal.stdin.write("a");
     expect(coordinator.appState.activePlaylistContent.entries.map((entry) => entry.track.title)).toEqual(["Active Only"]);
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
@@ -544,7 +544,7 @@ describe("TMU top-level surface smoke", () => {
   test("shows and dismisses an error recorded before the TUI mounts", async () => {
     const { coordinator } = createTmuApp();
     coordinator.appState.appErrors.push("Could not restore Last Playlist Snapshot");
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
     expect(terminal.lastFrame()).toContain("× ERROR · Could not restore Last Playlist Snapshot");
     await terminal.stdin.write("\x1b");
     expect(terminal.lastFrame()).not.toContain("Could not restore Last Playlist Snapshot");
@@ -552,7 +552,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("renders the keyboard-first shell and routes global brackets through focused inputs", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
     expect(terminal.lastFrame()).toContain("╭");
     expect(terminal.lastFrame()).toContain("Player");
     expect(terminal.lastFrame()).toContain("Library");
@@ -586,7 +586,7 @@ describe("TMU top-level surface smoke", () => {
       appState: createInitialAppState({}, { backgroundSoundsCandidate: true }), uiState: createInitialUiState(),
       initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
-    const hidden = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const hidden = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
     expect(hidden.lastFrame()).not.toContain("▶ PLAYING");
     coordinator.appState.activePlaylistContent = playlist.snapshot();
     coordinator.appState.playback = {
@@ -596,7 +596,7 @@ describe("TMU top-level surface smoke", () => {
     coordinator.appState.volume = { percent: 73, ready: true };
     coordinator.appState.activePlaylistContent.repeatAll = true;
 
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
     for (const tab of ["playback", "library", "downloader", "background"] as const) {
       coordinator.dispatchUi({ type: "switchTab", tab });
       const frame = terminal.lastFrame()!;
@@ -629,7 +629,7 @@ describe("TMU top-level surface smoke", () => {
     appState.playback = { status, currentTrackIdentity: track.identity, positionSeconds: 42,
       ...(status === "paused" ? { paused: true } : {}) };
     const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer() });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
     expect(terminal.lastFrame()).toContain(cue);
     expect(terminal.lastFrame()).toContain(`${playlistCue} Status Track`);
     expect(terminal.lastFrame()).not.toContain("CURRENT");
@@ -646,7 +646,7 @@ describe("TMU top-level surface smoke", () => {
     appState.activePlaylistContent = playlist.snapshot();
     appState.playback = { status: "paused", currentTrackIdentity: track.identity, positionSeconds: 42, restored: true };
     const coordinator = new AppCoordinator({ appState, uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer() });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 60, rows: 20 });
     expect(terminal.lastFrame()).toContain("↻ RESUME");
     expect(terminal.lastFrame()!.split("\n").every((line) => [...line].length <= 60)).toBe(true);
   });
@@ -694,7 +694,7 @@ describe("TMU top-level surface smoke", () => {
     let now = 0;
     let scheduled: (() => void) | undefined;
     const terminal = await render(createTmuRoot({
-      coordinator, noColor: true,
+      client: coordinator, noColor: true,
       publicationTimers: {
         now: () => now,
         setTimeout: (callback) => { scheduled = callback; return callback; },
@@ -724,7 +724,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("removes numeric tabs and command palette while help suspends actions", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("2");
     expect(coordinator.uiState.activeTab).toBe("playback");
     await terminal.stdin.write(":");
@@ -744,7 +744,7 @@ describe("TMU top-level surface smoke", () => {
     const coordinator = new AppCoordinator({
       appState: createInitialAppState({}), uiState: createInitialUiState(), initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 30 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 120, rows: 30 });
 
     await terminal.stdin.write("?");
     const playerHelp = terminal.lastFrame()!;
@@ -779,7 +779,7 @@ describe("TMU top-level surface smoke", () => {
     { columns: 60, rows: 16, leaveKey: "Esc", leaveInput: "\x1b" },
   ])("documents complete Library shortcuts after $leaveKey at $columns×$rows", async ({ columns, rows, leaveInput }) => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns, rows });
 
     await terminal.stdin.write("]");
     await terminal.stdin.write("\t");
@@ -833,7 +833,7 @@ describe("TMU top-level surface smoke", () => {
       kind: "single" as const,
       itemCount: 1,
     }));
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns, rows });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns, rows });
 
     await terminal.stdin.write("]");
     await terminal.stdin.write("]");
@@ -883,7 +883,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("scrolls Shortcut Help locally, resets it on reopen, and reflows after resize", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 16 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 60, rows: 16 });
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Playback Shortcuts");
     expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
@@ -925,7 +925,7 @@ describe("TMU top-level surface smoke", () => {
     for (let index = 0; index < 12; index++) {
       await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack(`help-${index}`, `Help Track ${index}`) });
     }
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 20 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 20 });
     await terminal.stdin.write("G");
     const before = {
       activeTab: coordinator.uiState.activeTab,
@@ -979,7 +979,7 @@ describe("TMU top-level surface smoke", () => {
     await waitFor(() => appState.downloads.confirmation !== undefined);
     delete appState.downloads.confirmation;
     coordinator.dispatchUi({ type: "switchTab", tab: "downloader" });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("?");
@@ -998,7 +998,7 @@ describe("TMU top-level surface smoke", () => {
     const coordinator = new AppCoordinator({
       appState, uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
 
     await terminal.stdin.write("C");
     expect(terminal.lastFrame()).toContain("Clear Playlist?");
@@ -1009,7 +1009,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("keeps responsive state and suspends hidden actions while terminal is too small", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
     await terminal.terminal.resize(59, 15);
     expect(terminal.lastFrame()).toContain("Terminal too small");
     await terminal.stdin.write("]");
@@ -1024,7 +1024,7 @@ describe("TMU top-level surface smoke", () => {
   test("moves and keeps long Playlist selections visible with shared Vim navigation", async () => {
     const { coordinator } = createTmuApp();
     for (let index = 0; index < 12; index++) await coordinator.dispatch({ type: "addToPlaylist", target: cachedTrack(`track-${index}`, `Track ${index}`) });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 80, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 80, rows: 24 });
     await terminal.stdin.write("G");
     expect(coordinator.uiState.selectedPlaylistIndex).toBe(11);
     expect(terminal.lastFrame()).toContain("› ! Track 11");
@@ -1036,7 +1036,7 @@ describe("TMU top-level surface smoke", () => {
   });
   test("opens on Playback and reaches Library and YouTube Downloader while retaining tab-local input", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("▸ Player (Default) ◂");
     expect(terminal.lastFrame()).toContain("Library");
@@ -1081,7 +1081,7 @@ describe("TMU top-level surface smoke", () => {
     });
     await coordinator.dispatch({ type: "playNext", target: first });
     await coordinator.dispatch({ type: "playNext", target: second });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("\r");
     expect(coordinator.appState.activePlaylistContent.currentIndex).toBe(0);
@@ -1167,7 +1167,7 @@ describe("TMU top-level surface smoke", () => {
     coordinator.dispatchUi({ type: "selectPlaylistTrack", index: 1, identities: coordinator.playlistTrackIdentities() });
     await coordinator.dispatch({ type: "playSelected", identity: first.identity });
 
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 28 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 120, rows: 28 });
     let frame = terminal.lastFrame()!;
     expect(frame).toContain("Road · 2 Tracks · 2/2");
     expect(frame).toContain("▶ First · 1:05");
@@ -1211,7 +1211,7 @@ describe("TMU top-level surface smoke", () => {
       initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     coordinator.dispatchUi({ type: "switchTab", tab: "library" });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 120, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 120, rows: 24 });
     const inspectorLeft = () => {
       const line = terminal.lastFrame()!.split("\n").find((candidate) => candidate.includes("Selected Track"))!;
       return line.indexOf("│", 1);
@@ -1233,7 +1233,7 @@ describe("TMU top-level surface smoke", () => {
       uiState: createInitialUiState(), initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
     for (const track of tracks) await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("j");
     expect(terminal.lastFrame()).toContain("› · B");
@@ -1271,7 +1271,7 @@ describe("TMU top-level surface smoke", () => {
       for (const track of tracks) await coordinator.dispatch({ type: "addToPlaylist", target: track });
       await coordinator.dispatch({ type: "playSelected", identity: tracks[0]!.identity });
       coordinator.dispatchUi({ type: "switchTab", tab });
-      const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+      const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
 
       await terminal.stdin.write("Z");
 
@@ -1329,7 +1329,7 @@ describe("TMU top-level surface smoke", () => {
     await coordinator.dispatch({ type: "playSelected", identity: track.identity });
     const opened: string[] = [];
     const terminal = await render(createTmuRoot({
-      coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
+      client: coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
     }), { columns: 120, rows: 24 });
     await terminal.stdin.write("]");
     const initial = terminal.lastFrame()!;
@@ -1405,7 +1405,7 @@ describe("TMU top-level surface smoke", () => {
       initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
     const terminal = await render(createTmuRoot({
-      coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
+      client: coordinator, noColor: true, openUrl: async (url) => { opened.push(url); },
     }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("]");
@@ -1446,7 +1446,7 @@ describe("TMU top-level surface smoke", () => {
         return { downloaded: 1, alreadyCached: 0, failed: 0, cancelled: 0, failures: [] };
       },
     });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("]");
     await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/one");
@@ -1506,7 +1506,7 @@ describe("TMU top-level surface smoke", () => {
     const uiState = createInitialUiState();
     uiState.activeTab = "downloader";
     const coordinator = new AppCoordinator({ appState, uiState, initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 90, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 90, rows: 24 });
 
     expect(terminal.lastFrame()).toContain("Pipeline · 1 batch · 1/1");
     expect(terminal.lastFrame()).toContain("COMPLETED #9 · 1 downloaded · 0 cached · 1 failed · 0 cancelled");
@@ -1525,7 +1525,7 @@ describe("TMU top-level surface smoke", () => {
 
   test("Download Pipeline empty state guides URL submission and Shift+Tab focuses the Pipeline", async () => {
     const { coordinator } = createTmuApp();
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 90, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 90, rows: 24 });
     await terminal.stdin.write("]");
     await terminal.stdin.write("]");
     expect(terminal.lastFrame()).toContain("Pipeline · 0 batches · 0/0");
@@ -1547,7 +1547,7 @@ describe("TMU top-level surface smoke", () => {
     uiState.activeTab = "downloader";
     uiState.downloader.inputFocused = false;
     const coordinator = new AppCoordinator({ appState, uiState, initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer() });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 60, rows: 20 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 60, rows: 20 });
 
     expect(terminal.lastFrame()).toContain("ACTIVE #4 · 4/12 · [███████░░░] 67%");
     expect(terminal.lastFrame()).toContain("PENDING #5 · 24 items");
@@ -1574,7 +1574,7 @@ describe("TMU top-level surface smoke", () => {
         downloaded: 2, alreadyCached: 1, failed: 0, cancelled: 0, failures: [],
       }),
     });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("]");
     await terminal.stdin.write("]");
     const invalidUrl = "https://example.com/invalid";
@@ -1611,7 +1611,7 @@ describe("TMU top-level surface smoke", () => {
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
       initialPlaylistContent: playlist, player: new NoopPlayer(),
     });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
     expect(terminal.lastFrame()).toContain("! Broken Track · —:—");
     expect(terminal.lastFrame()).toContain("Unavailable: mpv playback");
     expect(terminal.lastFrame()).toContain("failed: corrupt stream");
@@ -1629,7 +1629,7 @@ describe("TMU top-level surface smoke", () => {
       appState: createInitialAppState({ "youtube-cache": provider }), uiState: createInitialUiState(),
       initialPlaylistContent: new MemoryPlaylistContent(), player: new NoopPlayer(),
     });
-    const terminal = await render(createTmuRoot({ coordinator }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator }), { columns: 100, rows: 24 });
     await terminal.stdin.write("]");
     await terminal.stdin.write("\t");
     await terminal.stdin.write("second");
@@ -1674,7 +1674,7 @@ describe("TMU top-level surface smoke", () => {
     await coordinator.dispatch({ type: "addToPlaylist", target: track });
     await coordinator.dispatch({ type: "switchPlaylist", playlistId: defaultId });
     await coordinator.dispatch({ type: "playSelected", identity: track.identity });
-    const terminal = await render(createTmuRoot({ coordinator, noColor: true }), { columns: 100, rows: 24 });
+    const terminal = await render(createTmuRoot({ client: coordinator, noColor: true }), { columns: 100, rows: 24 });
 
     await terminal.stdin.write("]");
     expect(terminal.lastFrame()).toContain("e Rename");

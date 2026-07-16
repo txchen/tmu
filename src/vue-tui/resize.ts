@@ -1,7 +1,7 @@
-import type { AppCoordinator } from "../coordinator";
+import type { TuiDaemonClient } from "../daemon-client";
 
 export function dispatchTerminalResize(
-  coordinator: AppCoordinator,
+  coordinator: TuiDaemonClient,
   columns: number,
   rows: number,
 ): void {

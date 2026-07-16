@@ -1,4 +1,4 @@
-import { readFile, rename } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import {
   YOUTUBE_CACHE_PROVIDER_ID,
   identityKey,
@@ -37,6 +37,7 @@ export class InMemoryLastPlaylistSnapshotPersistence implements LastPlaylistSnap
 export class FileLastPlaylistSnapshotPersistence implements LastPlaylistSnapshotPersistence {
   private readonly messages = new JsonRecoveryMessages();
   private quarantined = false;
+  private legacySource: string | null = null;
 
   constructor(private readonly path: string) {}
 
@@ -52,7 +53,10 @@ export class FileLastPlaylistSnapshotPersistence implements LastPlaylistSnapshot
     }
     try {
       const parsed = parseLastPlaylistSnapshot(JSON.parse(raw));
-      if (parsed) return parsed;
+      if (parsed) {
+        this.legacySource = parsed.legacy ? raw : null;
+        return parsed.snapshot;
+      }
       await this.quarantine("invalid or unsupported");
     } catch (error) {
       await this.quarantine(`corrupted: ${errorMessage(error)}`);
@@ -61,7 +65,18 @@ export class FileLastPlaylistSnapshotPersistence implements LastPlaylistSnapshot
   }
 
   async save(snapshot: LastPlaylistSnapshot): Promise<void> {
-    await writeJsonAtomically(this.path, snapshot);
+    if (this.legacySource !== null) {
+      await writeFile(`${this.path}.pre-0.4.0`, this.legacySource, { encoding: "utf8", flag: "wx" }).catch((error) => {
+        if (!isAlreadyExistsError(error)) throw error;
+      });
+    }
+    await writeJsonAtomically(this.path, {
+      ...snapshot,
+      version: 2,
+      playingPlaylistId: snapshot.activePlaylistId,
+      activePlaylistId: undefined,
+    });
+    this.legacySource = null;
   }
 
   drainRecoveryMessages(): string[] {
@@ -137,8 +152,10 @@ export function playlistCollectionFromSnapshot(snapshot: LastPlaylistSnapshot): 
   };
 }
 
-function parseLastPlaylistSnapshot(value: unknown): LastPlaylistSnapshot | null {
-  if (!isObject(value) || value.version !== 1 || typeof value.activePlaylistId !== "string") return null;
+function parseLastPlaylistSnapshot(value: unknown): { snapshot: LastPlaylistSnapshot; legacy: boolean } | null {
+  if (!isObject(value) || (value.version !== 1 && value.version !== 2)) return null;
+  const activePlaylistId = value.version === 1 ? value.activePlaylistId : value.playingPlaylistId;
+  if (typeof activePlaylistId !== "string") return null;
   if (!Array.isArray(value.playlists) || value.playlists.length === 0 || !Array.isArray(value.tracks)) return null;
   if (!isVolume(value.volume)) return null;
   const tracks: SnapshotTrack[] = [];
@@ -161,10 +178,13 @@ function parseLastPlaylistSnapshot(value: unknown): LastPlaylistSnapshot | null 
     names.add(foldedName);
     playlists.push(playlist);
   }
-  if (!ids.has(value.activePlaylistId)) return null;
+  if (!ids.has(activePlaylistId)) return null;
   const referenced = new Set(playlists.flatMap((playlist) => playlist.trackIdentities.map(identityKey)));
   if (referenced.size !== trackKeys.size || [...trackKeys].some((key) => !referenced.has(key))) return null;
-  return { version: 1, activePlaylistId: value.activePlaylistId, playlists, tracks, volume: { ...value.volume } };
+  return {
+    snapshot: { version: 1, activePlaylistId, playlists, tracks, volume: { ...value.volume } },
+    legacy: value.version === 1,
+  };
 }
 
 function parsePlaylist(value: unknown, trackKeys: Set<string>): LastPlaylistSnapshotPlaylist | null {
@@ -233,6 +253,10 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isMissingFileError(error: unknown): boolean {
   return isObject(error) && error.code === "ENOENT";
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return isObject(error) && error.code === "EEXIST";
 }
 
 function errorMessage(error: unknown): string {

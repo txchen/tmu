@@ -4,6 +4,7 @@ export * from "./action-registry";
 export * from "./config";
 export * from "./coordinator";
 export * from "./dependencies";
+export * from "./daemon-client";
 export * from "./domain";
 export * from "./json-persistence";
 export * from "./youtube-cache";

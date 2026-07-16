@@ -145,8 +145,32 @@ describe("Last Playlist Snapshot persistence", () => {
     try {
       await persistence.save(createLastPlaylistSnapshot(collection.snapshot(), { percent: 50, ready: true }));
       const raw = await readFile(path, "utf8");
-      expect(JSON.parse(raw).tracks).toEqual([amber]);
+      expect(JSON.parse(raw)).toMatchObject({ version: 2, playingPlaylistId: collection.activePlaylistId, tracks: [amber] });
+      expect(JSON.parse(raw)).not.toHaveProperty("activePlaylistId");
       expect((await readdir(join(dir, "state"))).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("backs up a pre-0.4.0 snapshot once before atomically migrating Playing Playlist", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tmu-playlist-migrate-"));
+    const path = join(dir, "last-playlists.json");
+    const collection = new MemoryPlaylistCollection(new MemoryPlaylistContent());
+    const legacy = createLastPlaylistSnapshot(collection.snapshot(), { percent: 50, ready: true });
+    const legacyRaw = `${JSON.stringify(legacy, null, 2)}\n`;
+    await writeFile(path, legacyRaw);
+    try {
+      const persistence = new FileLastPlaylistSnapshotPersistence(path);
+      const loaded = await persistence.load();
+      expect(loaded?.activePlaylistId).toBe(collection.activePlaylistId);
+      await persistence.save(loaded!);
+      expect(await readFile(`${path}.pre-0.4.0`, "utf8")).toBe(legacyRaw);
+      expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
+        version: 2, playingPlaylistId: collection.activePlaylistId,
+      });
+      await persistence.save(loaded!);
+      expect(await readFile(`${path}.pre-0.4.0`, "utf8")).toBe(legacyRaw);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
