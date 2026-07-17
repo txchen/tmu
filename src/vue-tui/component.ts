@@ -1360,11 +1360,10 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const textInputFocused = (ui.activeTab === "library" && ui.library.inputFocused)
     || (ui.activeTab === "downloader" && ui.downloader.inputFocused);
   const applicationShortcuts: Array<[key: string, action: string]> = ui.overlays.length > 0
-    ? [["Ctrl-C", "Quit Client"]]
-    : [
-        [textInputFocused ? "Ctrl-C" : "q/Ctrl-C", "Quit Client"],
-        ["Ctrl-Q", "Shutdown Daemon"],
-      ];
+    ? []
+    : textInputFocused
+      ? [["Ctrl-Q", "Shutdown Daemon"]]
+      : [["q", "Quit Client"], ["Ctrl-Q", "Shutdown Daemon"]];
   const shortcutLine = (items: Array<[key: string, action: string]>) => h(Box, {
     width: "100%", flexDirection: "row",
   }, () => [
@@ -1375,10 +1374,12 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
       h(Text, { dimColor: true }, () => ` ${action}`),
     ]),
   ]);
-  return h(Box, { width: "100%", flexDirection: "column" }, () => [
-    shortcutLine(shortcuts),
-    shortcutLine(applicationShortcuts),
-  ]);
+  return applicationShortcuts.length === 0
+    ? shortcutLine(shortcuts)
+    : h(Box, { width: "100%", flexDirection: "column" }, () => [
+        shortcutLine(shortcuts),
+        shortcutLine(applicationShortcuts),
+      ]);
 }
 
 function adjacentTab(active: UiState["activeTab"], delta: 1 | -1, includeBackground = false): UiState["activeTab"] {
