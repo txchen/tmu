@@ -25,6 +25,7 @@ export type TmuRootOptions = {
   measureCellWidth?: (value: string) => number;
   noColor?: boolean;
   publicationTimers?: Partial<PublicationTimers>;
+  onDaemonShutdownNotice?: () => void;
 };
 
 const shortcutHelpSubdued = Symbol("shortcut-help-subdued");
@@ -112,6 +113,7 @@ export function createTmuRoot(options: TmuRootOptions) {
       });
       const app = useApp();
       const unsubscribeShutdown = coordinator.onDaemonShutdown?.(() => {
+        options.onDaemonShutdownNotice?.();
         coordinator.dispatchUi({ type: "setNotification", notification: { level: "error", message: "TMU Daemon is shutting down…" } });
         publication.notify("state");
         setTimeout(() => app.exit(), 50);
@@ -1338,25 +1340,25 @@ function selectedLibraryEntryIsIncomplete(coordinator: TuiDaemonClient): boolean
 function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const shortcuts: Array<[key: string, action: string]> = ui.activeTab === "playback"
     ? ui.terminal.columns < 90
-      ? [["j/k", "Move"], ["Space", "Play"], ["Enter", "Select"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
-      : [["j/k", "Move"], ["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
+      ? [["Space", "Play"], ["Enter", "Select"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
+      : [["Space", "Play/Pause"], ["Enter", "Play Selected"], ["n/p", "Next/Prev"], ["P", "Playlists"], ["?", "Help"]]
     : ui.activeTab === "library" && ui.library.inputFocused
       ? [["Type", "Search"], ["Enter", "Results"], ["Esc/Tab → ?", "Help"]]
       : ui.activeTab === "library" && incompleteSelected
-        ? [["j/k", "Move"], ["d", "Clean"], ["/", "Search"], ["?", "Help"]]
+        ? [["d", "Clean"], ["/", "Search"], ["?", "Help"]]
         : ui.activeTab === "library"
           ? ui.terminal.columns < 90
-            ? [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
-            : [["j/k", "Move"], ["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
+            ? [["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
+            : [["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.activeTab === "background"
             ? ui.background.selectedRow === 0
-              ? [["j/k", "Move"], ["Enter", "Activate/Deactivate"], ["u", "Refresh"], ["?", "Help"]]
+              ? [["Enter", "Activate/Deactivate"], ["u", "Refresh"], ["?", "Help"]]
               : ui.background.selectedRow === 1
-                ? [["j/k", "Move"], ["Enter", "Choose Sound"], ["u", "Refresh"], ["?", "Help"]]
-                : [["j/k", "Move"], ["←/→", "Adjust Volume"], ["u", "Refresh"], ["?", "Help"]]
+                ? [["Enter", "Choose Sound"], ["u", "Refresh"], ["?", "Help"]]
+                : [["←/→", "Adjust Volume"], ["u", "Refresh"], ["?", "Help"]]
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
-            : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
+            : [["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
   const textInputFocused = (ui.activeTab === "library" && ui.library.inputFocused)
     || (ui.activeTab === "downloader" && ui.downloader.inputFocused);
   const applicationShortcuts: Array<[key: string, action: string]> = ui.overlays.length > 0

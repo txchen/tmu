@@ -19,7 +19,11 @@ export async function main(): Promise<void> {
 }
 
 export async function runTmu(client: TuiDaemonClient, teardown: () => Promise<void> = async () => undefined): Promise<void> {
-  const app = createApp(createTmuRoot({ client }));
+  let daemonShutdownObserved = false;
+  const app = createApp(createTmuRoot({
+    client,
+    onDaemonShutdownNotice: () => { daemonShutdownObserved = true; },
+  }));
   const handlePtyResize = () => {
     dispatchTerminalResize(
       client,
@@ -76,6 +80,18 @@ export async function runTmu(client: TuiDaemonClient, teardown: () => Promise<vo
     process.off("uncaughtException", handleUncaughtException);
     process.off("unhandledRejection", handleUnhandledRejection);
     app.unmount();
+    await finishTuiSession(teardown, daemonShutdownObserved);
+  }
+}
+
+export async function finishTuiSession(
+  teardown: () => Promise<void>,
+  daemonShutdownObserved: boolean,
+  write: (message: string) => void = (message) => { process.stdout.write(message); },
+): Promise<void> {
+  try {
     await teardown();
+  } finally {
+    if (daemonShutdownObserved) write("TMU Daemon is shutting down.\n");
   }
 }

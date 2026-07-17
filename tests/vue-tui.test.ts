@@ -574,7 +574,7 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Downloads");
     expect(terminal.lastFrame()).toContain("[ prev ] next");
     expect(terminal.lastFrame()).toContain("Playlist is empty — open Library to add Tracks.");
-    expect(terminal.lastFrame()).toContain("── j/k Move · Space Play/Pause · Enter Play Selected · n/p Next/Prev · P Playlists · ? Help");
+    expect(terminal.lastFrame()).toContain("── Space Play/Pause · Enter Play Selected · n/p Next/Prev · P Playlists · ? Help");
     expect(terminal.lastFrame()).toContain("── q Quit Client · Ctrl-Q Shutdown Daemon");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
@@ -955,7 +955,7 @@ describe("TMU top-level surface smoke", () => {
     };
 
     await terminal.stdin.write("?");
-    expect(terminal.lastFrame()).toContain("j/k Move · Space Play · Enter Select · n/p Next/Prev · P Playlists · ? Help");
+    expect(terminal.lastFrame()).toContain("Space Play · Enter Select · n/p Next/Prev · P Playlists · ? Help");
     expect(terminal.lastFrame()).not.toContain("── q Quit Client");
     expect(terminal.lastFrame()).not.toContain("── Ctrl-Q Shutdown Daemon");
     expect(terminal.lastFrame()).toContain("PLAYLIST PANE");

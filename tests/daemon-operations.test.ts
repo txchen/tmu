@@ -6,6 +6,7 @@ import { cleanup as cleanupTui, render } from "@vue-tui/testing";
 import { createTmuApp } from "../src/app";
 import { InProcessDaemonApplication } from "../src/daemon-client";
 import { appendDaemonLog, queryDaemonStatus, redactLogMessage, resolveDaemonPaths, UnixDaemonServer } from "../src/daemon-runtime";
+import { finishTuiSession } from "../src/main";
 import { createTmuRoot } from "../src/vue-tui/component";
 
 const cleanupFns: Array<() => Promise<void>> = [];
@@ -53,7 +54,12 @@ describe("daemon operations", () => {
   test("raw-mode Ctrl-Q displays the daemon's challenge and cancellation or acceptance is explicit", async () => {
     const { coordinator } = createTmuApp(); const daemon = new InProcessDaemonApplication(coordinator);
     await daemon.start(); cleanupFns.push(() => daemon.teardown());
-    const client = await daemon.connectTui(); const terminal = await render(createTmuRoot({ client, noColor: true }), { columns: 100, rows: 24 });
+    let shutdownNoticeObserved = false;
+    const client = await daemon.connectTui(); const terminal = await render(createTmuRoot({
+      client,
+      noColor: true,
+      onDaemonShutdownNotice: () => { shutdownNoticeObserved = true; },
+    }), { columns: 100, rows: 24 });
     await terminal.stdin.write("\x11");
     expect(terminal.lastFrame()).toContain("Shut down TMU Daemon?");
     expect(terminal.lastFrame()).toContain("1 connected clients");
@@ -61,6 +67,21 @@ describe("daemon operations", () => {
     expect(daemon.status.lifecycle).toBe("ready");
     await terminal.stdin.write("\x11"); await terminal.stdin.write("y");
     expect(daemon.status.lifecycle).toBe("terminating");
+    expect(shutdownNoticeObserved).toBe(true);
+  });
+
+  test("prints shutdown confirmation after TUI teardown and stays silent for an ordinary exit", async () => {
+    const events: string[] = [];
+    await finishTuiSession(
+      async () => { events.push("teardown"); },
+      true,
+      (message) => events.push(message),
+    );
+    expect(events).toEqual(["teardown", "TMU Daemon is shutting down.\n"]);
+
+    events.length = 0;
+    await finishTuiSession(async () => { events.push("teardown"); }, false, (message) => events.push(message));
+    expect(events).toEqual(["teardown"]);
   });
 
   test("logs redact sensitive values and retain one bounded predecessor", async () => {
