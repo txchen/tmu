@@ -1348,7 +1348,7 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
         ? [["d", "Clean"], ["/", "Search"], ["?", "Help"]]
         : ui.activeTab === "library"
           ? ui.terminal.columns < 90
-            ? [["/", "Search"], ["Enter", "Play"], ["a", "Add"], ["?", "Help"]]
+            ? [["a", "Add"], ["Enter", "Play"], ["/", "Search"], ["?", "Help"]]
             : [["/", "Search"], ["Enter", "Play"], ["a", "Add to Playlist"], ["e", "Rename"], ["?", "Help"]]
           : ui.activeTab === "background"
             ? ui.background.selectedRow === 0
@@ -1364,24 +1364,32 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const applicationShortcuts: Array<[key: string, action: string]> = ui.overlays.length > 0
     ? []
     : textInputFocused
-      ? [["Ctrl-Q", "Shutdown Daemon"]]
-      : [["q", "Quit Client"], ["Ctrl-Q", "Shutdown Daemon"]];
-  const shortcutLine = (items: Array<[key: string, action: string]>) => h(Box, {
+      ? [["Ctrl-Q", "Shutdown"]]
+      : [["q", "Quit Client"], ["Ctrl-Q", "Shutdown"]];
+  const helpShortcut: [key: string, action: string] =
+    shortcuts.at(-1)?.[1] === "Help" ? shortcuts.pop()! : ["?", "Help"];
+  const requiredShortcuts = [...applicationShortcuts, helpShortcut];
+  const visibleContext: Array<[key: string, action: string]> = [];
+  for (const shortcut of shortcuts) {
+    const candidate = [...visibleContext, shortcut, ...requiredShortcuts];
+    if (footerShortcutsWidth(candidate) <= ui.terminal.columns) visibleContext.push(shortcut);
+  }
+  const visibleShortcuts = [...visibleContext, ...requiredShortcuts];
+  return h(Box, {
     width: "100%", flexDirection: "row",
   }, () => [
     h(Text, { dimColor: true }, () => "── "),
-    ...items.flatMap(([key, action], index) => [
+    ...visibleShortcuts.flatMap(([key, action], index) => [
       ...(index === 0 ? [] : [h(Text, { dimColor: true }, () => " · ")]),
       h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => key),
       h(Text, { dimColor: true }, () => ` ${action}`),
     ]),
   ]);
-  return applicationShortcuts.length === 0
-    ? shortcutLine(shortcuts)
-    : h(Box, { width: "100%", flexDirection: "column" }, () => [
-        shortcutLine(shortcuts),
-        shortcutLine(applicationShortcuts),
-      ]);
+}
+
+function footerShortcutsWidth(shortcuts: ReadonlyArray<readonly [key: string, action: string]>): number {
+  return 3 + shortcuts.reduce((width, [key, action], index) =>
+    width + (index === 0 ? 0 : 3) + key.length + 1 + action.length, 0);
 }
 
 function adjacentTab(active: UiState["activeTab"], delta: 1 | -1, includeBackground = false): UiState["activeTab"] {

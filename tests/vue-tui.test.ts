@@ -574,8 +574,8 @@ describe("TMU top-level surface smoke", () => {
     expect(terminal.lastFrame()).toContain("Downloads");
     expect(terminal.lastFrame()).toContain("[ prev ] next");
     expect(terminal.lastFrame()).toContain("Playlist is empty — open Library to add Tracks.");
-    expect(terminal.lastFrame()).toContain("── Space Play/Pause · Enter Play Selected · n/p Next/Prev · P Playlists · ? Help");
-    expect(terminal.lastFrame()).toContain("── q Quit Client · Ctrl-Q Shutdown Daemon");
+    expect(terminal.lastFrame()).toContain("── Space Play/Pause · Enter Play Selected · n/p Next/Prev · q Quit Client · Ctrl-Q Shutdown · ? Help");
+    expect(terminal.lastFrame()).not.toContain("Shutdown Daemon");
     expect(terminal.lastFrame()).not.toContain("focused");
     await terminal.stdin.write("]");
     expect(coordinator.uiState.activeTab).toBe("library");
@@ -802,10 +802,16 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("why?");
     expect(coordinator.uiState.library.query).toBe("why?");
     expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
-    expect(terminal.lastFrame()).toContain("── Ctrl-Q Shutdown Daemon");
+    expect(terminal.lastFrame()).toContain("Ctrl-Q Shutdown");
+    expect(terminal.lastFrame()).not.toContain("Shutdown Daemon");
     expect(terminal.lastFrame()).not.toContain("── q Quit Client");
     await terminal.stdin.write(leaveInput);
     expect(terminal.lastFrame()).toContain(columns < 90 ? "a Add" : "a Add to Playlist");
+    if (columns === 60) {
+      const helperLines = terminal.lastFrame()!.split("\n").filter((line) => line.includes("Ctrl-Q Shutdown"));
+      expect(helperLines).toHaveLength(1);
+      expect(helperLines[0]).toContain("a Add · q Quit Client · Ctrl-Q Shutdown · ? Help");
+    }
     const before = { ...coordinator.uiState.library };
     await terminal.stdin.write("?");
     expect(coordinator.uiState.overlays.at(-1)?.scroll).toBe(0);
@@ -856,7 +862,8 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("]");
     await terminal.stdin.write("https://youtu.be/watch?v=one?list=two");
     expect(terminal.lastFrame()).toContain("Esc/Tab → ? Help");
-    expect(terminal.lastFrame()).toContain("── Ctrl-Q Shutdown Daemon");
+    expect(terminal.lastFrame()).toContain("Ctrl-Q Shutdown");
+    expect(terminal.lastFrame()).not.toContain("Shutdown Daemon");
     expect(terminal.lastFrame()).not.toContain("── q Quit Client");
     await terminal.stdin.write("\x1b");
     await terminal.stdin.write("G");
@@ -957,7 +964,7 @@ describe("TMU top-level surface smoke", () => {
     await terminal.stdin.write("?");
     expect(terminal.lastFrame()).toContain("Space Play · Enter Select · n/p Next/Prev · P Playlists · ? Help");
     expect(terminal.lastFrame()).not.toContain("── q Quit Client");
-    expect(terminal.lastFrame()).not.toContain("── Ctrl-Q Shutdown Daemon");
+    expect(terminal.lastFrame()).not.toContain("Ctrl-Q Shutdown");
     expect(terminal.lastFrame()).toContain("PLAYLIST PANE");
     expect(terminal.lastFrame()).toContain("Randomize entire Playlist");
     await terminal.stdin.write("\x1b[6~");

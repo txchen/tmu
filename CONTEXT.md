@@ -225,7 +225,7 @@ TMU's canonical keyboard movement language: `j`/`k`, `h`/`l`, `gg`/`G`, and pagi
 _Avoid_: arrow-only navigation, mouse-first navigation
 
 **Contextual Shortcut Help**:
-TMU's keyboard-discovery layer: a small footer shows only the most relevant actions for the focused pane, while `?` outside text entry opens a modal listing every shortcut for the active tab's panes plus global shortcuts and their input-capture conditions. Within text entry `?` remains ordinary input; while the modal is open, only its scrolling controls, `Enter`/`q`/`?`/`Esc` dismissal, and the normal global `Ctrl-C` quit flow remain active, without triggering underlying tab actions.
+TMU's keyboard-discovery layer: a small footer shows only the most relevant actions for the focused pane, while `?` outside text entry opens a modal listing every shortcut for the active tab's panes plus global shortcuts and their input-capture conditions. The compact footer labels `Ctrl-Q` as `Shutdown`; full Help uses the canonical `Shutdown Daemon` operation name. Within text entry `?` remains ordinary input; while the modal is open, only its scrolling controls, `Enter`/`q`/`?`/`Esc` dismissal, and the normal global `Ctrl-C` quit flow remain active, without triggering underlying tab actions.
 _Avoid_: permanent shortcut wall, undocumented keymap
 
 **Play Next**:
