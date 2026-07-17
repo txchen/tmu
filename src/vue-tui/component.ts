@@ -1367,7 +1367,7 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
   const shortcutLine = (items: Array<[key: string, action: string]>) => h(Box, {
     width: "100%", flexDirection: "row",
   }, () => [
-    h(Text, { dimColor: true }, () => "──  "),
+    h(Text, { dimColor: true }, () => "── "),
     ...items.flatMap(([key, action], index) => [
       ...(index === 0 ? [] : [h(Text, { dimColor: true }, () => " · ")]),
       h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => key),
