@@ -1043,12 +1043,13 @@ function downloaderView(snapshot: PublicationSnapshot, noColor: boolean) {
   const selectedFailure = !snapshot.uiState.downloader.inputFocused
     ? downloads.summaries[selectedSummaryIndex]?.failures[0]
     : undefined;
+  const visibleRowCount = Math.max(1, Math.min(10, snapshot.uiState.terminal.rows - 9));
   return h(Box, { flexDirection: "column", flexGrow: 1, gap: 1 }, () => [
     h(Box, { borderStyle: "round", borderColor: snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, borderDimColor: !snapshot.uiState.downloader.inputFocused, paddingX: 1 }, () => h(Text, { bold: snapshot.uiState.downloader.inputFocused }, () => `URL Input ${snapshot.uiState.downloader.inputFocused ? "│" : ""} ${snapshot.uiState.downloader.urlInput || "(paste one URL)"}`)),
     h(Box, { flexDirection: "column", flexGrow: 1, borderStyle: "round", borderColor: !snapshot.uiState.downloader.inputFocused && !noColor ? "cyan" : undefined, paddingX: 1 }, () => [
     h(Text, { bold: !snapshot.uiState.downloader.inputFocused }, () => `Pipeline · ${batchCount} ${batchCount === 1 ? "batch" : "batches"} · ${batchCount ? selectedIndex + 1 : 0}/${batchCount}`),
     rows.length === 0 ? h(Text, { dimColor: true }, () => downloads.preparingSubmissions > 0 ? `Preparing ${downloads.preparingSubmissions} submission(s)` : "Paste a YouTube URL above to begin.") : null,
-    ...rows.slice(snapshot.uiState.downloader.scroll, snapshot.uiState.downloader.scroll + 10),
+    ...rows.slice(snapshot.uiState.downloader.scroll, snapshot.uiState.downloader.scroll + visibleRowCount),
     ...(selectedFailure ? [h(Text, { color: noColor ? undefined : "red", wrap: "truncate-end" }, () => `Failure: ${selectedFailure.title ?? `Item ${selectedFailure.index + 1}`} — ${selectedFailure.message}`)] : []),
     ]),
   ]);
@@ -1356,13 +1357,27 @@ function footer(ui: UiState, incompleteSelected = false, noColor = false) {
           : ui.downloader.inputFocused
             ? [["Type", "URL"], ["Enter", "Submit"], ["Esc/Tab → ?", "Help"]]
             : [["j/k", "Move"], ["x", "Cancel/Remove"], ["gg/G", "Ends"], ["Tab", "Focus"], ["?", "Help"]];
-  return h(Box, { width: "100%", flexDirection: "row" }, () => [
+  const textInputFocused = (ui.activeTab === "library" && ui.library.inputFocused)
+    || (ui.activeTab === "downloader" && ui.downloader.inputFocused);
+  const applicationShortcuts: Array<[key: string, action: string]> = ui.overlays.length > 0
+    ? [["Ctrl-C", "Quit Client"]]
+    : [
+        [textInputFocused ? "Ctrl-C" : "q/Ctrl-C", "Quit Client"],
+        ["Ctrl-Q", "Shutdown Daemon"],
+      ];
+  const shortcutLine = (items: Array<[key: string, action: string]>) => h(Box, {
+    width: "100%", flexDirection: "row",
+  }, () => [
     h(Text, { dimColor: true }, () => "──  "),
-    ...shortcuts.flatMap(([key, action], index) => [
+    ...items.flatMap(([key, action], index) => [
       ...(index === 0 ? [] : [h(Text, { dimColor: true }, () => " · ")]),
       h(Text, { bold: true, color: noColor ? undefined : "cyan" }, () => key),
       h(Text, { dimColor: true }, () => ` ${action}`),
     ]),
+  ]);
+  return h(Box, { width: "100%", flexDirection: "column" }, () => [
+    shortcutLine(shortcuts),
+    shortcutLine(applicationShortcuts),
   ]);
 }
 
