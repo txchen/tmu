@@ -446,6 +446,7 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
   private readonly shutdownListeners = new Set<(message: string) => void>();
   private readonly connectionLostListeners = new Set<(message: string) => void>();
   private shutdownChallenge?: ConfirmationChallenge;
+  private shutdownNoticeObserved = false;
   constructor(private readonly client: DaemonClient, readonly quitIsClientOnly = true) {
     client.onSnapshot(() => this.notifyState("state"));
     client.onFeedback((feedback) => {
@@ -460,7 +461,10 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
     client.onNotice((notice) => {
       this.errors.splice(0, this.errors.length, notice.message);
       this.notifyState("state");
-      if (notice.message.includes("shutting down")) for (const listener of this.shutdownListeners) listener(notice.message);
+      if (notice.message.includes("shutting down")) {
+        this.shutdownNoticeObserved = true;
+        for (const listener of this.shutdownListeners) listener(notice.message);
+      }
     });
     client.onDisconnect?.((unexpected) => {
       if (!unexpected) return;
@@ -526,7 +530,11 @@ export class TuiDaemonClientAdapter implements TuiDaemonClient {
     const challenge = this.shutdownChallenge;
     if (!challenge) throw new Error("Shutdown Confirmation Challenge is missing");
     this.shutdownChallenge = undefined;
-    await this.client.confirmChallenge(challenge.token);
+    try {
+      await this.client.confirmChallenge(challenge.token);
+    } catch (error) {
+      if (!this.shutdownNoticeObserved) throw error;
+    }
   }
   async cancelShutdown(): Promise<void> {
     const challenge = this.shutdownChallenge;

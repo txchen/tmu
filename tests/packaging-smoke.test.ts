@@ -147,6 +147,7 @@ describe("Node npm package", () => {
     await expectPackedTerminal(installedTmu, [], env, "q");
     await expectPackedTerminal("npx", ["--yes", "--package", tarball, "tmu"], env, "ctrl-c");
     await expectPackagedConnectionLoss(installedTmu, env);
+    await expectPackagedTuiShutdown(installedTmu, env);
   }, 30_000);
 
   test("public source surface contains no removed provider or legacy input-router modules", async () => {
@@ -264,6 +265,33 @@ async function expectPackagedConnectionLoss(command: string, env: Record<string,
     await exec(command, ["daemon", "stop", "--force"], { cwd: root, env });
   } finally {
     terminal.kill();
+  }
+}
+
+async function expectPackagedTuiShutdown(command: string, env: Record<string, string>): Promise<void> {
+  let output = "";
+  const terminal = spawn(command, [], { cols: 100, rows: 24, cwd: root, env });
+  terminal.onData((data) => { output += data; });
+  let exited = false;
+  const exitPromise = new Promise<{ exitCode: number }>((resolve) => terminal.onExit((event) => {
+    exited = true;
+    resolve(event);
+  }));
+  try {
+    await waitFor(() => stripAnsi(output).includes("Packaged Playback"));
+    output = "";
+    terminal.write("\x11");
+    await waitFor(() => stripAnsi(output).includes("Shut down TMU Daemon?"));
+    terminal.write("y");
+    expect(
+      (await withTimeout(exitPromise, 10_000, "Timed out waiting for TUI shutdown exit")).exitCode,
+      stripAnsi(output),
+    ).toBe(0);
+    expect(output).toContain("\x1b[?1049l");
+    expect(stripAnsi(output)).toContain("TMU Daemon is shutting down.");
+  } finally {
+    if (!exited) terminal.kill();
+    await withTimeout(exitPromise, 2_000, "Timed out cleaning up shutdown terminal");
   }
 }
 
